@@ -42,6 +42,9 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.0",
 ]
+gnn = [
+    "torch-geometric>=2.5",
+]
 
 [project.scripts]
 downshift = "downshift.cli.main:app"
