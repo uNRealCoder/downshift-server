@@ -27,6 +27,7 @@ dependencies = [
     "torch>=2.0",
     "onnx>=1.14",
     "onnxruntime>=1.17",
+    "onnxscript>=0.1",  # required by torch.onnx.export(dynamo=True)
     "typer[all]>=0.12",
     "rich>=13.0",
     "fastapi>=0.100",
