@@ -5,7 +5,7 @@ plain, fixed-arity tensor signature instead. Export the shim, not the original m
 Used by adapters/generic.py (dataclass fields) and adapters/pyg.py (Data.x/edge_index/...).
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import torch
@@ -17,16 +17,16 @@ class FlattenShimBase(nn.Module):
         self,
         model: nn.Module,
         rebuild: Callable[[Mapping[str, torch.Tensor]], Any],
-        field_names: list[str],
+        field_names: Sequence[str],
     ) -> None:
         super().__init__()
         self.model = model
         self._rebuild = rebuild
         self._field_names = field_names
 
-    def _call(self, tensors: tuple[torch.Tensor, ...]):
-        obj = self._rebuild(dict(zip(self._field_names, tensors, strict=True)))
-        return self.model(obj)
+    def _call(self, tensors: tuple[torch.Tensor, ...]) -> Any:
+        container = self._rebuild(dict(zip(self._field_names, tensors, strict=True)))
+        return self.model(container)
 
 
 def build_shim_class(field_count: int) -> type[FlattenShimBase]:
@@ -37,6 +37,6 @@ def build_shim_class(field_count: int) -> type[FlattenShimBase]:
     # empirically). Give the shim a real, fixed-arity signature instead.
     params = ", ".join(f"t{i}" for i in range(field_count))
     src = f"def forward(self, {params}):\n    return self._call(({params},))\n"
-    namespace: dict = {}
+    namespace: dict[str, Any] = {}
     exec(src, namespace)  # noqa: S102 - generates a plain, inspectable method, no user input
     return type("FlattenShim", (FlattenShimBase,), {"forward": namespace["forward"]})

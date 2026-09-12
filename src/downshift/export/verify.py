@@ -20,6 +20,8 @@ import numpy as np
 import onnxruntime as ort
 import torch
 
+from downshift.export.shapes import alternative_sizes
+
 DEFAULT_ATOL = 1e-4
 DEFAULT_RTOL = 1e-3
 
@@ -59,12 +61,12 @@ def make_shared_axis0_vary_fn(base_inputs: tuple, dynamic_shapes: tuple, seed: i
     """Default vary_fn: every dynamic tensor shares one co-varying axis-0 size (the
     ordinary "batch dim" case). Sample 0 is always the untouched base_inputs.
     """
-    dynamic_sizes = [
-        t.shape[0] for t, spec in zip(base_inputs, dynamic_shapes, strict=True) if spec is not None
-    ]
-    base_size = dynamic_sizes[0] if dynamic_sizes else None
+    base_size = next(
+        (t.shape[0] for t, spec in zip(base_inputs, dynamic_shapes, strict=True) if spec is not None),
+        None,
+    )
     rng = random.Random(seed)
-    candidate_sizes = sorted({1, 2, 3, (base_size or 1) + 1, (base_size or 1) * 2} - {base_size})
+    candidate_sizes = alternative_sizes(base_size) if base_size is not None else []
 
     def vary(i: int) -> tuple:
         if i == 0 or base_size is None:
@@ -112,17 +114,16 @@ def verify(
         ort_inputs = {name: t.numpy() for name, t in zip(input_names, sample, strict=True)}
         (ort_out,) = session.run(None, ort_inputs)
 
-        torch_out_np = torch_out.detach().numpy()
-        abs_err = np.abs(torch_out_np.astype(np.float64) - ort_out.astype(np.float64))
-        rel_err = abs_err / (np.abs(torch_out_np.astype(np.float64)) + 1e-8)
+        torch_out_np = torch_out.detach().numpy().astype(np.float64)
+        abs_err = np.abs(torch_out_np - ort_out.astype(np.float64))
+        rel_err = abs_err / (np.abs(torch_out_np) + 1e-8)
 
         sample_max_abs = float(abs_err.max())
         sample_max_rel = float(rel_err.max())
         max_abs_err = max(max_abs_err, sample_max_abs)
         max_rel_err = max(max_rel_err, sample_max_rel)
 
-        sample_failed = sample_max_abs > atol and sample_max_rel > rtol
-        if sample_failed:
+        if sample_max_abs > atol and sample_max_rel > rtol:
             failures += 1
             if i > 0:
                 non_baseline_failures += 1

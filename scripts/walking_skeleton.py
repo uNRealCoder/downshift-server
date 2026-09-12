@@ -73,6 +73,17 @@ def predict(req: PredictRequest) -> PredictResponse:
     return PredictResponse(output=y.tolist())
 
 
+def check_parity(model: torch.nn.Module, example_inputs: tuple) -> None:
+    """Sanity check before serving: ONNX Runtime output must match a direct torch forward pass."""
+    with torch.no_grad():
+        torch_out = model(*example_inputs).numpy()
+    (ort_out,) = get_session().run(None, {"x": example_inputs[0].numpy()})
+
+    max_diff = np.abs(torch_out - ort_out).max()
+    print(f"torch vs onnxruntime max abs diff: {max_diff:.2e}")
+    assert max_diff < 1e-5, "ONNX output diverges from torch output — pipe is broken"
+
+
 if __name__ == "__main__":
     # Build one model/input pair and reuse it for both export and the sanity check below —
     # make_model() is unseeded, so two separate calls would yield different random weights
@@ -81,16 +92,7 @@ if __name__ == "__main__":
     example_inputs = make_inputs(batch=1)
     export_model(model, example_inputs)
 
-    # Sanity check before serving: ONNX Runtime output must match a direct torch forward pass.
-    with torch.no_grad():
-        torch_out = model(*example_inputs).numpy()
-
-    session = get_session()
-    (ort_out,) = session.run(None, {"x": example_inputs[0].numpy()})
-
-    max_diff = np.abs(torch_out - ort_out).max()
-    print(f"torch vs onnxruntime max abs diff: {max_diff:.2e}")
-    assert max_diff < 1e-5, "ONNX output diverges from torch output — pipe is broken"
+    check_parity(model, example_inputs)
     print("torch and onnxruntime agree. Starting server on http://127.0.0.1:8000 ...")
 
     uvicorn.run(app, host="127.0.0.1", port=8000)
