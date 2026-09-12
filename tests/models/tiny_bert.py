@@ -1,4 +1,4 @@
-"""HF fixture: a randomly initialised two-layer BERT encoder. No download, exports CLEAN."""
+"""HF fixture: a randomly initialised two-layer BERT encoder. No download needed."""
 
 import torch
 from transformers import BertConfig, BertModel

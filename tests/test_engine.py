@@ -8,27 +8,8 @@ import torch
 import downshift
 from downshift.loading import LoadedModel, load_model
 from downshift.serve.backends import OnnxRuntimeBackend, TorchBackend
-from downshift.serve.engine import ServeOptions, ServingState, prepare_serving
+from downshift.serve.engine import ServeOptions, prepare_serving
 from tests.models import clean_mlp
-
-
-def _serve(fixture: str, **opts) -> ServingState:
-    loaded = load_model(f"tests.models.{fixture}:make_model")
-    return prepare_serving(loaded, ServeOptions(warmup=1, **opts))
-
-
-@pytest.fixture(scope="module")
-def mlp_state() -> ServingState:
-    return _serve("clean_mlp")
-
-
-@pytest.fixture(scope="module")
-def onnx_file(tmp_path_factory):
-    model = clean_mlp.make_model()
-    out = tmp_path_factory.mktemp("engine") / "m.onnx"
-    verdict = downshift.export(model, out, clean_mlp.make_inputs())
-    assert verdict.status == "CLEAN", verdict.reason
-    return out, model
 
 
 def test_clean_model_serves_via_onnxruntime(mlp_state):
@@ -39,29 +20,28 @@ def test_clean_model_serves_via_onnxruntime(mlp_state):
     assert mlp_state.notes == []
 
 
-def test_degraded_model_falls_back_to_torch():
-    state = _serve("scatter_include_self_false")
+def test_degraded_model_falls_back_to_torch(serve_fixture):
+    state = serve_fixture("scatter_include_self_false")
     assert state.verdict.status == "DEGRADED"
     assert state.backend.name == "torch"
     assert state.ready is True
 
 
-def test_force_onnx_serves_degraded_graph_with_a_warning():
-    state = _serve("scatter_include_self_false", force_onnx=True)
+def test_force_onnx_serves_degraded_graph_with_a_warning(serve_fixture):
+    state = serve_fixture("scatter_include_self_false", force_onnx=True)
     assert state.verdict.status == "DEGRADED"
     assert state.backend.name == "onnxruntime"
     assert any("--force-onnx" in note for note in state.notes)
 
 
-def test_failed_export_falls_back_to_torch():
-    state = _serve("data_dependent_branch")
-    assert state.verdict.status == "FAILED"
-    assert state.backend.name == "torch"
-    assert state.ready is True
+def test_failed_export_falls_back_to_torch(branch_state):
+    assert branch_state.verdict.status == "FAILED"
+    assert branch_state.backend.name == "torch"
+    assert branch_state.ready is True
 
 
-def test_torch_backend_option_skips_export():
-    state = _serve("clean_mlp", backend="torch")
+def test_torch_backend_option_skips_export(serve_fixture):
+    state = serve_fixture("clean_mlp", backend="torch")
     assert state.verdict.status == "UNVERIFIED"
     assert "--backend torch" in state.verdict.reason
     assert state.verdict.onnx_program is None
@@ -87,8 +67,8 @@ def test_backends_agree_on_the_same_model():
     np.testing.assert_allclose(ort_out["output_0"], torch_out["output_0"], atol=1e-5)
 
 
-def test_onnx_file_without_reference_is_served_unverified(onnx_file):
-    path, _ = onnx_file
+def test_onnx_file_without_reference_is_served_unverified(exported_mlp):
+    path, _, _ = exported_mlp
     state = prepare_serving(load_model(str(path)), ServeOptions(warmup=1))
 
     assert state.verdict.status == "UNVERIFIED"
@@ -99,8 +79,8 @@ def test_onnx_file_without_reference_is_served_unverified(onnx_file):
     assert out["output_0"].shape == (2, 4)
 
 
-def test_onnx_file_with_reference_is_verified(onnx_file):
-    path, model = onnx_file
+def test_onnx_file_with_reference_is_verified(exported_mlp):
+    path, model, _ = exported_mlp
     reference = LoadedModel(source="ref", model=model, example_inputs=clean_mlp.make_inputs())
 
     state = prepare_serving(load_model(str(path)), ServeOptions(warmup=1), reference=reference)
@@ -116,8 +96,8 @@ def test_torch_backend_rejects_missing_input():
         backend.infer({"y": np.zeros((1, 16), dtype=np.float32)})
 
 
-def test_onnxruntime_backend_metadata(onnx_file):
-    path, _ = onnx_file
+def test_onnxruntime_backend_metadata(exported_mlp):
+    path, _, _ = exported_mlp
     meta = OnnxRuntimeBackend(path, device="cpu").metadata().to_dict()
 
     assert meta["name"] == "onnxruntime"

@@ -21,17 +21,13 @@ from downshift.serve.schemas import (
 )
 
 
-def _declared_dtypes(state: ServingState) -> dict[str, str | None]:
-    return {spec.name: spec.dtype for spec in state.backend.metadata().inputs}
-
-
 def run_predict(state: ServingState, inputs: dict[str, Any]) -> PredictResponse:
     """Validate, convert, infer. Raises HTTPException(400) for anything the client got wrong."""
     missing = [n for n in state.input_names if n not in inputs]
     if missing:
         raise HTTPException(400, f"missing inputs: {missing}")
 
-    declared = _declared_dtypes(state)
+    declared = {spec.name: spec.dtype for spec in state.backend.metadata().inputs}
     try:
         feeds = {n: to_numpy(n, inputs[n], declared.get(n)) for n in state.input_names}
         outputs = state.backend.infer(feeds)

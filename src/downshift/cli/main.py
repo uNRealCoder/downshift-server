@@ -58,26 +58,28 @@ ModelArg = Annotated[
 InputsOpt = Annotated[
     str | None,
     typer.Option(
-        "--inputs", metavar="pkg.module:fn", help="Example inputs: a tuple, or a factory for one."
+        "--inputs", metavar="pkg.module:fn", help="Example inputs: a tuple, or a factory for one"
     ),
 ]
 ModelClassOpt = Annotated[
     str | None,
     typer.Option(
-        "--model-class", metavar="pkg.module:Class", help="Class to load a state dict into."
+        "--model-class", metavar="pkg.module:Class", help="Class to load a state dict into"
     ),
 ]
 UnsafeLoadOpt = Annotated[
     bool,
     typer.Option(
-        "--unsafe-load", help="torch.load with weights_only=False; runs code from the file."
+        "--unsafe-load", help="Allow torch.load(weights_only=False); runs code from the file"
     ),
 ]
 AdapterOpt = Annotated[
     str | None,
-    typer.Option("--adapter", help="Model-family adapter (generic, pyg, hf); default: detect."),
+    typer.Option("--adapter", help="Model-family adapter (generic, pyg, hf); default: detect"),
 ]
-SamplesOpt = Annotated[int, typer.Option("-k", "--samples", min=1, help="Verification samples.")]
+SamplesOpt = Annotated[
+    int, typer.Option("-k", "--samples", min=1, help="Number of verification samples")
+]
 DynamicOpt = Annotated[
     str | None,
     typer.Option(
@@ -88,10 +90,10 @@ DynamicOpt = Annotated[
 ]
 ReferenceOpt = Annotated[
     str | None,
-    typer.Option("--reference", metavar="MODEL", help="PyTorch model to verify a .onnx against."),
+    typer.Option("--reference", metavar="MODEL", help="PyTorch model to verify a .onnx against"),
 ]
 JsonOpt = Annotated[
-    bool, typer.Option("--json", help="Print the verdict as JSON and nothing else.")
+    bool, typer.Option("--json", help="Print the verdict as JSON and nothing else")
 ]
 LogLevelOpt = Annotated[LogLevel, typer.Option("--log-level")]
 LogFormatOpt = Annotated[LogFormat, typer.Option("--log-format")]
@@ -117,6 +119,10 @@ def _setup_logging(level: LogLevel, fmt: LogFormat) -> None:
     else:
         handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
     logging.basicConfig(level=level.value.upper(), handlers=[handler], force=True)
+    # The ONNX optimizer passes log every rewrite at INFO. Only show them when debugging.
+    if level is not LogLevel.debug:
+        for name in ("onnxscript", "onnx_ir"):
+            logging.getLogger(name).setLevel(logging.WARNING)
 
 
 @contextmanager
@@ -208,15 +214,15 @@ def check_cmd(
 @app.command("export")
 def export_cmd(
     model: ModelArg,
-    output: Annotated[Path, typer.Option("-o", "--output", help="Directory for the artifact.")],
+    output: Annotated[Path, typer.Option("-o", "--output", help="Output directory")],
     name: Annotated[
-        str | None, typer.Option("--name", help="Artifact stem; default: model slug.")
+        str | None, typer.Option("--name", help="Artifact stem; default: model slug")
     ] = None,
     fp16: Annotated[
-        bool, typer.Option("--fp16", help="Cast the model to half before export.")
+        bool, typer.Option("--fp16", help="Cast the model to fp16 before export")
     ] = False,
     no_verify: Annotated[
-        bool, typer.Option("--no-verify", help="Skip numerics. Verdict is UNVERIFIED.")
+        bool, typer.Option("--no-verify", help="Skip numerics; the verdict is UNVERIFIED")
     ] = False,
     json_out: JsonOpt = False,
     inputs: InputsOpt = None,
@@ -262,14 +268,16 @@ def serve_cmd(
     port: Annotated[int, typer.Option("--port")] = 8000,
     backend: Annotated[BackendChoice, typer.Option("--backend")] = BackendChoice.auto,
     force_onnx: Annotated[
-        bool, typer.Option("--force-onnx", help="Serve a DEGRADED graph via ONNX Runtime anyway.")
+        bool, typer.Option("--force-onnx", help="Serve a DEGRADED graph via ONNX Runtime anyway")
     ] = False,
     device: Annotated[str, typer.Option("--device", help="auto | cpu | cuda")] = "auto",
-    warmup: Annotated[int, typer.Option("--warmup", min=0, help="Inferences before /ready.")] = 3,
+    warmup: Annotated[
+        int, typer.Option("--warmup", min=0, help="Warm-up inferences before /ready flips")
+    ] = 3,
     reference: ReferenceOpt = None,
     middleware: Annotated[
         list[str] | None,
-        typer.Option("--middleware", metavar="pkg.module:Attr", help="Repeatable."),
+        typer.Option("--middleware", metavar="pkg.module:Attr", help="Middleware to attach; repeatable"),
     ] = None,
     inputs: InputsOpt = None,
     model_class: ModelClassOpt = None,

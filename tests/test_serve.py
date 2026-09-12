@@ -10,17 +10,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from downshift.loading import LoadedModel, load_model
 from downshift.serve.app import build_app
-from downshift.serve.engine import ServeOptions, ServingState, prepare_serving
-
-
-def _state(fixture: str, **opts) -> ServingState:
-    loaded = load_model(f"tests.models.{fixture}:make_model")
-    return prepare_serving(loaded, ServeOptions(warmup=1, **opts))
-
-
-@pytest.fixture(scope="module")
-def mlp_state() -> ServingState:
-    return _state("clean_mlp")
+from downshift.serve.engine import ServeOptions, prepare_serving
 
 
 @pytest.fixture(scope="module")
@@ -29,13 +19,13 @@ def mlp_client(mlp_state) -> TestClient:
 
 
 @pytest.fixture(scope="module")
-def gcn_client() -> TestClient:
-    return TestClient(build_app(_state("gnn_gcn")))
+def gcn_client(serve_fixture) -> TestClient:
+    return TestClient(build_app(serve_fixture("gnn_gcn")))
 
 
 @pytest.fixture(scope="module")
-def branch_client() -> TestClient:
-    return TestClient(build_app(_state("data_dependent_branch")))
+def branch_client(branch_state) -> TestClient:
+    return TestClient(build_app(branch_state))
 
 
 def test_health_ready_metadata(mlp_client, mlp_state):

@@ -6,7 +6,7 @@ traced fine but froze a shape or specialised a data-dependent branch.
 """
 
 import random
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np

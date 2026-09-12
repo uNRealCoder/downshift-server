@@ -1,4 +1,5 @@
-"""Hazard: non-tensor container input (dataclass), same shape as the PyG/DGL flattening problem."""
+"""Hazard: dataclass container input. The same flattening problem PyG Data has, without
+the PyG dependency."""
 
 from dataclasses import dataclass
 

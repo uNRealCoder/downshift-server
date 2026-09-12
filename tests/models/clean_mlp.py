@@ -1,4 +1,4 @@
-"""Control fixture: no export hazards. Should verdict CLEAN."""
+"""Control fixture: no export hazards."""
 
 import torch
 from torch import nn

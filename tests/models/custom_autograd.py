@@ -1,4 +1,8 @@
-"""Hazard: custom autograd.Function has no symbolic trace by default — likely FAILED."""
+"""Hazard: custom autograd.Function with no symbolic override.
+
+On torch 2.14 torch.export traces straight through forward() (clamp and multiply are both
+traceable), so this comes back CLEAN.
+"""
 
 import torch
 from torch import nn

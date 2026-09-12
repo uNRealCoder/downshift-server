@@ -95,10 +95,11 @@ def to_numpy(name: str, value: Any, expected_dtype: str | None = None) -> np.nda
     if isinstance(value, dict):
         typed = TypedArray.model_validate(value)
         value = typed.data
-        explicit_dtype = normalize_dtype(typed.dtype) if typed.dtype else None
-        if typed.dtype and explicit_dtype is None:
-            raise ValueError(f"input {name!r}: unknown dtype {typed.dtype!r}")
         explicit_shape = typed.shape
+        if typed.dtype:
+            explicit_dtype = normalize_dtype(typed.dtype)
+            if explicit_dtype is None:
+                raise ValueError(f"input {name!r}: unknown dtype {typed.dtype!r}")
 
     try:
         arr = np.asarray(value)

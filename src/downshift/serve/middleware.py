@@ -10,7 +10,7 @@ from downshift.loading import import_object
 
 
 def load_middleware(app: FastAPI, specs: Sequence[str]) -> None:
-    """Each spec must name a BaseHTTPMiddleware subclass or an async (request, call_next) function."""
+    """Each spec names a BaseHTTPMiddleware subclass or an async (request, call_next) function."""
     for spec in specs:
         obj = import_object(spec)
         if inspect.isclass(obj) and issubclass(obj, BaseHTTPMiddleware):

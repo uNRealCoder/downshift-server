@@ -31,14 +31,9 @@ def _sym(utf: str, ascii_: str) -> str:
 
 def _status_text(verdict: ExportVerdict) -> Text:
     text = Text(verdict.status, style=STATUS_STYLE[verdict.status])
-    details = [
-        d
-        for d in (
-            verdict.capture_strategy,
-            f"opset {verdict.opset}" if verdict.opset is not None else None,
-        )
-        if d
-    ]
+    details = [verdict.capture_strategy] if verdict.capture_strategy else []
+    if verdict.opset is not None:
+        details.append(f"opset {verdict.opset}")
     if details:
         text.append(f"  ({', '.join(details)})", style="dim")
     return text
@@ -65,10 +60,12 @@ def _dynamic_text(verdict: ExportVerdict) -> str:
 
 
 def _shape_text(verdict: ExportVerdict) -> str:
-    return {True: "yes", False: "no", None: _sym("—", "-")}[verdict.shape_generalization]
+    if verdict.shape_generalization is None:
+        return _sym("—", "-")
+    return "yes" if verdict.shape_generalization else "no"
 
 
-def verdict_table(verdict: ExportVerdict, model_name: str) -> Table:
+def print_verdict(verdict: ExportVerdict, model_name: str) -> None:
     table = Table(show_header=False, box=box.ROUNDED, border_style=STATUS_STYLE[verdict.status])
     table.add_column(style="bold", no_wrap=True)
     table.add_column()
@@ -84,11 +81,7 @@ def verdict_table(verdict: ExportVerdict, model_name: str) -> Table:
         table.add_row("Warnings", Text("\n".join(verdict.warnings), style="yellow"))
     table.add_row("Backend", verdict.recommended_backend)
     table.add_row("Reason", escape(verdict.reason))
-    return table
-
-
-def print_verdict(verdict: ExportVerdict, model_name: str) -> None:
-    console.print(verdict_table(verdict, model_name))
+    console.print(table)
 
 
 def print_artifacts(onnx_path: Path | None, manifest_path: Path | None) -> None:
@@ -137,12 +130,13 @@ def print_banner(state: ServingState, host: str, port: int) -> None:
 
     if verdict.status == "DEGRADED":
         n = verdict.numerics
-        detail = (
-            f"numerics diverge on {n.failures}/{n.samples_tested} samples "
-            f"(max abs err {n.max_abs_err:.2e})"
-            if n
-            else verdict.reason
-        )
+        if n is None:
+            detail = verdict.reason
+        else:
+            detail = (
+                f"numerics diverge on {n.failures}/{n.samples_tested} samples "
+                f"(max abs err {n.max_abs_err:.2e})"
+            )
         grid.add_row("", Text(f"{_sym('⚠', '!')} {detail}", style="yellow"))
         if state.backend.name != "onnxruntime":
             grid.add_row("Override", "--force-onnx to serve the ONNX graph anyway")

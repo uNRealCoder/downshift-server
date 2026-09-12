@@ -10,7 +10,7 @@ import onnx
 import torch
 
 from downshift.adapters.base import Adapter
-from downshift.export.verdict import ExportVerdict, prepare_model
+from downshift.export.verdict import ExportVerdict, numerics_outcome, prepare_model
 from downshift.export.verify import verify
 
 
@@ -51,26 +51,17 @@ def intake(
     numerics = verify(
         prepared.model, onnx_path, prepared.inputs, prepared.dynamic_shapes, prepared.vary_fn, k=k
     )
-    if numerics.passed:
-        status, backend = "CLEAN", "onnxruntime"
-        reason = (
-            f"pre-built ONNX matches reference across {numerics.samples_tested} samples "
-            f"(max abs err {numerics.max_abs_err:.2e})"
-        )
-    else:
-        status, backend = "DEGRADED", "torch"
-        reason = (
-            f"pre-built ONNX diverges from reference on {numerics.failures}/"
-            f"{numerics.samples_tested} samples (max abs err {numerics.max_abs_err:.2e})"
-        )
+    status, backend, reason = numerics_outcome(
+        numerics, "pre-built ONNX matches reference", "pre-built ONNX diverges from reference"
+    )
     return ExportVerdict(
-        status=status,  # type: ignore[arg-type]
+        status=status,
         model_family=prepared.family,
         capture_strategy=None,
         opset=opset,
         op_types=op_types,
         numerics=numerics,
-        recommended_backend=backend,  # type: ignore[arg-type]
+        recommended_backend=backend,
         reason=reason,
         input_names=prepared.input_names,
         dynamic_dims=prepared.dynamic_dims,

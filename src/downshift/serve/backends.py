@@ -72,7 +72,8 @@ class OnnxRuntimeBackend:
 
     def __init__(self, model: bytes | str | Path, device: str = "auto") -> None:
         source = model if isinstance(model, bytes) else str(model)
-        self.session = ort.InferenceSession(source, providers=_ort_providers(resolve_device(device)))
+        providers = _ort_providers(resolve_device(device))
+        self.session = ort.InferenceSession(source, providers=providers)
         self.provider = self.session.get_providers()[0]
         self.input_names = [i.name for i in self.session.get_inputs()]
         self.onnx_output_names = [o.name for o in self.session.get_outputs()]
@@ -118,7 +119,8 @@ class TorchBackend:
         if example_inputs is not None:
             # One pass over the example fills in dtypes and shapes for /metadata.
             self._input_specs = [
-                _spec_from_tensor(n, t) for n, t in zip(self.input_names, example_inputs, strict=True)
+                _spec_from_tensor(n, t)
+                for n, t in zip(self.input_names, example_inputs, strict=True)
             ]
             feeds = {n: t.numpy() for n, t in zip(self.input_names, example_inputs, strict=True)}
             self._output_specs = [_spec_from_array(n, a) for n, a in self.infer(feeds).items()]
@@ -133,7 +135,10 @@ class TorchBackend:
         ]
         with torch.inference_mode():
             out = self.module(*args)
-        tensors = [out] if isinstance(out, torch.Tensor) else [t for t in out if isinstance(t, torch.Tensor)]
+        if isinstance(out, torch.Tensor):
+            tensors = [out]
+        else:
+            tensors = [t for t in out if isinstance(t, torch.Tensor)]
         return {
             name: t.detach().cpu().numpy()
             for name, t in zip(output_names(len(tensors)), tensors, strict=True)
@@ -149,7 +154,8 @@ def _dynamic_shape(shape: tuple[int, ...]) -> list[int | str | None]:
 
 
 def _spec_from_tensor(name: str, t: torch.Tensor) -> IOSpec:
-    return IOSpec(name, f"tensor({str(t.dtype).removeprefix('torch.')})", _dynamic_shape(tuple(t.shape)))
+    dtype = str(t.dtype).removeprefix("torch.")
+    return IOSpec(name, f"tensor({dtype})", _dynamic_shape(tuple(t.shape)))
 
 
 def _spec_from_array(name: str, a: np.ndarray) -> IOSpec:

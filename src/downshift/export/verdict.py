@@ -73,6 +73,21 @@ class ExportVerdict:
         }
 
 
+def numerics_outcome(
+    numerics: NumericsReport, passed_prefix: str, failed_prefix: str
+) -> tuple[Status, Backend, str]:
+    """Numerics decide the verdict: pass -> CLEAN via ORT, fail -> DEGRADED via torch.
+
+    The prefixes open the reason string; the sample counts and error are appended.
+    """
+    err = f"(max abs err {numerics.max_abs_err:.2e})"
+    if numerics.passed:
+        reason = f"{passed_prefix} across {numerics.samples_tested} samples {err}"
+        return "CLEAN", "onnxruntime", reason
+    reason = f"{failed_prefix} on {numerics.failures}/{numerics.samples_tested} samples {err}"
+    return "DEGRADED", "torch", reason
+
+
 def _tied_weight_warnings(model: torch.nn.Module) -> list[str]:
     seen: dict[int, str] = {}
     tied: list[str] = []
@@ -153,19 +168,11 @@ def build_verdict(prepared: Prepared, k: int = 8, verify_numerics: bool = True) 
         k=k,
     )
     verdict.numerics = numerics
-    if numerics.passed:
-        verdict.status, verdict.recommended_backend = "CLEAN", "onnxruntime"
-        verdict.reason = (
-            f"exported via {result.capture_strategy}; numerics ok across "
-            f"{numerics.samples_tested} samples (max abs err {numerics.max_abs_err:.2e})"
-        )
-    else:
-        verdict.status = "DEGRADED"
-        verdict.reason = (
-            f"exported via {result.capture_strategy} but numerics diverge on "
-            f"{numerics.failures}/{numerics.samples_tested} samples "
-            f"(max abs err {numerics.max_abs_err:.2e})"
-        )
+    verdict.status, verdict.recommended_backend, verdict.reason = numerics_outcome(
+        numerics,
+        f"exported via {result.capture_strategy}; numerics ok",
+        f"exported via {result.capture_strategy} but numerics diverge",
+    )
     return verdict
 
 

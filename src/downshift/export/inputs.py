@@ -2,10 +2,8 @@
 
 1. user-supplied      always wins
 2. adapter-derived    the adapter knows its family (HF config, PyG in_channels, ...)
-3. signature guess    generic adapter's first-Linear/Conv heuristic
-5. fail loudly        say exactly what to pass
-
-Tier 4, an interactive wizard, is deferred.
+3. signature guess    the generic adapter's first-Linear/Conv heuristic
+4. fail loudly        say exactly what to pass
 """
 
 from torch import nn

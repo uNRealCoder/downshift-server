@@ -2,7 +2,6 @@
 
 import hashlib
 import json
-from pathlib import Path
 
 import pytest
 
@@ -12,20 +11,13 @@ from tests.models import clean_mlp, data_dependent_branch
 
 
 @pytest.fixture(scope="module")
-def exported(tmp_path_factory) -> tuple[Path, downshift.ExportVerdict]:
-    out = tmp_path_factory.mktemp("manifest") / "m.onnx"
-    verdict = downshift.export(clean_mlp.make_model(), out, clean_mlp.make_inputs())
-    return out, verdict
-
-
-@pytest.fixture(scope="module")
-def manifest(exported) -> dict:
-    onnx_path, _ = exported
+def manifest(exported_mlp) -> dict:
+    onnx_path, _, _ = exported_mlp
     return json.loads(manifest_path_for(onnx_path).read_text())
 
 
-def test_export_writes_onnx_and_manifest_side_by_side(exported):
-    onnx_path, verdict = exported
+def test_export_writes_onnx_and_manifest_side_by_side(exported_mlp):
+    onnx_path, _, verdict = exported_mlp
     assert verdict.status == "CLEAN", verdict.reason
     assert verdict.onnx_path == onnx_path
     assert onnx_path.is_file()
@@ -44,8 +36,8 @@ def test_manifest_records_provenance(manifest):
     assert manifest["verdict"]["input_names"] == ["x"]
 
 
-def test_manifest_sha_matches_onnx_file(exported, manifest):
-    onnx_path, _ = exported
+def test_manifest_sha_matches_onnx_file(exported_mlp, manifest):
+    onnx_path, _, _ = exported_mlp
     assert manifest["onnx_sha256"] == hashlib.sha256(onnx_path.read_bytes()).hexdigest()
 
 

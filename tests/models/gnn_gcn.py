@@ -1,4 +1,4 @@
-"""GNN fixture: 2-layer GCN node classifier (sprint plan H9-H10). Baseline GNN case."""
+"""GNN fixture: 2-layer GCN node classifier. The baseline GNN case."""
 
 import torch
 from torch import nn

@@ -24,7 +24,9 @@ _GUESS_EDGES = 16
 
 
 def is_pyg_data(example_inputs: tuple | None) -> bool:
-    return example_inputs is not None and len(example_inputs) == 1 and isinstance(example_inputs[0], Data)
+    if example_inputs is None or len(example_inputs) != 1:
+        return False
+    return isinstance(example_inputs[0], Data)
 
 
 def _first_in_channels(model: nn.Module) -> int | None:
@@ -45,7 +47,9 @@ class PyGAdapter:
     def matches(self, model: nn.Module, example_inputs: tuple | None) -> bool:
         if is_pyg_data(example_inputs):
             return True
-        return example_inputs is None and any(isinstance(m, MessagePassing) for m in model.modules())
+        if example_inputs is not None:
+            return False
+        return any(isinstance(m, MessagePassing) for m in model.modules())
 
     def example_inputs(self, model: nn.Module) -> tuple | None:
         in_channels = _first_in_channels(model)

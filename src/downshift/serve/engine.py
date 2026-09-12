@@ -45,12 +45,16 @@ class ServingState:
         return self.options.force_onnx and self.verdict.status == "DEGRADED"
 
 
-def _verdict_for(loaded: LoadedModel, reference: LoadedModel | None, opts: ServeOptions) -> ExportVerdict:
+def _verdict_for(
+    loaded: LoadedModel, reference: LoadedModel | None, opts: ServeOptions
+) -> ExportVerdict:
     adapter = opts.adapter or loaded.adapter_hint
     if loaded.onnx_path is not None:
         ref_model = reference.model if reference else None
         ref_inputs = reference.example_inputs if reference else None
-        return intake(loaded.onnx_path, ref_model, ref_inputs, adapter, k=opts.k, dynamic=opts.dynamic)
+        return intake(
+            loaded.onnx_path, ref_model, ref_inputs, adapter, k=opts.k, dynamic=opts.dynamic
+        )
     assert loaded.model is not None
     prepared = prepare_model(loaded.model, loaded.example_inputs, adapter, opts.dynamic)
     if opts.backend == "torch":
