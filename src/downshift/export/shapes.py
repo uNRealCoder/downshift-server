@@ -10,6 +10,13 @@ is a PyG-adapter-specific override, not this default.
 import torch
 
 
+def alternative_sizes(base_size: int) -> list[int]:
+    """Sizes to exercise a dynamic axis with during verification, excluding the
+    export-time size itself (which is always tested separately as sample 0).
+    """
+    return sorted({1, 2, 3, base_size + 1, base_size * 2} - {base_size})
+
+
 def infer_dynamic_shapes(inputs: tuple) -> tuple:
     dim0 = torch.export.Dim("dim0", min=1, max=1 << 16)
     return tuple(

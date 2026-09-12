@@ -46,11 +46,11 @@ def capture(
             exported_program = torch.export.export(
                 model, example_inputs, dynamic_shapes=dynamic_shapes, strict=strict
             )
-            strategy_used = name
-            break
         except Exception as exc:  # noqa: BLE001 - a strategy failing just means try the next
             last_exception = exc
-            continue
+        else:
+            strategy_used = name
+            break
 
     if exported_program is None:
         return CaptureResult(success=False, capture_strategy="failed", exception=last_exception)
@@ -59,6 +59,16 @@ def capture(
         onnx_program = torch.onnx.export(exported_program, verbose=False, report=False)
     except Exception as exc:  # noqa: BLE001 - report as a failed capture, not a crash
         return CaptureResult(success=False, capture_strategy=strategy_used, exception=exc)
+
+    if onnx_program is None:
+        # Only the legacy (non-ExportedProgram) call path can return None per the type
+        # stub; passing an already-built ExportedProgram, as we do here, always returns
+        # an ONNXProgram in practice. Guard anyway rather than assume.
+        return CaptureResult(
+            success=False,
+            capture_strategy=strategy_used,
+            exception=RuntimeError("torch.onnx.export returned None"),
+        )
 
     model_proto = onnx_program.model_proto
     opset = model_proto.opset_import[0].version if model_proto.opset_import else None
