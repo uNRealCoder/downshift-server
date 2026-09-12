@@ -1,4 +1,5 @@
-"""Hazard: tied embedding/output weight (GPT-2/OPT-style). Should CLEAN + warn about duplication."""
+"""Hazard: tied embedding/output weight (GPT-2/OPT-style). Exports CLEAN on torch 2.14;
+the shared storage shows up as a verdict warning."""
 
 import torch
 from torch import nn
@@ -9,7 +10,7 @@ class TiedWeights(nn.Module):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, hidden)
         self.output = nn.Linear(hidden, vocab_size, bias=False)
-        self.output.weight = self.embedding.weight  # tied
+        self.output.weight = self.embedding.weight
 
     def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
         hidden = self.embedding(token_ids)

@@ -1,22 +1,25 @@
-"""Dummy input synthesis (IMPLEMENTATION_PLAN.md §5.2).
+"""Example-input synthesis ladder.
 
-Only Tier 1 (user-supplied) and Tier 5 (fail loudly) exist today:
-
-- Tier 1 — user-supplied example inputs. Always honored, always wins.
-- Tier 2 (adapter-derived) and Tier 3 (signature introspection) need model-family-specific
-  knowledge — HF's OnnxConfig, PyG's in_channels, forward() annotations — that doesn't exist
-  until the hf/pyg adapters land. Faking a heuristic now would produce confidently wrong
-  shapes for models we haven't actually built support for; better to fail loudly than guess.
-- Tier 4 (interactive wizard) is a CLI concern, deferred to v0.3.
+1. user-supplied      always wins
+2. adapter-derived    the adapter knows its family (HF config, PyG in_channels, ...)
+3. signature guess    the generic adapter's first-Linear/Conv heuristic
+4. fail loudly        say exactly what to pass
 """
 
-from typing import Any
+from torch import nn
+
+from downshift.adapters.base import Adapter
 
 
-def synthesize(user_inputs: tuple[Any, ...] | None) -> tuple[Any, ...]:
+def synthesize(model: nn.Module, adapter: Adapter, user_inputs: tuple | None) -> tuple:
     if user_inputs is not None:
         return user_inputs
-    raise NotImplementedError(
-        "No example_inputs given, and automatic input synthesis (adapter-derived or "
-        "signature-introspection) isn't implemented yet. Pass example_inputs explicitly."
+    guessed = adapter.example_inputs(model)
+    if guessed is not None:
+        return guessed
+    raise ValueError(
+        f"Couldn't work out example inputs for {type(model).__name__} with the "
+        f"{adapter.name!r} adapter. Pass them explicitly: from Python, "
+        "check(model, example_inputs=(tensor, ...)); from the CLI, --inputs module:function "
+        "where the function returns a tuple of forward() arguments."
     )

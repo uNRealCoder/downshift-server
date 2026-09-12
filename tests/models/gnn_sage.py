@@ -1,4 +1,4 @@
-"""GNN fixture: 2-layer GraphSAGE node classifier (sprint plan H9-H10)."""
+"""GNN fixture: 2-layer GraphSAGE node classifier."""
 
 import torch
 from torch import nn

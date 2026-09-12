@@ -1,0 +1,32 @@
+name: Compatibility matrix
+
+# The matrix is the project's core claim. A stale one is worse than none, so it is
+# regenerated weekly against current torch/onnxruntime and opened as a PR when it changes.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"  # Mondays 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -e ".[dev,gnn,hf]"
+      - run: python scripts/gen_matrix.py
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "docs: regenerate compatibility matrix"
+          title: "Weekly compatibility matrix refresh"
+          body: "Automated run of `scripts/gen_matrix.py` against current torch / onnxruntime."
+          branch: ci/compatibility-matrix
+          add-paths: docs/compatibility.md

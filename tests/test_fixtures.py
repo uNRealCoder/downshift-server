@@ -1,8 +1,7 @@
-"""Every fixture in tests/models/ must construct and forward-pass cleanly.
+"""Every fixture in tests/models/ must construct and run a forward pass.
 
-This does not check export/ONNX behavior (that's the Saturday export-core work) — it only
-guarantees the fixtures themselves are valid, runnable PyTorch models, which is the
-foundation everything else in the sprint plan is built on.
+No export here. This only guarantees the fixtures are valid PyTorch models, so a failure
+in test_export is about the exporter and not the fixture.
 """
 
 import pytest

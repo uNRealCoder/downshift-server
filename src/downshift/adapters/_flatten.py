@@ -1,8 +1,5 @@
-"""Shared flatten-shim machinery (IMPLEMENTATION_PLAN.md §5.4): wrap a model that takes a
-container argument (a dataclass, a torch_geometric.data.Data, ...) so torch.export sees a
-plain, fixed-arity tensor signature instead. Export the shim, not the original model.
-
-Used by adapters/generic.py (dataclass fields) and adapters/pyg.py (Data.x/edge_index/...).
+"""Shim that wraps a model taking a container argument (a dataclass, a PyG Data, ...) so
+torch.export sees a plain fixed-arity tensor signature. Export the shim, not the model.
 """
 
 from collections.abc import Callable, Mapping, Sequence
@@ -23,20 +20,21 @@ class FlattenShimBase(nn.Module):
         self.model = model
         self._rebuild = rebuild
         self._field_names = field_names
+        self.train(model.training)
 
     def _call(self, tensors: tuple[torch.Tensor, ...]) -> Any:
-        container = self._rebuild(dict(zip(self._field_names, tensors, strict=True)))
-        return self.model(container)
+        return self.model(self._rebuild(dict(zip(self._field_names, tensors, strict=True))))
 
 
-def build_shim_class(field_count: int) -> type[FlattenShimBase]:
-    # A plain `def forward(self, *tensors)` binds every positional arg into a single
-    # VAR_POSITIONAL parameter, so torch.export sees ONE top-level argument (a tuple),
-    # not N — which fails structural matching against an N-element dynamic_shapes tuple
-    # with "inputs has 1 elements, but dynamic_shapes has N elements" (confirmed
-    # empirically). Give the shim a real, fixed-arity signature instead.
-    params = ", ".join(f"t{i}" for i in range(field_count))
+def build_shim_class(field_names: Sequence[str]) -> type[FlattenShimBase]:
+    """Generate a subclass whose forward() has one named positional parameter per field.
+
+    A `def forward(self, *tensors)` would bind everything into one VAR_POSITIONAL arg and
+    torch.export would see a single tuple input, which doesn't line up with a per-input
+    dynamic_shapes tuple. The parameter names also become the ONNX graph's input names.
+    """
+    params = ", ".join(n if n.isidentifier() else f"t{i}" for i, n in enumerate(field_names))
     src = f"def forward(self, {params}):\n    return self._call(({params},))\n"
     namespace: dict[str, Any] = {}
-    exec(src, namespace)  # noqa: S102 - generates a plain, inspectable method, no user input
+    exec(src, namespace)  # noqa: S102 - field names only; no user-controlled text
     return type("FlattenShim", (FlattenShimBase,), {"forward": namespace["forward"]})

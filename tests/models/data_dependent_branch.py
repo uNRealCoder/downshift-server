@@ -1,4 +1,5 @@
-"""Hazard: data-dependent control flow. torch.export needs a guard/graph-break strategy here."""
+"""Hazard: data-dependent control flow. A Python `if` on a tensor value; torch.export
+can't trace it, so on torch 2.14 this is FAILED under both strict modes."""
 
 import torch
 from torch import nn

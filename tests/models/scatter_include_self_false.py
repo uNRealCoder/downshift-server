@@ -1,7 +1,8 @@
-"""Hazard: scatter_reduce(include_self=False) has no ONNX translation — known hard FAIL.
+"""Hazard: scatter_reduce(include_self=False) has no faithful ONNX translation.
 
-This is the exact op pattern GNN message-passing aggregation (PyG SAGEConv/GATConv) hits;
-see design doc §5.5 / §5.8. Should fail loudly with a specific, actionable error, not silently.
+This is the aggregation pattern PyG message passing is built on. On torch 2.14 it exports
+without error under strict=False and returns wrong numbers, so the verdict is DEGRADED
+rather than FAILED. Numerical verification is the only thing that catches it.
 """
 
 import torch

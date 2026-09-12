@@ -1,8 +1,8 @@
-"""GNN fixture: 3-layer GAT node classifier (sprint plan H9-H10) — "the money moment".
+"""GNN fixture: 3-layer GAT node classifier.
 
-GATConv's attention-weighted aggregation is exactly the op pattern IMPLEMENTATION_PLAN.md
-§5.5/§5.8 calls out as prone to scatter_reduce translation issues. Never cut this fixture
-(sprint plan §3 cut ladder).
+GATConv's attention-weighted aggregation is the scatter-heavy pattern most likely to trip
+the ONNX translation of scatter_reduce. On torch 2.14 / torch_geometric 2.8 it exports
+CLEAN; see scatter_include_self_false for the case that doesn't.
 """
 
 import torch
