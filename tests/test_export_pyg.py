@@ -25,7 +25,7 @@ def test_gnn_fixture_is_clean(module) -> None:
     model = module.make_model()
     inputs = module.make_inputs()
 
-    verdict = downshift.export(model, inputs, k=8)
+    verdict = downshift.check(model, inputs, k=8)
 
     assert verdict.status == "CLEAN", verdict.reason
     assert verdict.model_family == "pyg"
@@ -40,6 +40,6 @@ def test_gnn_verdict_survives_node_edge_count_mismatch() -> None:
     model = gnn_gcn.make_model()
     inputs = gnn_gcn.make_inputs(num_nodes=6, num_edges=10)
 
-    verdict = downshift.export(model, inputs, k=8)
+    verdict = downshift.check(model, inputs, k=8)
 
     assert verdict.status == "CLEAN"

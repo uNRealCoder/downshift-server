@@ -45,7 +45,7 @@ def test_fixture_verdict(module, expected_status: str) -> None:
     model = module.make_model()
     inputs = module.make_inputs()
 
-    verdict = downshift.export(model, inputs, k=8)
+    verdict = downshift.check(model, inputs, k=8)
 
     assert verdict.status == expected_status, verdict.reason
 
@@ -55,7 +55,7 @@ def test_clean_mlp_verdict_fields() -> None:
     model = clean_mlp.make_model()
     inputs = clean_mlp.make_inputs()
 
-    verdict = downshift.export(model, inputs, k=8)
+    verdict = downshift.check(model, inputs, k=8)
 
     assert verdict.capture_strategy == "strict=False"
     assert verdict.opset is not None
@@ -72,7 +72,7 @@ def test_scatter_fixture_numerics_actually_diverge() -> None:
     model = scatter_include_self_false.make_model()
     inputs = scatter_include_self_false.make_inputs()
 
-    verdict = downshift.export(model, inputs, k=8)
+    verdict = downshift.check(model, inputs, k=8)
 
     assert verdict.status == "DEGRADED"
     assert verdict.numerics is not None

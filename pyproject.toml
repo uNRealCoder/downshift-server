@@ -41,13 +41,25 @@ dev = [
     "pytest>=7.0",
     "ruff>=0.6",
     "mypy>=1.0",
+    "httpx>=0.24",  # FastAPI TestClient
 ]
 gnn = [
     "torch-geometric>=2.5",
 ]
+hf = [
+    "transformers>=4.40",
+]
+all = [
+    "downshift-server[gnn,hf]",
+]
 
 [project.scripts]
 downshift = "downshift.cli.main:app"
+
+[project.entry-points."downshift.adapters"]
+generic = "downshift.adapters.generic:ADAPTER"
+pyg = "downshift.adapters.pyg:ADAPTER"
+hf = "downshift.adapters.hf:ADAPTER"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/downshift"]
