@@ -4,7 +4,7 @@ import dataclasses
 
 import numpy as np
 import pytest
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -86,6 +86,28 @@ def test_predict_graph_on_non_graph_model(mlp_client):
     resp = mlp_client.post("/predict/graph", json={"x": [[0.0] * 16], "edge_index": [[0], [0]]})
     assert resp.status_code == 400
     assert "not graph-shaped" in resp.json()["detail"]
+
+
+def test_predict_graph_with_edge_attr_is_accepted(gcn_client):
+    x = np.random.randn(5, 8).tolist()
+    edge_index = [[0, 1, 2, 3, 4, 0, 2], [1, 2, 3, 4, 0, 3, 4]]
+    edge_attr = [[0.1]] * 7
+    resp = gcn_client.post(
+        "/predict/graph", json={"x": x, "edge_index": edge_index, "edge_attr": edge_attr}
+    )
+    assert resp.status_code == 200, resp.text
+
+
+def test_predict_reraises_http_exception_raised_by_the_backend(mlp_state, monkeypatch):
+    def boom(inputs):
+        raise HTTPException(422, "custom backend error")
+
+    monkeypatch.setattr(mlp_state.backend, "infer", boom)
+    client = TestClient(build_app(mlp_state))
+
+    resp = client.post("/predict", json={"inputs": {"x": [[0.0] * 16]}})
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "custom backend error"
 
 
 def test_backends_agree_on_same_contract():

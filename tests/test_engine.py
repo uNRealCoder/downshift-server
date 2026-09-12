@@ -6,9 +6,11 @@ import pytest
 import torch
 
 import downshift
+from downshift.export.verdict import ExportVerdict, prepare_model
 from downshift.loading import LoadedModel, load_model
+from downshift.serve import backends as backends_mod
 from downshift.serve.backends import OnnxRuntimeBackend, TorchBackend
-from downshift.serve.engine import ServeOptions, prepare_serving
+from downshift.serve.engine import ServeOptions, choose_backend, prepare_serving
 from tests.models import clean_mlp
 
 
@@ -94,6 +96,58 @@ def test_torch_backend_rejects_missing_input():
     backend = TorchBackend(clean_mlp.make_model(), ("x",), device="cpu")
     with pytest.raises(KeyError, match="x"):
         backend.infer({"y": np.zeros((1, 16), dtype=np.float32)})
+
+
+class _TupleOutputModel(torch.nn.Module):
+    def forward(self, x):
+        return x, x * 2
+
+
+def test_torch_backend_splits_tuple_outputs_positionally():
+    backend = TorchBackend(_TupleOutputModel(), ("x",), device="cpu")
+    out = backend.infer({"x": np.ones((2, 3), dtype=np.float32)})
+    assert set(out) == {"output_0", "output_1"}
+    np.testing.assert_allclose(out["output_1"], out["output_0"] * 2)
+
+
+def test_ort_providers_prefers_cuda_when_available(monkeypatch):
+    monkeypatch.setattr(
+        backends_mod.ort,
+        "get_available_providers",
+        lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"],
+    )
+    assert backends_mod._ort_providers("cuda") == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+
+def _bare_verdict(**overrides) -> ExportVerdict:
+    fields = dict(
+        status="CLEAN",
+        model_family="generic-torch",
+        capture_strategy=None,
+        opset=None,
+        op_types=[],
+        numerics=None,
+        recommended_backend="onnxruntime",
+        reason="",
+    )
+    fields.update(overrides)
+    return ExportVerdict(**fields)
+
+
+def test_choose_backend_raises_when_neither_backend_is_available():
+    verdict = _bare_verdict(prepared=None)
+    with pytest.raises(ValueError, match="no PyTorch model to run"):
+        choose_backend(verdict, ServeOptions())
+
+
+def test_choose_backend_falls_back_to_torch_when_no_onnx_is_available():
+    prepared = prepare_model(clean_mlp.make_model(), clean_mlp.make_inputs())
+    verdict = _bare_verdict(prepared=prepared)
+
+    name, notes = choose_backend(verdict, ServeOptions())
+
+    assert name == "torch"
+    assert any("falling back to torch" in n for n in notes)
 
 
 def test_onnxruntime_backend_metadata(exported_mlp):

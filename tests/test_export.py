@@ -64,6 +64,15 @@ def test_clean_mlp_verdict_fields() -> None:
     assert verdict.onnx_program is not None
 
 
+def test_check_switches_a_training_mode_model_to_eval_with_a_warning() -> None:
+    model = clean_mlp.make_model().train()
+
+    verdict = downshift.check(model, clean_mlp.make_inputs(), k=2)
+
+    assert any("training mode" in w for w in verdict.warnings)
+    assert model.training is False
+
+
 def test_scatter_fixture_numerics_actually_diverge() -> None:
     """DEGRADED has to mean real numeric divergence, not just a non-empty failure reason."""
     model = scatter_include_self_false.make_model()

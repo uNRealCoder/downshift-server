@@ -314,5 +314,5 @@ def version() -> None:
     typer.echo(f"downshift v{__version__}")
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     app()

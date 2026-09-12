@@ -1,13 +1,17 @@
 """CLI contract: exit codes and JSON. Banner and table text are deliberately not asserted."""
 
 import json
+import logging
+import sys
 from pathlib import Path
 
 import pytest
+import torch
 from typer.testing import CliRunner
 
 from downshift.cli import main
 from downshift.cli.main import app
+from tests.models import clean_mlp
 
 CLEAN = "tests.models.clean_mlp:make_model"
 DEGRADED = "tests.models.scatter_include_self_false:make_model"
@@ -61,6 +65,56 @@ def test_check_bad_spec_is_usage_error():
 def test_check_table_output():
     result = run("check", CLEAN)
     assert result.exit_code == 0, result.output
+
+
+def test_check_log_format_json_is_accepted():
+    result = run("check", CLEAN, "--log-format", "json", "--json")
+    assert result.exit_code == 0, result.output
+
+
+def test_json_formatter_serialises_exc_info():
+    try:
+        raise ValueError("boom")
+    except ValueError:
+        exc_info = sys.exc_info()
+    record = logging.LogRecord("test", logging.ERROR, __file__, 1, "failed", (), exc_info)
+
+    payload = json.loads(main._JsonFormatter().format(record))
+
+    assert payload["level"] == "ERROR"
+    assert "ValueError" in payload["exc_info"]
+
+
+def test_check_unknown_adapter_is_an_unexpected_crash():
+    result = run("check", CLEAN, "--adapter", "doesnotexist", "--json")
+    assert result.exit_code == main.EXIT_CRASH, result.output
+    assert "KeyError" in result.output
+
+
+def test_check_crash_with_debug_prints_traceback():
+    result = run("check", CLEAN, "--adapter", "doesnotexist", "--log-level", "debug", "--json")
+    assert result.exit_code == main.EXIT_CRASH, result.output
+
+
+def test_check_unsafe_load_prints_a_warning(tmp_path: Path):
+    path = tmp_path / "full.pt"
+    torch.save(clean_mlp.make_model(), path)
+
+    result = run("check", str(path), "--unsafe-load", "--json")
+
+    assert result.exit_code in (0, 1, 2, 3), result.output
+    assert "arbitrary code" in result.output
+
+
+def test_export_rejects_an_onnx_model_as_input(exported: Path, tmp_path: Path):
+    result = run("export", str(exported / "clean_mlp.onnx"), "-o", str(tmp_path), "--json")
+    assert result.exit_code == main.EXIT_USAGE, result.output
+
+
+def test_export_table_output_prints_artifacts(tmp_path: Path):
+    result = run("export", CLEAN, "-o", str(tmp_path))
+    assert result.exit_code == 0, result.output
+    assert "Wrote" in result.output
 
 
 def test_export_writes_artifact_and_manifest(exported: Path):

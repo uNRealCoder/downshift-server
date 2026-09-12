@@ -1,9 +1,13 @@
 """Adapter registry, detection, and the per-family prepare()/vary_fn behaviour."""
 
+import dataclasses
 import inspect
+from types import SimpleNamespace
 
 import pytest
 import torch
+from torch_geometric.data import Data as PyGData
+from torch_geometric.nn import SAGEConv
 
 from downshift.adapters import _flatten, generic, hf, pyg, registry
 from downshift.export.verdict import prepare_model
@@ -74,6 +78,25 @@ def test_entry_point_with_missing_dependency_is_skipped(monkeypatch):
     assert names[-1] == "generic"
 
 
+def test_load_spec_returns_none_when_module_missing():
+    assert registry._load_spec("no.such.module:ADAPTER") is None
+
+
+def test_get_returns_the_matching_adapter():
+    assert registry.get("generic") is generic.ADAPTER
+
+
+def test_detect_raises_when_no_adapter_matches(monkeypatch):
+    monkeypatch.setattr(registry, "available", lambda: {})
+    with pytest.raises(RuntimeError, match="no adapter matched"):
+        registry.detect(clean_mlp.make_model(), clean_mlp.make_inputs())
+
+
+def test_prepare_model_accepts_adapter_name_as_string():
+    prepared = prepare_model(clean_mlp.make_model(), clean_mlp.make_inputs(), adapter="generic")
+    assert prepared.family == "generic-torch"
+
+
 @pytest.mark.parametrize(
     ("make_model", "make_inputs", "expected"),
     [
@@ -109,6 +132,64 @@ def test_generic_does_not_guess_for_multi_argument_forward():
     assert generic.ADAPTER.example_inputs(scatter_include_self_false.make_model()) is None
 
 
+class _Conv1dOnly(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.conv = torch.nn.Conv1d(3, 4, 3)
+
+    def forward(self, x):
+        return self.conv(x)
+
+
+class _Conv3dOnly(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.conv = torch.nn.Conv3d(3, 4, 3)
+
+    def forward(self, x):
+        return self.conv(x)
+
+
+class _EmbeddingOnly(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.emb = torch.nn.Embedding(10, 4)
+
+    def forward(self, x):
+        return self.emb(x)
+
+
+class _NoGuessableLayer(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.rnn = torch.nn.LSTM(4, 4)
+
+    def forward(self, x):
+        return self.rnn(x)
+
+
+@pytest.mark.parametrize(
+    ("model_cls", "expected_shape"),
+    [(_Conv1dOnly, (1, 3, generic._GUESS_SPATIAL)), (_Conv3dOnly, (1, 3, 8, 8, 8))],
+    ids=["conv1d", "conv3d"],
+)
+def test_generic_guesses_conv1d_and_conv3d(model_cls, expected_shape):
+    guess = generic.ADAPTER.example_inputs(model_cls())
+    assert guess is not None
+    assert tuple(guess[0].shape) == expected_shape
+
+
+def test_generic_guesses_embedding_input():
+    guess = generic.ADAPTER.example_inputs(_EmbeddingOnly())
+    assert guess is not None
+    assert tuple(guess[0].shape) == (1, 8)
+    assert guess[0].dtype == torch.int64
+
+
+def test_generic_guess_returns_none_for_unrecognized_layer():
+    assert generic.ADAPTER.example_inputs(_NoGuessableLayer()) is None
+
+
 def test_generic_flattens_dataclass_input_into_named_tensors():
     prepared = generic.ADAPTER.prepare(dict_input.make_model(), dict_input.make_inputs())
 
@@ -127,6 +208,18 @@ def test_prepared_dynamic_dims(module, expected):
     assert prepared.dynamic_dims == expected
 
 
+@dataclasses.dataclass
+class _MixedFields:
+    x: torch.Tensor
+    flag: bool
+
+
+def test_flatten_dataclass_declines_when_a_field_is_not_a_tensor():
+    model = clean_mlp.make_model()
+    data = _MixedFields(x=torch.randn(1, 16), flag=True)
+    assert generic._flatten_dataclass(model, (data,)) is None
+
+
 # --- flatten shim -----------------------------------------------------------------------
 
 
@@ -143,6 +236,59 @@ def test_shim_inherits_train_eval_mode(training):
 
 
 # --- vary functions ---------------------------------------------------------------------
+
+
+def test_pyg_example_inputs_guesses_from_message_passing_layer():
+    guess = pyg.ADAPTER.example_inputs(gnn_gcn.make_model())
+    assert guess is not None
+    assert isinstance(guess[0], PyGData)
+    assert guess[0].x.shape[1] == 8
+
+
+def test_pyg_example_inputs_none_without_message_passing_layer():
+    assert pyg.ADAPTER.example_inputs(clean_mlp.make_model()) is None
+
+
+class _BipartiteSAGE(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.conv = SAGEConv((8, 8), 4)
+
+    def forward(self, x, edge_index):
+        return self.conv(x, edge_index)
+
+
+def test_pyg_first_in_channels_unwraps_a_tuple_in_channels():
+    guess = pyg.ADAPTER.example_inputs(_BipartiteSAGE())
+    assert guess is not None
+    assert guess[0].x.shape[1] == 8
+
+
+def test_pyg_prepare_includes_edge_attr_when_present_on_the_input():
+    model = gnn_gcn.make_model()
+    data = PyGData(
+        x=torch.randn(6, 8), edge_index=torch.randint(0, 6, (2, 10)), edge_attr=torch.randn(10, 3)
+    )
+    prepared = pyg.ADAPTER.prepare(model, (data,))
+    assert prepared.input_names == ("x", "edge_index", "edge_attr")
+    assert len(prepared.inputs) == 3
+
+
+def test_pyg_vary_fn_resizes_edge_attr_with_the_edge_count():
+    x = torch.randn(6, 8)
+    edge_index = torch.randint(0, 6, (2, 10))
+    edge_attr = torch.randn(10, 3)
+    base = (x, edge_index, edge_attr)
+    vary = pyg.make_vary_fn(base, ("x", "edge_index", "edge_attr"))
+
+    assert vary(0) is base
+    for i in range(1, 11):
+        _, sample_edge_index, sample_edge_attr = vary(i)
+        assert sample_edge_attr.shape == (sample_edge_index.shape[1], edge_attr.shape[1])
+
+
+def test_hf_example_inputs_none_without_vocab_size():
+    assert hf.HFAdapter().example_inputs(SimpleNamespace()) is None
 
 
 def test_pyg_vary_fn_never_references_missing_nodes():

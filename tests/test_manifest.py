@@ -3,10 +3,12 @@
 import hashlib
 import json
 
+import onnx
 import pytest
+from onnx import TensorProto, helper
 
 import downshift
-from downshift.export.manifest import manifest_path_for
+from downshift.export.manifest import manifest_path_for, observed_dtype
 from tests.models import clean_mlp, data_dependent_branch
 
 
@@ -50,6 +52,27 @@ def test_fp16_export_records_observed_dtype(tmp_path):
     manifest = json.loads(manifest_path_for(out).read_text())
     assert manifest["observed_dtype"] == "fp16"
     assert manifest["verdict"]["status"] == verdict.status
+
+
+def _onnx_model_without_initializers(elem_type: int) -> onnx.ModelProto:
+    """A graph with no weights at all, so observed_dtype must fall back to its input."""
+    inp = helper.make_tensor_value_info("x", elem_type, [1, 4])
+    out = helper.make_tensor_value_info("y", elem_type, [1, 4])
+    node = helper.make_node("Identity", ["x"], ["y"])
+    graph = helper.make_graph([node], "g", [inp], [out])
+    return helper.make_model(graph)
+
+
+def test_observed_dtype_falls_back_to_graph_input_when_no_initializer(tmp_path):
+    path = tmp_path / "no_init.onnx"
+    onnx.save(_onnx_model_without_initializers(TensorProto.FLOAT16), str(path))
+    assert observed_dtype(path) == "fp16"
+
+
+def test_observed_dtype_returns_none_for_unmapped_dtype(tmp_path):
+    path = tmp_path / "unmapped.onnx"
+    onnx.save(_onnx_model_without_initializers(TensorProto.STRING), str(path))
+    assert observed_dtype(path) is None
 
 
 def test_failed_export_writes_nothing(tmp_path):
