@@ -41,3 +41,8 @@ tmp/
 # Local tooling config
 .claude/
 .docs/
+
+# Local pre-publish validation: hits test.pypi.org/pypi.org and builds a throwaway venv;
+# not part of the package or CI, kept out of version control on purpose.
+scripts/validate_pypi_release.py
+scripts/.validation/
