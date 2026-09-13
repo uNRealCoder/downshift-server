@@ -8,13 +8,12 @@ does on the inside.
 Read it top to bottom the first time. After that, §2 (the map) and §11 (invariants) are the
 bits you'll come back to.
 
-> **As of / line numbers.** This was written against the working tree at `9fb1657` **plus the
-> uncommitted changes** sitting in it — the new `settings.py` and edits to `cli/main.py`,
-> `export/{verdict,verify,prevalidated}.py`, and `serve/{engine,backends}.py`. Every
-> `file.py:NN` reference below is exact against *that* tree. If you're reading this on a
-> checkout where those changes aren't committed yet, references into those six files will be
-> off by a few lines. The **symbol names are authoritative** — grep for the function or class,
-> not the line.
+> **As of / line numbers.** Written against `b0c1faa` ("Updated code simplified and session
+> threads"), which is where `settings.py` and the current `cli/main.py`,
+> `export/{verdict,verify,prevalidated}.py` and `serve/{engine,backends}.py` landed. Every
+> `file.py:NN` reference below was checked against that commit. Code moves; the **symbol names
+> are authoritative** — if a line number looks wrong, grep for the function or class name
+> rather than trusting the number.
 
 ---
 
