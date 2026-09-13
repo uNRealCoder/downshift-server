@@ -2,14 +2,23 @@
 
 import hashlib
 import json
+from enum import IntEnum
 
 import onnx
 import pytest
 from onnx import TensorProto, helper
 
 import downshift
-from downshift.export.manifest import manifest_path_for, observed_dtype
+from downshift.export.manifest import _DTYPE_NAMES, manifest_path_for, observed_dtype
 from tests.models import clean_mlp, data_dependent_branch
+
+
+def test_dtype_names_is_an_intenum_keyed_by_onnx_dtype_code():
+    assert issubclass(_DTYPE_NAMES, IntEnum)
+    assert _DTYPE_NAMES.fp32 == TensorProto.FLOAT
+    assert _DTYPE_NAMES.fp16 == TensorProto.FLOAT16
+    assert _DTYPE_NAMES.fp64 == TensorProto.DOUBLE
+    assert _DTYPE_NAMES.bf16 == TensorProto.BFLOAT16
 
 
 @pytest.fixture(scope="module")

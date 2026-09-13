@@ -72,7 +72,11 @@ UnsafeLoadOpt = Annotated[
 ]
 AdapterOpt = Annotated[
     str | None,
-    typer.Option("--adapter", help="Model-family adapter (generic, pyg, hf); default: detect"),
+    typer.Option(
+        "--adapter",
+        metavar="NAME|path/to/adapter.py[:attr]",
+        help="Model-family adapter: generic, pyg, hf, or your own adapter.py; default: detect",
+    ),
 ]
 SamplesOpt = Annotated[
     int, typer.Option("-k", "--samples", min=1, help="Number of verification samples")

@@ -3,6 +3,7 @@
 import hashlib
 import json
 from datetime import UTC, datetime
+from enum import IntEnum
 from pathlib import Path
 
 import onnx
@@ -11,7 +12,19 @@ import torch
 
 from downshift.export.verdict import ExportVerdict
 
-_DTYPE_NAMES = {1: "fp32", 10: "fp16", 11: "fp64", 16: "bf16"}
+
+class _DTYPE_NAMES(IntEnum):
+    """ONNX TensorProto dtype codes we can label, keyed by their short name."""
+
+    fp32 = onnx.TensorProto.FLOAT
+    fp16 = onnx.TensorProto.FLOAT16
+    fp64 = onnx.TensorProto.DOUBLE
+    bf16 = onnx.TensorProto.BFLOAT16
+
+
+# A plain value->name dict, so a miss is a dict lookup rather than an IntEnum ValueError;
+# most initializers (int64 indices, bools, ...) are misses, and this runs in a loop.
+_DTYPE_LOOKUP: dict[int, str] = {member.value: member.name for member in _DTYPE_NAMES}
 
 
 def _sha256(path: Path) -> str:
@@ -22,16 +35,21 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _dtype_name(code: int) -> str | None:
+    return _DTYPE_LOOKUP.get(code)
+
+
 def observed_dtype(onnx_path: Path) -> str | None:
     """Float dtype of the graph's weights, i.e. what the export actually produced."""
     proto = onnx.load(str(onnx_path), load_external_data=False)
     for init in proto.graph.initializer:
-        if init.data_type in _DTYPE_NAMES:
-            return _DTYPE_NAMES[init.data_type]
+        name = _dtype_name(init.data_type)
+        if name is not None:
+            return name
     for inp in proto.graph.input:
-        elem = inp.type.tensor_type.elem_type
-        if elem in _DTYPE_NAMES:
-            return _DTYPE_NAMES[elem]
+        name = _dtype_name(inp.type.tensor_type.elem_type)
+        if name is not None:
+            return name
     return None
 
 

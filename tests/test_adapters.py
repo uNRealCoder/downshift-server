@@ -11,6 +11,7 @@ from torch_geometric.nn import SAGEConv
 
 from downshift.adapters import _flatten, generic, hf, pyg, registry
 from downshift.export.verdict import prepare_model
+from downshift.loading import LoadError
 from tests.models import (
     clean_mlp,
     dict_input,
@@ -84,6 +85,94 @@ def test_load_spec_returns_none_when_module_missing():
 
 def test_get_returns_the_matching_adapter():
     assert registry.get("generic") is generic.ADAPTER
+
+
+# --- custom adapters loaded from a .py file ----------------------------------------------
+
+_CUSTOM_ADAPTER_INSTANCE = '''
+from downshift.adapters.base import Prepared
+
+class MyAdapter:
+    name = "custom"
+    family = "custom-family"
+
+    def matches(self, model, example_inputs):
+        return True
+
+    def example_inputs(self, model):
+        return None
+
+    def prepare(self, model, example_inputs):
+        return Prepared(
+            model=model,
+            inputs=example_inputs,
+            input_names=("x",),
+            dynamic_shapes=(None,),
+            vary_fn=None,
+            family=self.family,
+        )
+
+ADAPTER = MyAdapter()
+'''
+
+_CUSTOM_ADAPTER_CLASS_ONLY = _CUSTOM_ADAPTER_INSTANCE.replace('ADAPTER = MyAdapter()\n', "")
+
+_NOT_AN_ADAPTER = "NOT_AN_ADAPTER = object()\n"
+
+
+def test_get_loads_custom_adapter_from_py_file_default_attr(tmp_path):
+    path = tmp_path / "my_adapter.py"
+    path.write_text(_CUSTOM_ADAPTER_INSTANCE)
+
+    adapter = registry.get(str(path))
+    assert adapter.name == "custom"
+    assert adapter.family == "custom-family"
+
+
+def test_get_loads_custom_adapter_from_py_file_with_explicit_attr(tmp_path):
+    path = tmp_path / "my_adapter.py"
+    path.write_text(_CUSTOM_ADAPTER_INSTANCE)
+
+    adapter = registry.get(f"{path}:ADAPTER")
+    assert adapter.name == "custom"
+
+
+def test_get_loads_custom_adapter_class_and_instantiates_it(tmp_path):
+    path = tmp_path / "my_adapter.py"
+    path.write_text(_CUSTOM_ADAPTER_CLASS_ONLY)
+
+    adapter = registry.get(f"{path}:MyAdapter")
+    assert adapter.name == "custom"
+
+
+def test_get_custom_adapter_missing_file_raises_load_error(tmp_path):
+    missing = tmp_path / "nope.py"
+    with pytest.raises(LoadError, match="does not exist"):
+        registry.get(str(missing))
+
+
+def test_get_custom_adapter_missing_attr_raises_load_error(tmp_path):
+    path = tmp_path / "my_adapter.py"
+    path.write_text(_CUSTOM_ADAPTER_INSTANCE)
+
+    with pytest.raises(LoadError, match="no attribute"):
+        registry.get(f"{path}:NOPE")
+
+
+def test_get_custom_adapter_wrong_shape_raises_load_error(tmp_path):
+    path = tmp_path / "my_adapter.py"
+    path.write_text(_NOT_AN_ADAPTER)
+
+    with pytest.raises(LoadError, match="not an Adapter"):
+        registry.get(f"{path}:NOT_AN_ADAPTER")
+
+
+def test_prepare_model_accepts_custom_adapter_file_path(tmp_path):
+    path = tmp_path / "my_adapter.py"
+    path.write_text(_CUSTOM_ADAPTER_INSTANCE)
+
+    prepared = prepare_model(clean_mlp.make_model(), clean_mlp.make_inputs(), adapter=str(path))
+    assert prepared.family == "custom-family"
 
 
 def test_detect_raises_when_no_adapter_matches(monkeypatch):

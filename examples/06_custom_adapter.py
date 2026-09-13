@@ -126,6 +126,21 @@ print("status:", guessed.status, "| guessed a", guessed.input_names, "pair")
 # where `my_package/adapters.py` exposes `ADAPTER = PointCloudAdapter()`. Adapters are
 # tried most-specific first; `generic` always goes last, so a well-written `matches()`
 # is what keeps two adapters from fighting over the same model.
+#
+# ## Or: skip packaging entirely
+#
+# For an adapter that'll never live in a package, `--adapter` (and `check()`'s `adapter=`)
+# also accepts a bare `.py` file directly — no install, no entry point:
+#
+# ```
+# downshift check my_model.py:model --adapter path/to/pointcloud_adapter.py
+# ```
+#
+# The file just needs an `ADAPTER = PointCloudAdapter()` at module level (the same shape
+# as `ADAPTER` above), or `--adapter path/to/pointcloud_adapter.py:PointCloudAdapter` to
+# point at the class directly — it's instantiated with no arguments. Either way, whatever
+# you load has to implement the same four things as `PointCloudAdapter` here (or the
+# built-in `GenericAdapter`): `name`, `family`, `matches()`, `example_inputs()`, `prepare()`.
 
 # %% [markdown]
 # Next: [lesson 7](07_cli_walkthrough.py) covers the same ground from the command line.
