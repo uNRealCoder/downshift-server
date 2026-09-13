@@ -7,7 +7,7 @@ name = "downshift-server"
 version = "0.1.0"
 description = "Universal PyTorch → ONNX verification and serving, with graceful fallback."
 readme = "README.md"
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.11,<=3.14"
 license = {text = "MIT"}
 authors = [
     {name = "Nikhil Ranjan", email = "nrnikhilranjan1997@gmail.com"}
