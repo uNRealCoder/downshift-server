@@ -40,3 +40,4 @@ tmp/
 
 # Local tooling config
 .claude/
+.docs/

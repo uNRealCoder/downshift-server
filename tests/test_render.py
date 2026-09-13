@@ -117,7 +117,7 @@ def _serving_state(verdict: ExportVerdict, **overrides) -> ServingState:
 def test_print_banner_unverified_without_reference():
     verdict = _verdict(status="UNVERIFIED", numerics=None, recommended_backend="onnxruntime")
     state = _serving_state(verdict)
-    render.print_banner(state, "0.0.0.0", 8000)
+    render.print_banner(state, "127.0.0.1", 8000)
 
 
 def test_print_banner_unverified_with_prepared_backend_torch_skip():
@@ -129,7 +129,7 @@ def test_print_banner_unverified_with_prepared_backend_torch_skip():
         prepared=object(),
     )
     state = _serving_state(verdict, backend=_StubBackend("torch"), options=ServeOptions(backend="torch"))
-    render.print_banner(state, "0.0.0.0", 8000)
+    render.print_banner(state, "127.0.0.1", 8000)
 
 
 def test_print_banner_failed_shows_reason():
@@ -137,7 +137,7 @@ def test_print_banner_failed_shows_reason():
         status="FAILED", numerics=None, recommended_backend="torch", prepared=object()
     )
     state = _serving_state(verdict, backend=_StubBackend("torch"))
-    render.print_banner(state, "0.0.0.0", 8000)
+    render.print_banner(state, "127.0.0.1", 8000)
 
 
 def test_print_banner_degraded_without_numerics_uses_reason():
@@ -148,7 +148,7 @@ def test_print_banner_degraded_without_numerics_uses_reason():
         reason="exported but numerics diverge",
     )
     state = _serving_state(verdict, backend=_StubBackend("torch"))
-    render.print_banner(state, "0.0.0.0", 8000)
+    render.print_banner(state, "127.0.0.1", 8000)
 
 
 def test_print_banner_degraded_forced_onnx_notes_and_warnings():
@@ -169,7 +169,7 @@ def test_print_banner_degraded_forced_onnx_notes_and_warnings():
             "auto-selected backend note",
         ],
     )
-    render.print_banner(state, "0.0.0.0", 8000)
+    render.print_banner(state, "127.0.0.1", 8000)
 
 
 def test_warn_and_error(capsys):

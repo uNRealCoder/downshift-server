@@ -15,7 +15,7 @@ $ downshift serve tests.models.scatter_include_self_false:make_model
 │  Override       --force-onnx to serve the ONNX graph anyway               │
 │  Backend        torch (eager) · cpu  ← auto-selected                      │
 │  Dynamic dims   x[0], segment_ids[0]                                      │
-│  Endpoint       http://0.0.0.0:8000                                       │
+│  Endpoint       http://127.0.0.1:8000                                       │
 │                                                                           │
 └───────────────────────────────────────────────────────────────────────────┘
 ```

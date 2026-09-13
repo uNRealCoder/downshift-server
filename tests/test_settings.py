@@ -22,7 +22,7 @@ def test_defaults_with_no_env_set(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(f"DOWNSHIFT_{name}", raising=False)
     mod = importlib.reload(settings)
     assert (mod.HOST, mod.PORT, mod.DEVICE, mod.BACKEND, mod.WARMUP, mod.SAMPLES) == (
-        "0.0.0.0",
+        "127.0.0.1",
         8000,
         "auto",
         "auto",
