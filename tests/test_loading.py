@@ -175,3 +175,36 @@ def test_unknown_string_is_treated_as_hf_repo_id(monkeypatch):
     assert loaded.adapter_hint == "hf"
     assert isinstance(loaded.model, nn.Module)
     assert loaded.example_inputs is None
+
+
+def test_local_dir_with_config_json_is_treated_as_hf_repo(tmp_path, monkeypatch):
+    (tmp_path / "config.json").write_text("{}")
+    seen = []
+
+    def fake_load(repo_id_or_path):
+        seen.append(repo_id_or_path)
+        return tiny_bert.make_model()
+
+    monkeypatch.setattr(hf, "load_pretrained", fake_load)
+
+    loaded = load_model(str(tmp_path))
+
+    assert seen == [str(tmp_path)]
+    assert loaded.adapter_hint == "hf"
+    assert isinstance(loaded.model, nn.Module)
+
+
+def test_local_dir_without_config_json_is_rejected(tmp_path):
+    (tmp_path / "README.md").write_text("not a model repo")
+
+    with pytest.raises(LoadError, match="no config.json"):
+        load_model(str(tmp_path))
+
+
+def test_local_hf_repo_dir_needs_hf_extra(tmp_path, monkeypatch):
+    (tmp_path / "config.json").write_text("{}")
+    monkeypatch.delattr(adapters_pkg, "hf", raising=False)
+    monkeypatch.setitem(sys.modules, "downshift.adapters.hf", None)
+
+    with pytest.raises(LoadError, match=r"\[hf\] extra"):
+        load_model(str(tmp_path))

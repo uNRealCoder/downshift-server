@@ -7,6 +7,8 @@ Accepted forms:
   weights.pt                state dict; needs --model-class pkg.module:Class. Loaded with
                             weights_only=True. A pickled full module needs --unsafe-load.
   org/repo                  Hugging Face hub id (needs the [hf] extra)
+  path/to/repo/dir          Locally downloaded Hugging Face repo, i.e. a directory containing
+                            a config.json (needs the [hf] extra)
 """
 
 import re
@@ -131,22 +133,31 @@ def load_model(
     if _IMPORT_SPEC.match(spec):
         return _load_from_import_spec(spec, inputs)
 
+    if path.is_dir():
+        if not (path / "config.json").exists():
+            raise LoadError(f"{path} has no config.json — not a Hugging Face repo")
+        return _load_hf(spec, inputs)
+
     if path.exists():
         raise LoadError(f"don't know how to load {path} (suffix {path.suffix!r})")
     if path.suffix or path.is_absolute():
         raise LoadError(f"{path} does not exist")
 
+    return _load_hf(spec, inputs)
+
+
+def _load_hf(spec: str, inputs: str | None) -> LoadedModel:
     try:
         from downshift.adapters import hf
     except ImportError as exc:
         raise LoadError(
-            f"{spec!r} isn't a file or an import spec; treating it as a Hugging Face repo id "
+            f"{spec!r} isn't a file or an import spec; loading it as a Hugging Face repo "
             "needs the [hf] extra: pip install 'downshift-server[hf]'"
         ) from exc
     try:
         model = hf.load_pretrained(spec)
-    except (OSError, ValueError) as exc:  # hub errors surface as either
-        raise LoadError(f"can't load {spec!r} from the Hugging Face hub: {exc}") from exc
+    except (OSError, ValueError) as exc:  # hub errors and bad local repos surface as either
+        raise LoadError(f"can't load {spec!r} as a Hugging Face repo: {exc}") from exc
     return LoadedModel(
         source=spec,
         model=model,

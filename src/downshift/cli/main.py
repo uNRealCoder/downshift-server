@@ -50,7 +50,7 @@ class LogFormat(str, Enum):
 
 ModelArg = Annotated[
     str,
-    typer.Argument(metavar="MODEL", help="model.onnx | pkg.module:attr | weights.pt | org/repo"),
+    typer.Argument(metavar="MODEL", help="model.onnx | pkg.module:attr | weights.pt | org/repo | hf-repo-dir/"),
 ]
 InputsOpt = Annotated[
     str | None,

@@ -33,8 +33,10 @@ class _FirstOutputShim(nn.Module):
         return first
 
 
-def load_pretrained(repo_id: str) -> PreTrainedModel:
-    model: PreTrainedModel = AutoModel.from_pretrained(repo_id)
+def load_pretrained(repo_id_or_path: str) -> PreTrainedModel:
+    """repo_id_or_path is either a Hugging Face hub id or a local directory containing a
+    previously downloaded repo (config.json, weights, etc.) -- from_pretrained handles both."""
+    model: PreTrainedModel = AutoModel.from_pretrained(repo_id_or_path)
     return model
 
 

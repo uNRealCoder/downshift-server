@@ -130,6 +130,7 @@ Options that change what gets served:
 | `pkg.module:attr` | Import spec. `attr` is an `nn.Module` instance or a zero-argument factory. A sibling `make_inputs` in the same module is picked up automatically; otherwise pass `--inputs pkg.module:fn`. |
 | `weights.pt` | State dict. Needs `--model-class pkg.module:Class`. Also `.pth`, `.bin`, `.ckpt`. |
 | `org/repo` | Hugging Face hub id. Needs the `[hf]` extra. |
+| `path/to/repo/dir/` | Locally downloaded Hugging Face repo: a directory containing `config.json`. Needs the `[hf]` extra. |
 
 Checkpoints are loaded with `torch.load(weights_only=True)`. A file that holds a pickled full module will not load that way; `--unsafe-load` switches to `weights_only=False`, which means running arbitrary code from the file. Only use it on files you would run as a script.
 
@@ -199,6 +200,14 @@ myfamily = "my_pkg.adapter:ADAPTER"
 ```
 
 Adapters are tried most-specific first; `generic` always goes last. An adapter whose optional dependency is missing is skipped silently.
+
+For a one-off adapter that isn't worth packaging, `--adapter` (and `check()`'s `adapter=`) also accepts a bare `.py` file directly, no install or entry point required:
+
+```bash
+downshift check my_model.py:model --adapter path/to/pointcloud_adapter.py
+```
+
+The file needs a module-level `ADAPTER = MyAdapter()`, or point at the class directly with `--adapter path/to/pointcloud_adapter.py:MyAdapter` and it's instantiated with no arguments.
 
 ## Development
 
