@@ -8,6 +8,7 @@ UNVERIFIED a .onnx handed to us with no reference model         -> serve via ORT
 
 import re
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Literal
 
@@ -21,7 +22,14 @@ from downshift.export.shapes import apply_dynamic_override, safe_capture_inputs
 from downshift.export.verify import NumericsReport, verify
 
 Status = Literal["CLEAN", "DEGRADED", "FAILED", "UNVERIFIED"]
-Backend = Literal["onnxruntime", "torch"]
+
+
+class BackendName(str, Enum):
+    """The concrete backends a verdict can recommend/serve; never "auto" (that's a CLI-only
+    selection sentinel, not a real backend) - see engine.BackendChoice."""
+
+    onnxruntime = "onnxruntime"
+    torch = "torch"
 
 EXIT_CODES: dict[str, int] = {"CLEAN": 0, "FAILED": 1, "DEGRADED": 2, "UNVERIFIED": 3}
 
@@ -36,7 +44,7 @@ class ExportVerdict:
     opset: int | None
     op_types: list[str]
     numerics: NumericsReport | None
-    recommended_backend: Backend
+    recommended_backend: BackendName
     reason: str
     input_names: tuple[str, ...] = ()
     dynamic_dims: dict[str, list[int]] = field(default_factory=dict)
@@ -75,7 +83,7 @@ class ExportVerdict:
 
 def numerics_outcome(
     numerics: NumericsReport, passed_prefix: str, failed_prefix: str
-) -> tuple[Status, Backend, str]:
+) -> tuple[Status, BackendName, str]:
     """Numerics decide the verdict: pass -> CLEAN via ORT, fail -> DEGRADED via torch.
 
     The prefixes open the reason string; the sample counts and error are appended.
@@ -83,9 +91,9 @@ def numerics_outcome(
     err = f"(max abs err {numerics.max_abs_err:.2e})"
     if numerics.passed:
         reason = f"{passed_prefix} across {numerics.samples_tested} samples {err}"
-        return "CLEAN", "onnxruntime", reason
+        return "CLEAN", BackendName.onnxruntime, reason
     reason = f"{failed_prefix} on {numerics.failures}/{numerics.samples_tested} samples {err}"
-    return "DEGRADED", "torch", reason
+    return "DEGRADED", BackendName.torch, reason
 
 
 def _tied_weight_warnings(model: torch.nn.Module) -> list[str]:
@@ -138,7 +146,7 @@ def build_verdict(prepared: Prepared, k: int = 8, verify_numerics: bool = True) 
         opset=result.opset,
         op_types=result.op_types,
         numerics=None,
-        recommended_backend="torch",
+        recommended_backend=BackendName.torch,
         reason="",
         input_names=prepared.input_names,
         dynamic_dims=prepared.dynamic_dims,
@@ -155,7 +163,7 @@ def build_verdict(prepared: Prepared, k: int = 8, verify_numerics: bool = True) 
         return verdict
 
     if not verify_numerics:
-        verdict.status, verdict.recommended_backend = "UNVERIFIED", "onnxruntime"
+        verdict.status, verdict.recommended_backend = "UNVERIFIED", BackendName.onnxruntime
         verdict.reason = f"exported via {result.capture_strategy}; numerics never checked"
         return verdict
 

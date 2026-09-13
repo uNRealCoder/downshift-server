@@ -15,14 +15,7 @@ import torch
 
 from downshift.adapters.base import VaryFn
 from downshift.export.shapes import alternative_sizes
-
-# (atol, rtol) by the widest float dtype involved.
-TOLERANCES = {
-    torch.float32: (1e-4, 1e-3),
-    torch.float64: (1e-6, 1e-5),
-    torch.float16: (1e-2, 1e-2),
-    torch.bfloat16: (5e-2, 5e-2),
-}
+from downshift.settings import TOLERANCES
 
 
 @dataclass

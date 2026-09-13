@@ -11,6 +11,8 @@ import onnxruntime as ort
 import torch
 from torch import nn
 
+from downshift.export.verdict import BackendName
+
 _CUDA_EP = "CUDAExecutionProvider"
 _CPU_EP = "CPUExecutionProvider"
 
@@ -27,7 +29,7 @@ class IOSpec:
 
 @dataclass
 class BackendMeta:
-    name: str
+    name: BackendName
     device: str
     inputs: list[IOSpec]
     outputs: list[IOSpec]
@@ -42,7 +44,7 @@ class BackendMeta:
 
 
 class Backend(Protocol):
-    name: str
+    name: BackendName
     input_names: list[str]
 
     def infer(self, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]: ...
@@ -67,13 +69,30 @@ def _ort_providers(device: str) -> list[str]:
     return [_CPU_EP]
 
 
-class OnnxRuntimeBackend:
-    name = "onnxruntime"
+def _session_options(intra_op_threads: int, inter_op_threads: int) -> ort.SessionOptions:
+    """Max graph optimization always on. Thread counts of 0 mean "let ONNX Runtime choose",
+    which is also its own default, so this is safe to set unconditionally."""
+    options = ort.SessionOptions()
+    options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    options.intra_op_num_threads = intra_op_threads
+    options.inter_op_num_threads = inter_op_threads
+    return options
 
-    def __init__(self, model: bytes | str | Path, device: str = "auto") -> None:
+
+class OnnxRuntimeBackend:
+    name = BackendName.onnxruntime
+
+    def __init__(
+        self,
+        model: bytes | str | Path,
+        device: str = "auto",
+        intra_op_threads: int = 0,
+        inter_op_threads: int = 0,
+    ) -> None:
         source = model if isinstance(model, bytes) else str(model)
         providers = _ort_providers(resolve_device(device))
-        self.session = ort.InferenceSession(source, providers=providers)
+        options = _session_options(intra_op_threads, inter_op_threads)
+        self.session = ort.InferenceSession(source, sess_options=options, providers=providers)
         self.provider = self.session.get_providers()[0]
         self.input_names = [i.name for i in self.session.get_inputs()]
         self.onnx_output_names = [o.name for o in self.session.get_outputs()]
@@ -102,7 +121,7 @@ class OnnxRuntimeBackend:
 class TorchBackend:
     """Eager PyTorch. The fallback path, and a first-class one: same contract as ORT."""
 
-    name = "torch"
+    name = BackendName.torch
 
     def __init__(
         self,

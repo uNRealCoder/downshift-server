@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -190,6 +191,62 @@ def test_serve_builds_app(monkeypatch):
     assert result.exit_code == 0, result.output
     assert captured["port"] == 9999
     assert captured["app"].state.serving.verdict.status == "CLEAN"
+
+
+def test_serve_passes_thread_options_to_the_ort_session(monkeypatch):
+    pytest.importorskip("downshift.serve.app")
+    captured: dict = {}
+    monkeypatch.setattr(main.uvicorn, "run", lambda app, **kw: captured.update(app=app, **kw))
+
+    result = run(
+        "serve", CLEAN, "--warmup", "1", "--intra-op-threads", "3", "--inter-op-threads", "2"
+    )
+    assert result.exit_code == 0, result.output
+    session_opts = captured["app"].state.serving.backend.session.get_session_options()
+    assert session_opts.intra_op_num_threads == 3
+    assert session_opts.inter_op_num_threads == 2
+
+
+def test_serve_workers_uses_an_import_string_factory(monkeypatch):
+    pytest.importorskip("downshift.serve.app")
+    captured: dict = {}
+    monkeypatch.setattr(main.uvicorn, "run", lambda app, **kw: captured.update(app=app, **kw))
+
+    result = run("serve", CLEAN, "--warmup", "1", "--workers", "2")
+    assert result.exit_code == 0, result.output
+    assert captured["app"] == "downshift.cli.main:_serve_app_factory"
+    assert captured["workers"] == 2
+    assert captured["factory"] is True
+
+    args = main.ServeArgs(**json.loads(os.environ[main._SERVE_ARGS_ENV]))
+    assert args.model == CLEAN
+
+
+def test_serve_app_factory_rebuilds_the_app_from_env(monkeypatch):
+    pytest.importorskip("downshift.serve.app")
+    args = main.ServeArgs(
+        model=CLEAN,
+        inputs=None,
+        model_class=None,
+        unsafe_load=False,
+        adapter=None,
+        k=1,
+        dynamic=None,
+        reference=None,
+        middleware=None,
+        backend="auto",
+        force_onnx=False,
+        device="cpu",
+        warmup=1,
+        intra_op_threads=0,
+        inter_op_threads=0,
+        log_level="warning",
+        log_format="text",
+    )
+    monkeypatch.setenv(main._SERVE_ARGS_ENV, json.dumps(main.asdict(args)))
+
+    api = main._serve_app_factory()
+    assert api.state.serving.verdict.status == "CLEAN"
 
 
 def test_version():

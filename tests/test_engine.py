@@ -110,6 +110,34 @@ def test_torch_backend_splits_tuple_outputs_positionally():
     np.testing.assert_allclose(out["output_1"], out["output_0"] * 2)
 
 
+def test_onnxruntime_backend_defaults_to_max_graph_optimization(exported_mlp):
+    path, _, _ = exported_mlp
+    backend = OnnxRuntimeBackend(path, device="cpu")
+    opts = backend.session.get_session_options()
+    assert opts.graph_optimization_level == backends_mod.ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    assert opts.intra_op_num_threads == 0
+    assert opts.inter_op_num_threads == 0
+
+
+def test_onnxruntime_backend_applies_explicit_thread_counts(exported_mlp):
+    path, _, _ = exported_mlp
+    backend = OnnxRuntimeBackend(path, device="cpu", intra_op_threads=2, inter_op_threads=1)
+    opts = backend.session.get_session_options()
+    assert opts.intra_op_num_threads == 2
+    assert opts.inter_op_num_threads == 1
+
+
+def test_serve_options_thread_counts_reach_the_ort_session(exported_mlp):
+    path, _, _ = exported_mlp
+    state = prepare_serving(
+        load_model(str(path)),
+        ServeOptions(warmup=1, intra_op_threads=4, inter_op_threads=2),
+    )
+    opts = state.backend.session.get_session_options()
+    assert opts.intra_op_num_threads == 4
+    assert opts.inter_op_num_threads == 2
+
+
 def test_ort_providers_prefers_cuda_when_available(monkeypatch):
     monkeypatch.setattr(
         backends_mod.ort,

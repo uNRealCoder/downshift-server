@@ -1,28 +1,38 @@
 """From a loaded model to a warmed-up backend. The CLI's `serve` is render(prepare_serving())."""
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from enum import Enum
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
 
 from downshift.export.prevalidated import intake
-from downshift.export.verdict import ExportVerdict, build_verdict, prepare_model
+from downshift.export.verdict import BackendName, ExportVerdict, build_verdict, prepare_model
 from downshift.loading import LoadedModel
 from downshift.serve.backends import Backend, OnnxRuntimeBackend, TorchBackend
 
-BackendChoice = Literal["auto", "onnxruntime", "torch"]
+
+class BackendChoice(str, Enum):
+    """What the caller asked for; "auto" defers to the verdict's recommendation."""
+
+    auto = "auto"
+    onnxruntime = "onnxruntime"
+    torch = "torch"
 
 
 @dataclass
 class ServeOptions:
-    backend: BackendChoice = "auto"
+    backend: BackendChoice = BackendChoice.auto
     force_onnx: bool = False  # serve a DEGRADED graph via ORT anyway
     device: str = "auto"
     warmup: int = 3
     k: int = 8
     adapter: str | None = None
     dynamic: dict[str, list[int]] | None = None
+    intra_op_threads: int = 0  # ORT SessionOptions; 0 = let ONNX Runtime choose
+    inter_op_threads: int = 0
 
 
 @dataclass
@@ -38,7 +48,7 @@ class ServingState:
 
     @property
     def backend_auto_selected(self) -> bool:
-        return self.options.backend == "auto" and not self.forced_onnx
+        return self.options.backend == BackendChoice.auto and not self.forced_onnx
 
     @property
     def forced_onnx(self) -> bool:
@@ -57,7 +67,7 @@ def _verdict_for(
         )
     assert loaded.model is not None
     prepared = prepare_model(loaded.model, loaded.example_inputs, adapter, opts.dynamic)
-    if opts.backend == "torch":
+    if opts.backend == BackendChoice.torch:
         # Skip the export entirely; the user asked for eager.
         return ExportVerdict(
             status="UNVERIFIED",
@@ -66,7 +76,7 @@ def _verdict_for(
             opset=None,
             op_types=[],
             numerics=None,
-            recommended_backend="torch",
+            recommended_backend=BackendName.torch,
             reason="--backend torch: export skipped",
             input_names=prepared.input_names,
             dynamic_dims=prepared.dynamic_dims,
@@ -75,30 +85,36 @@ def _verdict_for(
     return build_verdict(prepared, k=opts.k)
 
 
-def choose_backend(verdict: ExportVerdict, opts: ServeOptions) -> tuple[str, list[str]]:
+def choose_backend(verdict: ExportVerdict, opts: ServeOptions) -> tuple[BackendName, list[str]]:
     """Return (backend name, notes for the banner)."""
     notes: list[str] = []
-    wanted = verdict.recommended_backend if opts.backend == "auto" else opts.backend
+    wanted: BackendName = (
+        verdict.recommended_backend
+        if opts.backend == BackendChoice.auto
+        else BackendName(opts.backend)
+    )
     if opts.force_onnx and verdict.status == "DEGRADED":
-        wanted = "onnxruntime"
+        wanted = BackendName.onnxruntime
         notes.append("--force-onnx: serving a DEGRADED graph; outputs may be wrong")
 
     has_onnx = verdict.onnx_program is not None or verdict.onnx_path is not None
     has_torch = verdict.prepared is not None
-    if wanted == "onnxruntime" and not has_onnx:
+    if wanted == BackendName.onnxruntime and not has_onnx:
         notes.append("no ONNX graph available; falling back to torch")
-        wanted = "torch"
-    if wanted == "torch" and not has_torch:
+        wanted = BackendName.torch
+    if wanted == BackendName.torch and not has_torch:
         raise ValueError("torch backend requested but there is no PyTorch model to run")
     return wanted, notes
 
 
-def _build_backend(name: str, verdict: ExportVerdict, opts: ServeOptions) -> Backend:
-    if name == "onnxruntime":
+def _build_backend(name: BackendName, verdict: ExportVerdict, opts: ServeOptions) -> Backend:
+    if name == BackendName.onnxruntime:
         if verdict.onnx_path is not None:
-            return OnnxRuntimeBackend(verdict.onnx_path, opts.device)
-        program: Any = verdict.onnx_program
-        return OnnxRuntimeBackend(program.model_proto.SerializeToString(), opts.device)
+            source: bytes | Path = verdict.onnx_path
+        else:
+            program: Any = verdict.onnx_program
+            source = program.model_proto.SerializeToString()
+        return OnnxRuntimeBackend(source, opts.device, opts.intra_op_threads, opts.inter_op_threads)
     prepared = verdict.prepared
     assert prepared is not None
     return TorchBackend(prepared.model, prepared.input_names, opts.device, prepared.inputs)

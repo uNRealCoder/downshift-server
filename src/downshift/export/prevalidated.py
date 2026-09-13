@@ -10,7 +10,7 @@ import onnx
 import torch
 
 from downshift.adapters.base import Adapter
-from downshift.export.verdict import ExportVerdict, numerics_outcome, prepare_model
+from downshift.export.verdict import BackendName, ExportVerdict, numerics_outcome, prepare_model
 from downshift.export.verify import verify
 
 
@@ -41,7 +41,7 @@ def intake(
             opset=opset,
             op_types=op_types,
             numerics=None,
-            recommended_backend="onnxruntime",
+            recommended_backend=BackendName.onnxruntime,
             reason="no reference model supplied; served as-is, numerics never checked",
             input_names=input_names,
             onnx_path=onnx_path,
