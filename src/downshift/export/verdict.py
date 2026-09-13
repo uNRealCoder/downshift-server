@@ -31,6 +31,12 @@ class BackendName(str, Enum):
     onnxruntime = "onnxruntime"
     torch = "torch"
 
+    def __str__(self) -> str:
+        # Python 3.11 made str(Enum)/format(Enum) print "BackendName.onnxruntime" instead of
+        # the plain value for any (str, Enum) mixin that isn't ReprEnum; banners embed this
+        # in f-strings, so pin it back to the value.
+        return self.value
+
 EXIT_CODES: dict[str, int] = {"CLEAN": 0, "FAILED": 1, "DEGRADED": 2, "UNVERIFIED": 3}
 
 _ATEN_OP = re.compile(r"(?:torch\.ops\.)?aten\.(\w+)(?:\.\w+)?")

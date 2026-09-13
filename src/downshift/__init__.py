@@ -8,7 +8,7 @@ from downshift.export.prevalidated import intake
 from downshift.export.verdict import ExportVerdict, build_verdict, check, prepare_model
 from downshift.export.verify import NumericsReport
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 
 def export(

@@ -7,7 +7,7 @@ name = "downshift-server"
 version = "0.1.1"
 description = "Universal PyTorch → ONNX verification and serving, with graceful fallback."
 readme = "README.md"
-requires-python = ">=3.11,<=3.14"
+requires-python = ">=3.11,<3.15"
 license = {text = "MIT"}
 authors = [
     {name = "Nikhil Ranjan", email = "nrnikhilranjan1997@gmail.com"}
@@ -28,7 +28,7 @@ dependencies = [
     "onnx>=1.14",
     "onnxruntime>=1.17",
     "onnxscript>=0.1",  # required by torch.onnx.export(dynamo=True)
-    "typer[all]>=0.12",
+    "typer>=0.12",
     "rich>=13.0",
     "fastapi>=0.100",
     "uvicorn[standard]>=0.23",
