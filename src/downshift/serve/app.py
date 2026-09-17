@@ -1,5 +1,6 @@
 """FastAPI app over a ServingState. The same routes regardless of which backend is behind it."""
 
+import logging
 from collections.abc import Callable, Coroutine, Sequence
 from typing import Any
 
@@ -10,6 +11,7 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 
 import downshift
+from downshift.serve.backends import InferenceInputError
 from downshift.serve.codec import b64encode
 from downshift.serve.engine import ServingState
 from downshift.serve.middleware import load_middleware
@@ -23,6 +25,8 @@ from downshift.serve.schemas import (
     ReadyResponse,
     to_numpy,
 )
+
+logger = logging.getLogger("downshift.serve")
 
 # dtypes orjson's OPT_SERIALIZE_NUMPY writes straight from the array buffer (orjson >= 3.9).
 _ORJSON_DTYPES = frozenset(
@@ -48,17 +52,43 @@ class _OrjsonRequest(Request):
         return self._json
 
 
+def _body_too_large(observed: int, limit: int) -> JSONResponse:
+    return JSONResponse(
+        {
+            "detail": (
+                f"request body is {observed} bytes; the server limit is {limit} bytes "
+                "(--max-body-bytes)"
+            )
+        },
+        status_code=413,
+    )
+
+
 class OrjsonRoute(APIRoute):
     """Parse request bodies with orjson: several times faster than stdlib on MiB-scale bodies.
 
     orjson's JSONDecodeError subclasses the stdlib one, so malformed JSON still maps to 422.
+    Also enforces --max-body-bytes: a Content-Length over the limit is rejected without
+    reading the body; without one (chunked), the body is read and checked as it lands.
     """
 
     def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
         handler = super().get_route_handler()
 
         async def route_handler(request: Request) -> Response:
-            return await handler(_OrjsonRequest(request.scope, request.receive))
+            state: ServingState = request.app.state.serving
+            limit = state.options.max_body_bytes
+            content_length = request.headers.get("content-length")
+            wrapped = _OrjsonRequest(request.scope, request.receive)
+            if content_length is not None and content_length.isdigit():
+                if int(content_length) > limit:
+                    return _body_too_large(int(content_length), limit)
+            else:
+                body = await request.body()
+                if len(body) > limit:
+                    return _body_too_large(len(body), limit)
+                wrapped._body = body
+            return await handler(wrapped)
 
         return route_handler
 
@@ -88,7 +118,12 @@ def _base64_ready(arr: np.ndarray) -> dict[str, Any]:
 def run_predict(
     state: ServingState, inputs: dict[str, Any], encoding: OutputEncoding | None
 ) -> NumpyJSONResponse:
-    """Validate, convert, infer. Raises HTTPException(400) for anything the client got wrong."""
+    """Validate, convert, infer.
+
+    Raises HTTPException(400) for anything the client got wrong (bad shape/dtype/JSON).
+    Anything else (a backend bug, OOM, ...) propagates so the app-level handler turns it into
+    a 500 without leaking the exception text to the client.
+    """
     missing = [n for n in state.input_names if n not in inputs]
     if missing:
         raise HTTPException(400, f"missing inputs: {missing}")
@@ -100,10 +135,15 @@ def run_predict(
             n: to_numpy(n, inputs[n], declared.get(n), max_bytes=max_bytes)
             for n in state.input_names
         }
-        outputs = state.backend.infer(feeds)
+    except (ValueError, TypeError, KeyError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    try:
+        with state.inference_semaphore:
+            outputs = state.backend.infer(feeds)
     except HTTPException:
         raise
-    except Exception as exc:  # shape/dtype errors from ORT or torch are the client's problem
+    except (InferenceInputError, KeyError) as exc:
         raise HTTPException(400, str(exc)) from exc
 
     encoding = encoding or state.options.output_encoding
@@ -125,6 +165,13 @@ def build_app(state: ServingState, middleware: Sequence[str] = ()) -> FastAPI:
     app.state.serving = state
     load_middleware(app, middleware)
 
+    @app.exception_handler(Exception)
+    async def _unhandled_exception(request: Request, exc: Exception) -> JSONResponse:
+        logger.exception("unhandled exception serving %s %s", request.method, request.url.path)
+        return JSONResponse(
+            {"detail": "inference failed on the server; see the server log"}, status_code=500
+        )
+
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
         return HealthResponse()
@@ -144,6 +191,11 @@ def build_app(state: ServingState, middleware: Sequence[str] = ()) -> FastAPI:
             input_names=list(state.input_names),
             notes=list(state.notes),
             version=downshift.__version__,
+            limits={
+                "max_body_bytes": state.options.max_body_bytes,
+                "max_input_bytes": state.options.max_input_bytes,
+                "max_concurrency": state.options.max_concurrency,
+            },
         )
 
     @app.post("/predict", **_PREDICT_ROUTE)

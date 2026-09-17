@@ -1,5 +1,6 @@
 """From a loaded model to a warmed-up backend. The CLI's `serve` is render(prepare_serving())."""
 
+import threading
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import cached_property
@@ -13,7 +14,8 @@ from downshift.export.prevalidated import intake
 from downshift.export.verdict import BackendName, ExportVerdict, build_verdict, prepare_model
 from downshift.loading import LoadedModel
 from downshift.serve.backends import Backend, OnnxRuntimeBackend, TorchBackend
-from downshift.serve.schemas import DEFAULT_MAX_INPUT_BYTES, OutputEncoding
+from downshift.serve.schemas import OutputEncoding
+from downshift.settings import DEFAULT_MAX_BODY_BYTES, DEFAULT_MAX_INPUT_BYTES
 
 
 class BackendChoice(str, Enum):
@@ -37,6 +39,8 @@ class ServeOptions:
     inter_op_threads: int = 0
     output_encoding: OutputEncoding = OutputEncoding.json  # requests may override per call
     max_input_bytes: int = DEFAULT_MAX_INPUT_BYTES  # cap on one decoded base64 tensor input
+    max_body_bytes: int = DEFAULT_MAX_BODY_BYTES  # cap on the whole request body
+    max_concurrency: int = 1  # inferences allowed to run at once per worker process
 
 
 @dataclass
@@ -49,6 +53,11 @@ class ServingState:
     example_inputs: tuple | None = None
     ready: bool = False
     notes: list[str] = field(default_factory=list)  # things the banner should say
+    # Not JSON-able and not part of a serving state's identity: rebuilt from options.max_concurrency.
+    inference_semaphore: threading.Semaphore = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        self.inference_semaphore = threading.Semaphore(self.options.max_concurrency)
 
     @property
     def backend_auto_selected(self) -> bool:

@@ -131,6 +131,15 @@ def test_print_banner_shows_output_encoding(capsys):
     assert "[fast]" not in out  # pybase64 is installed in the dev environment
 
 
+def test_print_banner_shows_concurrency(capsys):
+    state = _serving_state(_verdict(), options=ServeOptions(max_concurrency=4))
+    render.print_banner(state, "127.0.0.1", 8000)
+    out = capsys.readouterr().out
+    assert "Concurrency" in out
+    assert "4 inference at a time" in out
+    assert "--max-concurrency" in out
+
+
 def test_print_banner_tips_pybase64_when_missing(capsys, monkeypatch):
     monkeypatch.setattr(render, "BASE64_CODEC", "stdlib")
     render.print_banner(_serving_state(_verdict()), "127.0.0.1", 8000)

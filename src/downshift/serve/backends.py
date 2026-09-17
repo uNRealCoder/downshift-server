@@ -16,6 +16,15 @@ from downshift.export.verdict import BackendName
 _CUDA_EP = "CUDAExecutionProvider"
 _CPU_EP = "CPUExecutionProvider"
 
+_ort_state = ort.capi.onnxruntime_pybind11_state
+# ORT raises these for shape/dtype/graph mismatches the client caused; a Fail whose message
+# mentions "shape" is the same story (e.g. a Reshape whose target size doesn't match the input).
+_ORT_CLIENT_ERRORS = (_ort_state.InvalidArgument, _ort_state.InvalidGraph)
+
+
+class InferenceInputError(ValueError):
+    """The backend rejected the inputs themselves; safe to report to the client as a 400."""
+
 
 @dataclass
 class IOSpec:
@@ -100,7 +109,15 @@ class OnnxRuntimeBackend:
         self.output_names = output_names(len(self.onnx_output_names))
 
     def infer(self, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-        outputs = self.session.run(self.onnx_output_names, inputs)
+        try:
+            outputs = self.session.run(self.onnx_output_names, inputs)
+        except _ORT_CLIENT_ERRORS as exc:
+            raise InferenceInputError(str(exc).splitlines()[0]) from exc
+        except _ort_state.Fail as exc:
+            message = str(exc)
+            if "shape" not in message.lower():
+                raise
+            raise InferenceInputError(message.splitlines()[0]) from exc
         return dict(zip(self.output_names, outputs, strict=True))
 
     def metadata(self) -> BackendMeta:
@@ -154,8 +171,13 @@ class TorchBackend:
             torch.from_numpy(np.require(inputs[n], requirements=["C", "W"])).to(self.device)
             for n in self.input_names
         ]
-        with torch.inference_mode():
-            out = self.module(*args)
+        try:
+            with torch.inference_mode():
+                out = self.module(*args)
+        except (RuntimeError, IndexError, ValueError) as exc:
+            if "out of memory" in str(exc).lower():
+                raise
+            raise InferenceInputError(str(exc)) from exc
         if isinstance(out, torch.Tensor):
             tensors = [out]
         else:

@@ -9,6 +9,7 @@ import numpy as np
 from pydantic import BaseModel, Field
 
 from downshift.serve.codec import b64decode
+from downshift.settings import DEFAULT_MAX_INPUT_BYTES
 
 
 class OutputEncoding(str, Enum):
@@ -17,9 +18,6 @@ class OutputEncoding(str, Enum):
     json = "json"
     base64 = "base64"
 
-
-# Decoded size a single base64 tensor input may reach; the server passes its own limit.
-DEFAULT_MAX_INPUT_BYTES = 256 * 1024 * 1024
 
 OutputEncodingField = Annotated[
     OutputEncoding | None,
@@ -107,6 +105,7 @@ class MetadataResponse(BaseModel):
     input_names: list[str]
     notes: list[str] = Field(default_factory=list)
     version: str
+    limits: dict = Field(default_factory=dict)
 
 
 class HealthResponse(BaseModel):

@@ -218,6 +218,16 @@ def test_serve_passes_tensor_io_options_to_serve_options(monkeypatch):
     assert "Encoding" in result.output
 
 
+def test_serve_passes_max_body_bytes_and_max_concurrency(monkeypatch):
+    result, captured = _serve_captured(
+        monkeypatch, "--max-body-bytes", "8192", "--max-concurrency", "4"
+    )
+    options = captured["app"].state.serving.options
+    assert options.max_body_bytes == 8192
+    assert options.max_concurrency == 4
+    assert "Concurrency" in result.output
+
+
 def test_serve_rejects_unknown_output_encoding():
     result = run("serve", CLEAN, "--output-encoding", "hex")
     assert result.exit_code == 2, result.output  # typer usage error: not a choice
@@ -253,6 +263,8 @@ def test_serve_app_factory_rebuilds_the_app_from_env(monkeypatch):
         inter_op_threads=0,
         output_encoding="base64",
         max_input_bytes=1024,
+        max_body_bytes=2048,
+        max_concurrency=2,
         log_level="warning",
         log_format="text",
     )
@@ -262,9 +274,24 @@ def test_serve_app_factory_rebuilds_the_app_from_env(monkeypatch):
     assert api.state.serving.verdict.status == "CLEAN"
     assert api.state.serving.options.output_encoding == "base64"
     assert api.state.serving.options.max_input_bytes == 1024
+    assert api.state.serving.options.max_body_bytes == 2048
+    assert api.state.serving.options.max_concurrency == 2
 
 
 def test_version():
     result = run("version")
     assert result.exit_code == 0
     assert main.__version__ in result.stdout
+
+
+def test_version_eager_flag():
+    result = run("--version")
+    assert result.exit_code == 0
+    assert main.__version__ in result.stdout
+
+
+def test_help_still_works_with_no_args_is_help():
+    result = run("--help")
+    assert result.exit_code == 0
+    assert "check" in result.output
+    assert "serve" in result.output

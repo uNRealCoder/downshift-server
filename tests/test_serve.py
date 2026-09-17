@@ -1,7 +1,11 @@
 """HTTP contract tests. Each state is exported once per module; export is the slow part."""
 
 import dataclasses
+import logging
+import threading
+import time
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pytest
@@ -77,6 +81,11 @@ def test_health_ready_metadata(mlp_client, mlp_state):
     assert meta["input_names"] == ["x"]
     assert isinstance(meta["notes"], list)
     assert meta["version"]
+    assert meta["limits"] == {
+        "max_body_bytes": mlp_state.options.max_body_bytes,
+        "max_input_bytes": mlp_state.options.max_input_bytes,
+        "max_concurrency": mlp_state.options.max_concurrency,
+    }
 
 
 def test_predict_batch(mlp_client):
@@ -409,3 +418,126 @@ def test_ready_503_when_not_ready(mlp_state):
     resp = TestClient(build_app(not_ready)).get("/ready")
     assert resp.status_code == 503
     assert resp.json() == {"ready": False}
+
+
+def test_predict_torch_backend_shape_error_is_400(serve_fixture):
+    client = TestClient(build_app(serve_fixture("clean_mlp", backend="torch")))
+    resp = client.post("/predict", json={"inputs": {"x": [[0.0] * 5]}})
+    assert resp.status_code == 400, resp.text
+    assert "'x'" not in resp.json()["detail"]  # torch's own message, not to_numpy's
+
+
+def test_predict_backend_bug_maps_to_500_without_leaking_details(mlp_state, monkeypatch, caplog):
+    def boom(inputs):
+        raise RuntimeError("some internal bug: /etc/secret/path")
+
+    monkeypatch.setattr(mlp_state.backend, "infer", boom)
+    client = TestClient(build_app(mlp_state), raise_server_exceptions=False)
+
+    with caplog.at_level(logging.ERROR, logger="downshift.serve"):
+        resp = client.post("/predict", json=MLP_INPUT)
+
+    assert resp.status_code == 500
+    assert resp.json() == {"detail": "inference failed on the server; see the server log"}
+    assert "some internal bug" not in resp.text
+    assert "/etc/secret/path" not in resp.text
+    assert "unhandled exception" in caplog.text
+
+
+def test_predict_torch_backend_out_of_memory_maps_to_500(serve_fixture):
+    state = serve_fixture("clean_mlp", backend="torch")
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("CUDA out of memory. Tried to allocate 2.00 GiB")
+
+    state.backend.module.forward = boom
+    client = TestClient(build_app(state), raise_server_exceptions=False)
+
+    resp = client.post("/predict", json={"inputs": {"x": [[0.0] * 16]}})
+    assert resp.status_code == 500
+    assert "out of memory" not in resp.text
+
+
+def test_predict_body_over_content_length_limit_is_413(mlp_state):
+    client = TestClient(build_app(_with_options(mlp_state, max_body_bytes=100)))
+    resp = client.post(
+        "/predict",
+        content=b'{"inputs": {"x": [[0.0]]}}',
+        headers={"content-length": "300000000", "content-type": "application/json"},
+    )
+    assert resp.status_code == 413, resp.text
+    assert resp.json()["detail"] == (
+        "request body is 300000000 bytes; the server limit is 100 bytes (--max-body-bytes)"
+    )
+
+
+def test_predict_chunked_body_over_limit_is_413(mlp_state):
+    client = TestClient(build_app(_with_options(mlp_state, max_body_bytes=10)))
+
+    def chunks():
+        yield b'{"inputs"'
+        yield b': {"x": [[0.0]]}}'
+
+    resp = client.post("/predict", content=chunks(), headers={"content-type": "application/json"})
+    assert resp.status_code == 413, resp.text
+    assert "the server limit is 10 bytes (--max-body-bytes)" in resp.json()["detail"]
+
+
+def test_predict_body_within_limit_succeeds(mlp_state):
+    client = TestClient(build_app(_with_options(mlp_state, max_body_bytes=10_000)))
+    resp = client.post("/predict", json=MLP_INPUT)
+    assert resp.status_code == 200, resp.text
+
+
+def test_predict_concurrency_default_serializes_inferences(mlp_state, monkeypatch):
+    active = 0
+    max_active = 0
+    guard = threading.Lock()
+
+    def slow_infer(inputs):
+        nonlocal active, max_active
+        with guard:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.1)
+        with guard:
+            active -= 1
+        return {"output_0": np.zeros((1, 4), dtype=np.float32)}
+
+    serial_state = _with_options(mlp_state, max_concurrency=1)
+    monkeypatch.setattr(serial_state.backend, "infer", slow_infer)
+    client = TestClient(build_app(serial_state))
+
+    with ThreadPoolExecutor(2) as pool:
+        futures = [pool.submit(client.post, "/predict", json=MLP_INPUT) for _ in range(2)]
+        results = [f.result() for f in futures]
+
+    assert all(r.status_code == 200 for r in results)
+    assert max_active == 1
+
+
+def test_predict_concurrency_option_allows_overlapping_inferences(mlp_state, monkeypatch):
+    active = 0
+    max_active = 0
+    guard = threading.Lock()
+
+    def slow_infer(inputs):
+        nonlocal active, max_active
+        with guard:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.1)
+        with guard:
+            active -= 1
+        return {"output_0": np.zeros((1, 4), dtype=np.float32)}
+
+    parallel_state = _with_options(mlp_state, max_concurrency=2)
+    monkeypatch.setattr(parallel_state.backend, "infer", slow_infer)
+    client = TestClient(build_app(parallel_state))
+
+    with ThreadPoolExecutor(2) as pool:
+        futures = [pool.submit(client.post, "/predict", json=MLP_INPUT) for _ in range(2)]
+        results = [f.result() for f in futures]
+
+    assert all(r.status_code == 200 for r in results)
+    assert max_active == 2

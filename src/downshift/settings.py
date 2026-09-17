@@ -11,9 +11,13 @@ from typing import TypeVar
 
 import torch
 
-from downshift.serve.schemas import DEFAULT_MAX_INPUT_BYTES
-
 T = TypeVar("T")
+
+# Decoded size a single base64 tensor input may reach; the server passes its own limit.
+DEFAULT_MAX_INPUT_BYTES = 256 * 1024 * 1024
+
+# Total request body size the server will read before parsing it as JSON.
+DEFAULT_MAX_BODY_BYTES = 256 * 1024 * 1024
 
 
 def _env_str(name: str, default: str) -> str:
@@ -55,6 +59,13 @@ OUTPUT_ENCODING = _env_str("DOWNSHIFT_OUTPUT_ENCODING", "json")
 
 # Largest decoded size accepted for one base64 tensor input; bigger ones get a 400.
 MAX_INPUT_BYTES = _env_int("DOWNSHIFT_MAX_INPUT_BYTES", DEFAULT_MAX_INPUT_BYTES)
+
+# Largest request body the server will read before parsing it as JSON; bigger ones get a 413.
+MAX_BODY_BYTES = _env_int("DOWNSHIFT_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES)
+
+# Inferences allowed to run at once per worker process; ONNX Runtime and torch already use
+# every core for one inference, so raising this oversubscribes rather than adding throughput.
+MAX_CONCURRENCY = _env_int("DOWNSHIFT_MAX_CONCURRENCY", 1)
 
 # >1 spawns that many uvicorn worker processes, each independently loading/exporting/warming
 # the model, so memory and startup time scale with this number.
