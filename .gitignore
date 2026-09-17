@@ -46,3 +46,4 @@ tmp/
 # not part of the package or CI, kept out of version control on purpose.
 scripts/validate_pypi_release.py
 scripts/.validation/
+bench/

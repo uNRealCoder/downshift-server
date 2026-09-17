@@ -1,0 +1,95 @@
+name: Release
+
+# Publishing a GitHub Release is the trigger: the tag on that release must match the
+# version in pyproject.toml, the tests must pass on it, and only then does the sdist +
+# wheel go to PyPI. workflow_dispatch runs the build and test gates only, publishing nothing.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install build twine
+
+      # A release tagged v0.1.9 that ships 0.2.0 is unrecoverable — PyPI never lets a
+      # version be re-uploaded — so fail here rather than after the upload.
+      - name: Check tag matches pyproject version
+        if: github.event_name == 'release'
+        run: |
+          project_version=$(python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          tag_version="${GITHUB_REF_NAME#v}"
+          echo "pyproject: $project_version / tag: $tag_version"
+          if [ "$project_version" != "$tag_version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match pyproject.toml version $project_version"
+            exit 1
+          fi
+
+      - run: python -m build
+      - run: twine check --strict dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -e ".[dev,gnn,hf]"
+      - run: ruff check .
+      - run: mypy src
+      - run: pytest -q
+
+  publish-pypi:
+    if: github.event_name == 'release'
+    needs: [build, test]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/downshift-server
+    permissions:
+      id-token: write  # OIDC token for PyPI trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  attach-to-release:
+    if: github.event_name == 'release'
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Upload sdist and wheel to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber --repo "$GITHUB_REPOSITORY"
