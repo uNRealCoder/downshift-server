@@ -178,42 +178,63 @@ def test_slug(spec: str, expected: str):
     assert main.slug(spec) == expected
 
 
-def test_serve_builds_app(monkeypatch):
-    pytest.importorskip("downshift.serve.app")
-    captured: dict = {}
+def _serve_captured(monkeypatch, *extra_args: str) -> tuple:
+    """Run `serve CLEAN --warmup 1 <extra_args>` with uvicorn.run stubbed out.
 
-    def fake_run(app, **kwargs):
-        captured["app"] = app
-        captured.update(kwargs)
-
-    monkeypatch.setattr(main.uvicorn, "run", fake_run)
-    result = run("serve", CLEAN, "--port", "9999", "--warmup", "1")
-    assert result.exit_code == 0, result.output
-    assert captured["port"] == 9999
-    assert captured["app"].state.serving.verdict.status == "CLEAN"
-
-
-def test_serve_passes_thread_options_to_the_ort_session(monkeypatch):
+    Returns (CliRunner result, the kwargs uvicorn.run received plus its `app`).
+    """
     pytest.importorskip("downshift.serve.app")
     captured: dict = {}
     monkeypatch.setattr(main.uvicorn, "run", lambda app, **kw: captured.update(app=app, **kw))
-
-    result = run(
-        "serve", CLEAN, "--warmup", "1", "--intra-op-threads", "3", "--inter-op-threads", "2"
-    )
+    result = run("serve", CLEAN, "--warmup", "1", *extra_args)
     assert result.exit_code == 0, result.output
+    return result, captured
+
+
+def test_serve_builds_app(monkeypatch):
+    _, captured = _serve_captured(monkeypatch, "--port", "9999")
+    assert captured["port"] == 9999
+    serving = captured["app"].state.serving
+    assert serving.verdict.status == "CLEAN"
+    # Tensor-IO options not given on the command line come from settings.
+    assert serving.options.output_encoding == main.settings.OUTPUT_ENCODING == "json"
+    assert serving.options.max_input_bytes == main.settings.MAX_INPUT_BYTES
+
+
+def test_serve_passes_thread_options_to_the_ort_session(monkeypatch):
+    _, captured = _serve_captured(monkeypatch, "--intra-op-threads", "3", "--inter-op-threads", "2")
     session_opts = captured["app"].state.serving.backend.session.get_session_options()
     assert session_opts.intra_op_num_threads == 3
     assert session_opts.inter_op_num_threads == 2
 
 
-def test_serve_workers_uses_an_import_string_factory(monkeypatch):
-    pytest.importorskip("downshift.serve.app")
-    captured: dict = {}
-    monkeypatch.setattr(main.uvicorn, "run", lambda app, **kw: captured.update(app=app, **kw))
+def test_serve_passes_tensor_io_options_to_serve_options(monkeypatch):
+    result, captured = _serve_captured(
+        monkeypatch, "--output-encoding", "base64", "--max-input-bytes", "4096"
+    )
+    options = captured["app"].state.serving.options
+    assert options.output_encoding == "base64"
+    assert options.max_input_bytes == 4096
+    assert "Encoding" in result.output
 
-    result = run("serve", CLEAN, "--warmup", "1", "--workers", "2")
-    assert result.exit_code == 0, result.output
+
+def test_serve_passes_max_body_bytes_and_max_concurrency(monkeypatch):
+    result, captured = _serve_captured(
+        monkeypatch, "--max-body-bytes", "8192", "--max-concurrency", "4"
+    )
+    options = captured["app"].state.serving.options
+    assert options.max_body_bytes == 8192
+    assert options.max_concurrency == 4
+    assert "Concurrency" in result.output
+
+
+def test_serve_rejects_unknown_output_encoding():
+    result = run("serve", CLEAN, "--output-encoding", "hex")
+    assert result.exit_code == 2, result.output  # typer usage error: not a choice
+
+
+def test_serve_workers_uses_an_import_string_factory(monkeypatch):
+    _, captured = _serve_captured(monkeypatch, "--workers", "2")
     assert captured["app"] == "downshift.cli.main:_serve_app_factory"
     assert captured["workers"] == 2
     assert captured["factory"] is True
@@ -240,6 +261,10 @@ def test_serve_app_factory_rebuilds_the_app_from_env(monkeypatch):
         warmup=1,
         intra_op_threads=0,
         inter_op_threads=0,
+        output_encoding="base64",
+        max_input_bytes=1024,
+        max_body_bytes=2048,
+        max_concurrency=2,
         log_level="warning",
         log_format="text",
     )
@@ -247,9 +272,26 @@ def test_serve_app_factory_rebuilds_the_app_from_env(monkeypatch):
 
     api = main._serve_app_factory()
     assert api.state.serving.verdict.status == "CLEAN"
+    assert api.state.serving.options.output_encoding == "base64"
+    assert api.state.serving.options.max_input_bytes == 1024
+    assert api.state.serving.options.max_body_bytes == 2048
+    assert api.state.serving.options.max_concurrency == 2
 
 
 def test_version():
     result = run("version")
     assert result.exit_code == 0
     assert main.__version__ in result.stdout
+
+
+def test_version_eager_flag():
+    result = run("--version")
+    assert result.exit_code == 0
+    assert main.__version__ in result.stdout
+
+
+def test_help_still_works_with_no_args_is_help():
+    result = run("--help")
+    assert result.exit_code == 0
+    assert "check" in result.output
+    assert "serve" in result.output

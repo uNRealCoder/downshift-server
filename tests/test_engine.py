@@ -1,6 +1,9 @@
 """prepare_serving(): verdict -> backend selection -> warmed-up state, and the backends'
 shared contract."""
 
+import dataclasses
+import threading
+
 import numpy as np
 import pytest
 import torch
@@ -9,7 +12,7 @@ import downshift
 from downshift.export.verdict import ExportVerdict, prepare_model
 from downshift.loading import LoadedModel, load_model
 from downshift.serve import backends as backends_mod
-from downshift.serve.backends import OnnxRuntimeBackend, TorchBackend
+from downshift.serve.backends import InferenceInputError, OnnxRuntimeBackend, TorchBackend
 from downshift.serve.engine import ServeOptions, choose_backend, prepare_serving
 from tests.models import clean_mlp
 
@@ -20,6 +23,19 @@ def test_clean_model_serves_via_onnxruntime(mlp_state):
     assert mlp_state.input_names == ("x",)
     assert mlp_state.ready is True
     assert mlp_state.notes == []
+
+
+def test_serving_state_builds_a_semaphore_from_max_concurrency(mlp_state):
+    assert isinstance(mlp_state.inference_semaphore, type(threading.Semaphore()))
+    assert mlp_state.options.max_concurrency == 1
+
+    wider = dataclasses.replace(
+        mlp_state, options=dataclasses.replace(mlp_state.options, max_concurrency=3)
+    )
+    assert wider.inference_semaphore.acquire(blocking=False)
+    assert wider.inference_semaphore.acquire(blocking=False)
+    assert wider.inference_semaphore.acquire(blocking=False)
+    assert not wider.inference_semaphore.acquire(blocking=False)
 
 
 def test_degraded_model_falls_back_to_torch(serve_fixture):
@@ -96,6 +112,33 @@ def test_torch_backend_rejects_missing_input():
     backend = TorchBackend(clean_mlp.make_model(), ("x",), device="cpu")
     with pytest.raises(KeyError, match="x"):
         backend.infer({"y": np.zeros((1, 16), dtype=np.float32)})
+
+
+def test_torch_backend_wraps_shape_error_in_inference_input_error():
+    backend = TorchBackend(clean_mlp.make_model(), ("x",), device="cpu")
+    with pytest.raises(InferenceInputError, match="cannot be multiplied"):
+        backend.infer({"x": np.zeros((1, 5), dtype=np.float32)})
+
+
+def test_torch_backend_reraises_out_of_memory_untouched(monkeypatch):
+    backend = TorchBackend(clean_mlp.make_model(), ("x",), device="cpu")
+
+    def boom(*args):
+        raise RuntimeError("CUDA out of memory. Tried to allocate 2.00 GiB")
+
+    monkeypatch.setattr(backend.module, "forward", boom)
+    with pytest.raises(RuntimeError, match="out of memory"):
+        backend.infer({"x": np.zeros((1, 16), dtype=np.float32)})
+
+
+def test_onnxruntime_backend_wraps_shape_mismatch_in_inference_input_error(exported_mlp):
+    path, _, _ = exported_mlp
+    backend = OnnxRuntimeBackend(path, device="cpu")
+    with pytest.raises(InferenceInputError) as excinfo:
+        backend.infer({"x": np.zeros((1, 5), dtype=np.float32)})
+    # First line of ORT's (often multi-line) message only.
+    assert "\n" not in str(excinfo.value)
+    assert "INVALID_ARGUMENT" in str(excinfo.value)
 
 
 class _TupleOutputModel(torch.nn.Module):

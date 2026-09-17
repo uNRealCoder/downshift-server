@@ -9,9 +9,11 @@ strict=False and silently returns wrong numbers. Verification is what catches th
 """
 
 import pytest
+import torch
 
 import downshift
 from tests.models import (
+    bf16_weights,
     clean_mlp,
     custom_autograd,
     data_dependent_branch,
@@ -71,6 +73,33 @@ def test_check_switches_a_training_mode_model_to_eval_with_a_warning() -> None:
 
     assert any("training mode" in w for w in verdict.warnings)
     assert model.training is False
+
+
+def test_bf16_weights_fixture_fails_via_onnx_runtime_not_a_crash() -> None:
+    """ORT's CPU EP has no bf16 Gemm kernel; that must become a FAILED verdict, not a
+    raised exception out of check()."""
+    model = bf16_weights.make_model()
+    inputs = bf16_weights.make_inputs()
+
+    verdict = downshift.check(model, inputs, k=2)
+
+    assert verdict.status == "FAILED"
+    assert verdict.recommended_backend == "torch"
+    assert "ONNX Runtime" in verdict.reason
+    assert verdict.capture_strategy is not None  # torch.export/torch.onnx.export both worked
+    assert verdict.opset is not None
+    assert verdict.op_types
+
+
+def test_check_with_fp16_does_not_mutate_the_callers_model() -> None:
+    model = clean_mlp.make_model()
+    original_dtype = next(model.parameters()).dtype
+
+    verdict = downshift.check(model, clean_mlp.make_inputs(), k=2, fp16=True)
+
+    assert next(model.parameters()).dtype == original_dtype
+    assert verdict.prepared is not None
+    assert next(verdict.prepared.model.parameters()).dtype == torch.float16
 
 
 def test_scatter_fixture_numerics_actually_diverge() -> None:

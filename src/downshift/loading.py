@@ -42,8 +42,12 @@ class LoadedModel:
         return path if path.exists() else None
 
 
+def is_import_spec(spec: str) -> bool:
+    return bool(_IMPORT_SPEC.match(spec))
+
+
 def import_object(spec: str) -> Any:
-    if not _IMPORT_SPEC.match(spec):
+    if not is_import_spec(spec):
         raise LoadError(f"{spec!r} is not an import spec of the form package.module:attr")
     module_name, _, attr = spec.partition(":")
     try:
@@ -130,7 +134,7 @@ def load_model(
             source=spec, model=model, example_inputs=load_inputs(inputs) if inputs else None
         )
 
-    if _IMPORT_SPEC.match(spec):
+    if is_import_spec(spec):
         return _load_from_import_spec(spec, inputs)
 
     if path.is_dir():

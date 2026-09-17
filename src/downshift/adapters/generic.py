@@ -64,8 +64,7 @@ class GenericAdapter:
             inputs = example_inputs
             param_names = _forward_param_names(model)
             names = tuple(
-                param_names[i] if i < len(param_names) else f"input_{i}"
-                for i in range(len(inputs))
+                param_names[i] if i < len(param_names) else f"input_{i}" for i in range(len(inputs))
             )
         return Prepared(
             model=model,

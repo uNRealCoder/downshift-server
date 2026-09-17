@@ -9,6 +9,7 @@ from downshift.export.verdict import ExportVerdict
 from downshift.export.verify import NumericsReport
 from downshift.serve.backends import BackendMeta
 from downshift.serve.engine import ServeOptions, ServingState
+from downshift.serve.schemas import OutputEncoding
 
 
 class _StubBackend:
@@ -120,6 +121,31 @@ def test_print_banner_unverified_without_reference():
     render.print_banner(state, "127.0.0.1", 8000)
 
 
+def test_print_banner_shows_output_encoding(capsys):
+    state = _serving_state(_verdict(), options=ServeOptions(output_encoding=OutputEncoding.base64))
+    render.print_banner(state, "127.0.0.1", 8000)
+    out = capsys.readouterr().out
+    assert "Encoding" in out
+    assert "base64" in out
+    assert "output_encoding" in out
+    assert "[fast]" not in out  # pybase64 is installed in the dev environment
+
+
+def test_print_banner_shows_concurrency(capsys):
+    state = _serving_state(_verdict(), options=ServeOptions(max_concurrency=4))
+    render.print_banner(state, "127.0.0.1", 8000)
+    out = capsys.readouterr().out
+    assert "Concurrency" in out
+    assert "4 inference at a time" in out
+    assert "--max-concurrency" in out
+
+
+def test_print_banner_tips_pybase64_when_missing(capsys, monkeypatch):
+    monkeypatch.setattr(render, "BASE64_CODEC", "stdlib")
+    render.print_banner(_serving_state(_verdict()), "127.0.0.1", 8000)
+    assert "downshift-server[fast]" in capsys.readouterr().out
+
+
 def test_print_banner_unverified_with_prepared_backend_torch_skip():
     verdict = _verdict(
         status="UNVERIFIED",
@@ -128,7 +154,9 @@ def test_print_banner_unverified_with_prepared_backend_torch_skip():
         reason="--backend torch: export skipped",
         prepared=object(),
     )
-    state = _serving_state(verdict, backend=_StubBackend("torch"), options=ServeOptions(backend="torch"))
+    state = _serving_state(
+        verdict, backend=_StubBackend("torch"), options=ServeOptions(backend="torch")
+    )
     render.print_banner(state, "127.0.0.1", 8000)
 
 

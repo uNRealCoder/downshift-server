@@ -6,9 +6,10 @@ FAILED     won't export                                          -> serve via to
 UNVERIFIED a .onnx handed to us with no reference model         -> serve via ORT, say so
 """
 
+import copy
 import re
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
@@ -19,23 +20,18 @@ from downshift.adapters.base import Adapter, Prepared
 from downshift.export.capture import capture
 from downshift.export.inputs import synthesize
 from downshift.export.shapes import apply_dynamic_override, safe_capture_inputs
-from downshift.export.verify import NumericsReport, verify
+from downshift.export.verify import NumericsReport, OnnxRuntimeError, verify
 
 Status = Literal["CLEAN", "DEGRADED", "FAILED", "UNVERIFIED"]
 
 
-class BackendName(str, Enum):
+class BackendName(StrEnum):
     """The concrete backends a verdict can recommend/serve; never "auto" (that's a CLI-only
     selection sentinel, not a real backend) - see engine.BackendChoice."""
 
     onnxruntime = "onnxruntime"
     torch = "torch"
 
-    def __str__(self) -> str:
-        # Python 3.11 made str(Enum)/format(Enum) print "BackendName.onnxruntime" instead of
-        # the plain value for any (str, Enum) mixin that isn't ReprEnum; banners embed this
-        # in f-strings, so pin it back to the value.
-        return self.value
 
 EXIT_CODES: dict[str, int] = {"CLEAN": 0, "FAILED": 1, "DEGRADED": 2, "UNVERIFIED": 3}
 
@@ -173,14 +169,24 @@ def build_verdict(prepared: Prepared, k: int = 8, verify_numerics: bool = True) 
         verdict.reason = f"exported via {result.capture_strategy}; numerics never checked"
         return verdict
 
-    numerics = verify(
-        prepared.model,
-        result.onnx_program,
-        prepared.inputs,
-        prepared.dynamic_shapes,
-        vary_fn=prepared.vary_fn,
-        k=k,
-    )
+    try:
+        numerics = verify(
+            prepared.model,
+            result.onnx_program,
+            prepared.inputs,
+            prepared.dynamic_shapes,
+            vary_fn=prepared.vary_fn,
+            k=k,
+        )
+    except OnnxRuntimeError as exc:
+        message = str(exc).splitlines()[0]
+        verdict.reason = (
+            f"exported via {result.capture_strategy} but ONNX Runtime cannot run the "
+            f"graph: {message}"
+        )
+        verdict.warnings.append(message)
+        return verdict
+
     verdict.numerics = numerics
     verdict.status, verdict.recommended_backend, verdict.reason = numerics_outcome(
         numerics,
@@ -199,9 +205,17 @@ def check(
     fp16: bool = False,
     verify_numerics: bool = True,
 ) -> ExportVerdict:
-    """Export in memory, verify, and return the verdict. Writes nothing to disk."""
+    """Export in memory, verify, and return the verdict. Writes nothing to disk.
+
+    fp16=True casts a deep copy of `model` to float16 and leaves the caller's model and
+    its parameters untouched; `example_inputs`, if given, are cast on the copies used for
+    export, not the tensors the caller passed in. The model IS still switched to eval()
+    in place if it was in training mode (see the "training mode" warning on the returned
+    verdict) - with fp16=True that happens to the copy, so the caller's model keeps
+    whichever mode it was already in.
+    """
     if fp16:
-        model = model.half()
+        model = copy.deepcopy(model).half()
         if example_inputs is not None:
             example_inputs = tuple(
                 t.half() if isinstance(t, torch.Tensor) and t.is_floating_point() else t

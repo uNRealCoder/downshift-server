@@ -11,6 +11,7 @@ from rich.text import Text
 
 from downshift import __version__
 from downshift.export.verdict import ExportVerdict
+from downshift.serve.codec import BASE64_CODEC
 from downshift.serve.engine import ServingState
 
 console = Console()
@@ -148,6 +149,16 @@ def print_banner(state: ServingState, host: str, port: int) -> None:
     grid.add_row("Dynamic dims", _dynamic_text(verdict))
     for warning in verdict.warnings:
         grid.add_row("", Text(f"{_sym('⚠', '!')} {warning}", style="yellow"))
+    encoding = Text(state.options.output_encoding.value)
+    encoding.append("  (clients override with output_encoding)", style="dim")
+    grid.add_row("Encoding", encoding)
+    concurrency = Text(f"{state.options.max_concurrency} inference at a time")
+    concurrency.append("  (--max-concurrency)", style="dim")
+    grid.add_row("Concurrency", concurrency)
+    if BASE64_CODEC == "stdlib":
+        grid.add_row(
+            "Tip", escape("pip install 'downshift-server[fast]' for ~10x faster base64 tensor I/O")
+        )
     grid.add_row("Endpoint", f"http://{host}:{port}")
 
     console.print(

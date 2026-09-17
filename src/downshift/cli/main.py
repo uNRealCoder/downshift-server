@@ -3,12 +3,11 @@
 import json
 import logging
 import os
-import re
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
@@ -22,9 +21,10 @@ from downshift.cli import render
 from downshift.export.manifest import manifest_path_for
 from downshift.export.shapes import parse_dynamic_spec
 from downshift.export.verdict import ExportVerdict
-from downshift.loading import LoadedModel, LoadError, load_model
+from downshift.loading import LoadedModel, LoadError, is_import_spec, load_model
 from downshift.serve.app import build_app
 from downshift.serve.engine import BackendChoice, ServeOptions, ServingState, prepare_serving
+from downshift.serve.schemas import OutputEncoding
 
 EXIT_USAGE = 4  # bad model spec, bad option, unloadable file
 EXIT_CRASH = 5
@@ -36,21 +36,41 @@ app = typer.Typer(
 )
 
 
-class LogLevel(str, Enum):
+def _print_version(value: bool) -> None:
+    if value:
+        typer.echo(f"downshift v{__version__}")
+        raise typer.Exit(0)
+
+
+@app.callback()
+def _main(
+    version: Annotated[
+        bool,
+        typer.Option(
+            "--version", is_eager=True, callback=_print_version, help="Print the version and exit"
+        ),
+    ] = False,
+) -> None:
+    pass
+
+
+class LogLevel(StrEnum):
     debug = "debug"
     info = "info"
     warning = "warning"
     error = "error"
 
 
-class LogFormat(str, Enum):
+class LogFormat(StrEnum):
     text = "text"
     json = "json"
 
 
 ModelArg = Annotated[
     str,
-    typer.Argument(metavar="MODEL", help="model.onnx | pkg.module:attr | weights.pt | org/repo | hf-repo-dir/"),
+    typer.Argument(
+        metavar="MODEL", help="model.onnx | pkg.module:attr | weights.pt | org/repo | hf-repo-dir/"
+    ),
 ]
 InputsOpt = Annotated[
     str | None,
@@ -113,9 +133,40 @@ WorkersOpt = Annotated[
         help="Uvicorn worker processes; each independently loads/exports/warms the model",
     ),
 ]
-JsonOpt = Annotated[
-    bool, typer.Option("--json", help="Print the verdict as JSON and nothing else")
+OutputEncodingOpt = Annotated[
+    OutputEncoding,
+    typer.Option(
+        "--output-encoding",
+        help="Default encoding of response tensors; clients override per request with "
+        "output_encoding",
+    ),
 ]
+MaxInputBytesOpt = Annotated[
+    int,
+    typer.Option(
+        "--max-input-bytes",
+        min=1,
+        help="Reject base64 tensor inputs larger than this once decoded",
+    ),
+]
+MaxBodyBytesOpt = Annotated[
+    int,
+    typer.Option(
+        "--max-body-bytes",
+        min=1,
+        help="Reject request bodies larger than this, before they are parsed as JSON",
+    ),
+]
+MaxConcurrencyOpt = Annotated[
+    int,
+    typer.Option(
+        "--max-concurrency",
+        min=1,
+        help="Inferences allowed to run at once per worker process; 1 means one at a time "
+        "(ONNX Runtime's own intra-op threads still parallelise inside that one inference)",
+    ),
+]
+JsonOpt = Annotated[bool, typer.Option("--json", help="Print the verdict as JSON and nothing else")]
 LogLevelOpt = Annotated[LogLevel, typer.Option("--log-level")]
 LogFormatOpt = Annotated[LogFormat, typer.Option("--log-format")]
 
@@ -171,12 +222,9 @@ def _load(spec: str, inputs: str | None, model_class: str | None, unsafe_load: b
     return load_model(spec, inputs=inputs, model_class=model_class, unsafe_load=unsafe_load)
 
 
-_IMPORT_SPEC = re.compile(r"^[A-Za-z_][\w.]*:[A-Za-z_]\w*$")
-
-
 def slug(spec: str) -> str:
     """tests.models.clean_mlp:make_model -> clean_mlp; ./gat_v3.pt -> gat_v3; org/repo -> repo."""
-    if _IMPORT_SPEC.match(spec):
+    if is_import_spec(spec):
         return spec.partition(":")[0].rsplit(".", 1)[-1]
     return Path(spec).stem
 
@@ -302,6 +350,10 @@ class ServeArgs:
     warmup: int
     intra_op_threads: int
     inter_op_threads: int
+    output_encoding: str
+    max_input_bytes: int
+    max_body_bytes: int
+    max_concurrency: int
     log_level: str
     log_format: str
 
@@ -326,6 +378,10 @@ def _build_serving_app(args: ServeArgs) -> tuple[ServingState, FastAPI]:
         dynamic=parse_dynamic_spec(args.dynamic) if args.dynamic else None,
         intra_op_threads=args.intra_op_threads,
         inter_op_threads=args.inter_op_threads,
+        output_encoding=OutputEncoding(args.output_encoding),
+        max_input_bytes=args.max_input_bytes,
+        max_body_bytes=args.max_body_bytes,
+        max_concurrency=args.max_concurrency,
     )
     state = prepare_serving(loaded, opts, ref)
     api = build_app(state, tuple(args.middleware or ()))
@@ -358,7 +414,9 @@ def serve_cmd(
     reference: ReferenceOpt = None,
     middleware: Annotated[
         list[str] | None,
-        typer.Option("--middleware", metavar="pkg.module:Attr", help="Middleware to attach; repeatable"),
+        typer.Option(
+            "--middleware", metavar="pkg.module:Attr", help="Middleware to attach; repeatable"
+        ),
     ] = None,
     inputs: InputsOpt = None,
     model_class: ModelClassOpt = None,
@@ -368,6 +426,10 @@ def serve_cmd(
     dynamic: DynamicOpt = None,
     intra_op_threads: IntraOpThreadsOpt = settings.INTRA_OP_THREADS,
     inter_op_threads: InterOpThreadsOpt = settings.INTER_OP_THREADS,
+    output_encoding: OutputEncodingOpt = OutputEncoding(settings.OUTPUT_ENCODING),
+    max_input_bytes: MaxInputBytesOpt = settings.MAX_INPUT_BYTES,
+    max_body_bytes: MaxBodyBytesOpt = settings.MAX_BODY_BYTES,
+    max_concurrency: MaxConcurrencyOpt = settings.MAX_CONCURRENCY,
     workers: WorkersOpt = settings.WORKERS,
     log_level: LogLevelOpt = LogLevel.info,
     log_format: LogFormatOpt = LogFormat.text,
@@ -391,6 +453,10 @@ def serve_cmd(
             warmup=warmup,
             intra_op_threads=intra_op_threads,
             inter_op_threads=inter_op_threads,
+            output_encoding=output_encoding.value,
+            max_input_bytes=max_input_bytes,
+            max_body_bytes=max_body_bytes,
+            max_concurrency=max_concurrency,
             log_level=log_level.value,
             log_format=log_format.value,
         )

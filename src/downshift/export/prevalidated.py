@@ -11,7 +11,7 @@ import torch
 
 from downshift.adapters.base import Adapter
 from downshift.export.verdict import BackendName, ExportVerdict, numerics_outcome, prepare_model
-from downshift.export.verify import verify
+from downshift.export.verify import OnnxRuntimeError, verify
 
 
 def _graph_summary(onnx_path: Path) -> tuple[int | None, list[str], tuple[str, ...]]:
@@ -48,9 +48,33 @@ def intake(
         )
 
     prepared = prepare_model(reference, example_inputs, adapter, dynamic)
-    numerics = verify(
-        prepared.model, onnx_path, prepared.inputs, prepared.dynamic_shapes, prepared.vary_fn, k=k
-    )
+    try:
+        numerics = verify(
+            prepared.model,
+            onnx_path,
+            prepared.inputs,
+            prepared.dynamic_shapes,
+            prepared.vary_fn,
+            k=k,
+        )
+    except OnnxRuntimeError as exc:
+        message = str(exc).splitlines()[0]
+        return ExportVerdict(
+            status="FAILED",
+            model_family=prepared.family,
+            capture_strategy=None,
+            opset=opset,
+            op_types=op_types,
+            numerics=None,
+            recommended_backend=BackendName.torch,
+            reason=f"pre-built ONNX cannot run in ONNX Runtime: {message}",
+            input_names=prepared.input_names,
+            dynamic_dims=prepared.dynamic_dims,
+            warnings=[message],
+            onnx_path=onnx_path,
+            prepared=prepared,
+        )
+
     status, backend, reason = numerics_outcome(
         numerics, "pre-built ONNX matches reference", "pre-built ONNX diverges from reference"
     )

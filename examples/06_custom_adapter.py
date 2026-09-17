@@ -65,6 +65,7 @@ print("generic adapter status:", generic_verdict.status, "| family:", generic_ve
 # would check something more structural, the way `pyg`'s adapter looks for a
 # `MessagePassing` layer.
 
+
 # %%
 class PointCloudAdapter:
     name = "pointcloud"

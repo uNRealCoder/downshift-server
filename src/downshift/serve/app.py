@@ -1,53 +1,178 @@
 """FastAPI app over a ServingState. The same routes regardless of which backend is behind it."""
 
-from collections.abc import Sequence
+import logging
+from collections.abc import Callable, Coroutine, Sequence
 from typing import Any
 
 import numpy as np
-from fastapi import FastAPI, HTTPException
+import orjson
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
 
 import downshift
+from downshift.serve.backends import InferenceInputError
+from downshift.serve.codec import b64encode
 from downshift.serve.engine import ServingState
 from downshift.serve.middleware import load_middleware
 from downshift.serve.schemas import (
     GraphPredictRequest,
     HealthResponse,
     MetadataResponse,
+    OutputEncoding,
     PredictRequest,
     PredictResponse,
     ReadyResponse,
     to_numpy,
 )
 
+logger = logging.getLogger("downshift.serve")
 
-def run_predict(state: ServingState, inputs: dict[str, Any]) -> PredictResponse:
-    """Validate, convert, infer. Raises HTTPException(400) for anything the client got wrong."""
+# dtypes orjson's OPT_SERIALIZE_NUMPY writes straight from the array buffer (orjson >= 3.9).
+_ORJSON_DTYPES = frozenset(
+    "float16 float32 float64 int8 int16 int32 int64 uint8 uint16 uint32 uint64 bool".split()
+)
+
+
+class NumpyJSONResponse(JSONResponse):
+    """orjson with OPT_SERIALIZE_NUMPY: arrays are written from their buffers; NaN/Inf become null.
+
+    Not built on fastapi's ORJSONResponse: older versions lack the numpy flag, newer ones
+    deprecate the class and warn at import.
+    """
+
+    def render(self, content: Any) -> bytes:
+        return orjson.dumps(content, option=orjson.OPT_SERIALIZE_NUMPY)
+
+
+class _OrjsonRequest(Request):
+    async def json(self) -> Any:
+        if not hasattr(self, "_json"):
+            self._json = orjson.loads(await self.body())
+        return self._json
+
+
+def _body_too_large(observed: int, limit: int) -> JSONResponse:
+    return JSONResponse(
+        {
+            "detail": (
+                f"request body is {observed} bytes; the server limit is {limit} bytes "
+                "(--max-body-bytes)"
+            )
+        },
+        status_code=413,
+    )
+
+
+class OrjsonRoute(APIRoute):
+    """Parse request bodies with orjson: several times faster than stdlib on MiB-scale bodies.
+
+    orjson's JSONDecodeError subclasses the stdlib one, so malformed JSON still maps to 422.
+    Also enforces --max-body-bytes: a Content-Length over the limit is rejected without
+    reading the body; without one (chunked), the body is read and checked as it lands.
+    """
+
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        handler = super().get_route_handler()
+
+        async def route_handler(request: Request) -> Response:
+            state: ServingState = request.app.state.serving
+            limit = state.options.max_body_bytes
+            content_length = request.headers.get("content-length")
+            wrapped = _OrjsonRequest(request.scope, request.receive)
+            if content_length is not None and content_length.isdigit():
+                if int(content_length) > limit:
+                    return _body_too_large(int(content_length), limit)
+            else:
+                body = await request.body()
+                if len(body) > limit:
+                    return _body_too_large(len(body), limit)
+                wrapped._body = body
+            return await handler(wrapped)
+
+        return route_handler
+
+
+# The predict routes: orjson response, and PredictResponse kept in the OpenAPI schema without
+# the response_model re-validation walk over every output.
+_PREDICT_ROUTE: dict[str, Any] = {
+    "response_class": NumpyJSONResponse,
+    "responses": {200: {"model": PredictResponse}},
+}
+
+
+def _json_ready(arr: np.ndarray) -> np.ndarray | list:
+    """The contiguous array itself when orjson can write it in one pass, else a list."""
+    return (
+        arr if arr.dtype.name in _ORJSON_DTYPES and arr.ndim else arr.tolist()
+    )  # 0-d: orjson rejects
+
+
+def _base64_ready(arr: np.ndarray) -> dict[str, Any]:
+    """{data, dtype, shape}: base64 straight off the contiguous buffer."""
+    return {
+        "data": b64encode(arr).decode("ascii"),
+        "dtype": arr.dtype.name,
+        "shape": list(arr.shape),
+    }
+
+
+def run_predict(
+    state: ServingState, inputs: dict[str, Any], encoding: OutputEncoding | None
+) -> NumpyJSONResponse:
+    """Validate, convert, infer.
+
+    Raises HTTPException(400) for anything the client got wrong (bad shape/dtype/JSON).
+    Anything else (a backend bug, OOM, ...) propagates so the app-level handler turns it into
+    a 500 without leaking the exception text to the client.
+    """
     missing = [n for n in state.input_names if n not in inputs]
     if missing:
         raise HTTPException(400, f"missing inputs: {missing}")
 
-    declared = {spec.name: spec.dtype for spec in state.backend.metadata().inputs}
+    declared = state.declared_dtypes
+    max_bytes = state.options.max_input_bytes
     try:
-        feeds = {n: to_numpy(n, inputs[n], declared.get(n)) for n in state.input_names}
-        outputs = state.backend.infer(feeds)
-    except HTTPException:
-        raise
-    except Exception as exc:  # shape/dtype errors from ORT or torch are the client's problem
+        feeds = {
+            n: to_numpy(n, inputs[n], declared.get(n), max_bytes=max_bytes)
+            for n in state.input_names
+        }
+    except (ValueError, TypeError, KeyError) as exc:
         raise HTTPException(400, str(exc)) from exc
 
-    arrays = {name: np.asarray(arr) for name, arr in outputs.items()}
-    return PredictResponse(
-        outputs={name: arr.tolist() for name, arr in arrays.items()},
-        shapes={name: list(arr.shape) for name, arr in arrays.items()},
-        dtypes={name: arr.dtype.name for name, arr in arrays.items()},
-    )
+    try:
+        with state.inference_semaphore:
+            outputs = state.backend.infer(feeds)
+    except HTTPException:
+        raise
+    except (InferenceInputError, KeyError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    encoding = encoding or state.options.output_encoding
+    encode = _base64_ready if encoding == OutputEncoding.base64 else _json_ready
+    # C-contiguous once, up front (np.require keeps 0-d arrays 0-d; ascontiguousarray does not).
+    arrays = {name: np.require(arr, requirements="C") for name, arr in outputs.items()}
+    # Same keys as PredictResponse; built by hand so orjson serializes the buffers directly.
+    body = {
+        "outputs": {name: encode(arr) for name, arr in arrays.items()},
+        "shapes": {name: list(arr.shape) for name, arr in arrays.items()},
+        "dtypes": {name: arr.dtype.name for name, arr in arrays.items()},
+    }
+    return NumpyJSONResponse(body)
 
 
 def build_app(state: ServingState, middleware: Sequence[str] = ()) -> FastAPI:
     app = FastAPI(title="downshift", version=downshift.__version__)
+    app.router.route_class = OrjsonRoute
     app.state.serving = state
     load_middleware(app, middleware)
+
+    @app.exception_handler(Exception)
+    async def _unhandled_exception(request: Request, exc: Exception) -> JSONResponse:
+        logger.exception("unhandled exception serving %s %s", request.method, request.url.path)
+        return JSONResponse(
+            {"detail": "inference failed on the server; see the server log"}, status_code=500
+        )
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
@@ -68,26 +193,30 @@ def build_app(state: ServingState, middleware: Sequence[str] = ()) -> FastAPI:
             input_names=list(state.input_names),
             notes=list(state.notes),
             version=downshift.__version__,
+            limits={
+                "max_body_bytes": state.options.max_body_bytes,
+                "max_input_bytes": state.options.max_input_bytes,
+                "max_concurrency": state.options.max_concurrency,
+            },
         )
 
-    @app.post("/predict", response_model=PredictResponse)
-    def predict(req: PredictRequest) -> PredictResponse:
-        return run_predict(state, req.inputs)
+    @app.post("/predict", **_PREDICT_ROUTE)
+    def predict(req: PredictRequest) -> NumpyJSONResponse:
+        return run_predict(state, req.inputs, req.output_encoding)
 
-    @app.post("/predict/graph", response_model=PredictResponse)
-    def predict_graph(req: GraphPredictRequest) -> PredictResponse:
+    @app.post("/predict/graph", **_PREDICT_ROUTE)
+    def predict_graph(req: GraphPredictRequest) -> NumpyJSONResponse:
         if not {"x", "edge_index"} <= set(state.input_names):
             raise HTTPException(
                 400,
                 f"model is not graph-shaped: inputs are {list(state.input_names)}, "
                 "expected at least 'x' and 'edge_index'",
             )
-        inputs: dict[str, Any] = {
-            "x": req.x,
-            "edge_index": {"data": req.edge_index, "dtype": "int64"},
-        }
+        # No dtype hints needed: to_numpy takes the backend's declared dtype (int64 for
+        # edge_index on both backends), and integer lists default to int64 anyway.
+        inputs: dict[str, Any] = {"x": req.x, "edge_index": req.edge_index}
         if req.edge_attr is not None:
             inputs["edge_attr"] = req.edge_attr
-        return run_predict(state, inputs)
+        return run_predict(state, inputs, req.output_encoding)
 
     return app

@@ -89,7 +89,7 @@ def test_get_returns_the_matching_adapter():
 
 # --- custom adapters loaded from a .py file ----------------------------------------------
 
-_CUSTOM_ADAPTER_INSTANCE = '''
+_CUSTOM_ADAPTER_INSTANCE = """
 from downshift.adapters.base import Prepared
 
 class MyAdapter:
@@ -113,9 +113,9 @@ class MyAdapter:
         )
 
 ADAPTER = MyAdapter()
-'''
+"""
 
-_CUSTOM_ADAPTER_CLASS_ONLY = _CUSTOM_ADAPTER_INSTANCE.replace('ADAPTER = MyAdapter()\n', "")
+_CUSTOM_ADAPTER_CLASS_ONLY = _CUSTOM_ADAPTER_INSTANCE.replace("ADAPTER = MyAdapter()\n", "")
 
 _NOT_AN_ADAPTER = "NOT_AN_ADAPTER = object()\n"
 

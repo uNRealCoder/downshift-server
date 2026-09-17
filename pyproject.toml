@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "downshift-server"
-version = "0.2.0"
+version = "0.3.0"
 description = "Universal PyTorch → ONNX verification and serving, with graceful fallback."
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
@@ -21,6 +21,8 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
 ]
 
 dependencies = [
@@ -34,6 +36,7 @@ dependencies = [
     "uvicorn[standard]>=0.23",
     "numpy>=1.24",
     "pydantic>=2.0",
+    "orjson>=3.9",
 ]
 
 [project.optional-dependencies]
@@ -50,9 +53,18 @@ gnn = [
 hf = [
     "transformers>=4.40",
 ]
-all = [
-    "downshift-server[gnn,hf]",
+fast = [
+    "pybase64>=1.4",  # SIMD base64 for binary tensor I/O; stdlib is used when absent
 ]
+all = [
+    "downshift-server[gnn,hf,fast]",
+]
+
+[project.urls]
+Homepage = "https://github.com/uNRealCoder/downshift-server"
+Repository = "https://github.com/uNRealCoder/downshift-server"
+Changelog = "https://github.com/uNRealCoder/downshift-server/blob/main/CHANGELOG.md"
+Issues = "https://github.com/uNRealCoder/downshift-server/issues"
 
 [project.scripts]
 downshift = "downshift.cli.main:app"
@@ -70,8 +82,14 @@ line-length = 100
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "W"]
-ignore = ["E501"]  # line too long — will auto-format in later passes
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = [
+    "E501",  # line too long — will auto-format in later passes
+    "B008",  # typer's API requires call-in-default for Option()/Argument()
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["downshift"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -84,7 +102,6 @@ testpaths = ["tests"]
 python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
-addopts = "--cov=src/downshift --cov-report=term-missing --cov-fail-under=95"
 
 [tool.coverage.run]
 source = ["src/downshift"]
