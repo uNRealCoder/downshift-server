@@ -3,11 +3,11 @@
 Check whether your PyTorch model survives ONNX export. Then serve it, falling back to eager PyTorch when ONNX would be lying to you.
 
 ```
-$ downshift serve tests.models.scatter_include_self_false:make_model
+$ downshift serve downshift.demo.scatter_include_self_false:make_model
 
-┌─ downshift v0.1.0 ────────────────────────────────────────────────────────┐
+┌─ downshift v0.3.0 ────────────────────────────────────────────────────────┐
 │                                                                           │
-│  Model          tests.models.scatter_include_self_false:make_model        │
+│  Model          downshift.demo.scatter_include_self_false:make_model      │
 │  Family         generic-torch                                             │
 │  Verdict        DEGRADED  (strict=False, opset 20)                        │
 │  Numerics       max abs err 1.16e+00 over 8 samples  ✗ 7/8 failed         │
@@ -15,6 +15,8 @@ $ downshift serve tests.models.scatter_include_self_false:make_model
 │  Override       --force-onnx to serve the ONNX graph anyway               │
 │  Backend        torch (eager) · cpu  ← auto-selected                      │
 │  Dynamic dims   x[0], segment_ids[0]                                      │
+│  Encoding       json  (clients override with output_encoding)             │
+│  Concurrency    1 inference at a time  (--max-concurrency)                │
 │  Endpoint       http://127.0.0.1:8000                                       │
 │                                                                           │
 └───────────────────────────────────────────────────────────────────────────┘
@@ -32,19 +34,19 @@ pip install "downshift-server[fast]"    # + pybase64, ~12x faster binary tensor 
 pip install "downshift-server[all]"
 ```
 
-Until the PyPI release lands, install from a checkout with `pip install -e ".[all]"`.
+For development, install editable from a checkout instead: `pip install -e ".[dev,all]"`.
 
-Python 3.11 to 3.13. CPU-only is what this release was tested on. CUDA execution-provider selection exists (`--device cuda`) but is untested in this release.
+Python 3.11 to 3.14. CPU-only is what this release was tested on. CUDA execution-provider selection exists (`--device cuda`) but is untested in this release.
 
 ## Quick start
 
 ### `check`: is the export trustworthy?
 
 ```
-$ downshift check tests.models.scatter_include_self_false:make_model
+$ downshift check downshift.demo.scatter_include_self_false:make_model
 
 ┌───────────────┬─────────────────────────────────────────────────────────────┐
-│ Model         │ tests.models.scatter_include_self_false:make_model          │
+│ Model         │ downshift.demo.scatter_include_self_false:make_model        │
 │ Family        │ generic-torch                                               │
 │ Export        │ DEGRADED  (strict=False, opset 20)                          │
 │ Numerics      │ max abs err 1.34e+00 over 8 samples  ✗ 7/8 failed           │
@@ -57,6 +59,8 @@ $ downshift check tests.models.scatter_include_self_false:make_model
 ```
 
 `check` exports in memory, runs `k` random samples (default 8) through both PyTorch and ONNX Runtime, and varies the dynamic axes so some samples have shapes the exporter never saw. Nothing is written to disk.
+
+A sample passes when every output element satisfies `numpy.allclose`: `abs_err <= atol + rtol * |expected|`, the same rule numpy uses. Defaults are chosen by the widest floating dtype in the model's parameters and are overridable, e.g. `DOWNSHIFT_TOL_FLOAT32_ATOL=1e-3` or `DOWNSHIFT_TOL_FLOAT16_RTOL=0.05`.
 
 The exit code is the verdict, so it can gate CI: `0` CLEAN, `1` FAILED, `2` DEGRADED, `3` UNVERIFIED. (`4` is a usage error such as an unloadable model; `5` is a crash.) `--json` prints the full verdict as JSON and nothing else:
 
@@ -74,7 +78,7 @@ downshift export my_pkg.models:build -o artifacts/ --name classifier
 
 Writes `artifacts/classifier.onnx` and `artifacts/classifier.manifest.json`. The manifest records the SHA-256 of the artifact and of the source checkpoint (when the model came from a file), torch/onnx/onnxruntime versions, opset, the observed weight dtype, and the full verdict including the numerics report. A DEGRADED export is still written, because the manifest records exactly how far off it is; a FAILED export writes nothing.
 
-`--fp16` casts the model to half before export (a plain `.half()`, not quantization). `--no-verify` skips the numerics check and marks the verdict UNVERIFIED, with a warning.
+`--fp16` casts the model to half before export (a plain `.half()`, not quantization). It works on a deep copy, so the model object you passed in is left untouched. `--no-verify` skips the numerics check and marks the verdict UNVERIFIED, with a warning.
 
 ### `serve`: one endpoint, backend chosen by the verdict
 
@@ -111,16 +115,25 @@ Integer lists become `int64`, everything else `float32`. To be explicit, pass `{
 import base64, json, urllib.request
 import numpy as np
 
+
 def encode(a):
     a = np.ascontiguousarray(a)
-    return {"data": base64.b64encode(a.tobytes()).decode(), "dtype": str(a.dtype), "shape": list(a.shape)}
+    return {
+        "data": base64.b64encode(a.tobytes()).decode(),
+        "dtype": str(a.dtype),
+        "shape": list(a.shape),
+    }
+
 
 def decode(o):
     return np.frombuffer(base64.b64decode(o["data"]), dtype=o["dtype"]).reshape(o["shape"])
 
+
 x = np.random.rand(32, 3, 64, 64).astype(np.float32)
 body = json.dumps({"inputs": {"x": encode(x)}, "output_encoding": "base64"}).encode()
-req = urllib.request.Request("http://localhost:8000/predict", body, {"content-type": "application/json"})
+req = urllib.request.Request(
+    "http://localhost:8000/predict", body, {"content-type": "application/json"}
+)
 y = decode(json.load(urllib.request.urlopen(req))["outputs"]["output_0"])
 ```
 
@@ -134,6 +147,8 @@ y = decode(json.load(urllib.request.urlopen(req))["outputs"]["output_0"])
 Install `downshift-server[fast]` to get `pybase64`, a SIMD base64 codec about 12x faster than the standard library's on both directions. Without it the server works the same; the banner prints a tip. Request bodies on every route are parsed with `orjson`, which is several times faster than the standard library on MiB-scale bodies, so clients that keep sending nested lists get a smaller win for free.
 
 Do not expect this to help on small payloads: under roughly 100 KiB the JSON codec is not where the time goes, and base64 gains nothing. The win is on wide inputs and outputs. The in-process estimates from the benchmark corpus, not yet measured over HTTP, are around 5x on p50 for `cnn_large`-class inputs (a `32×3×64×64` float32 batch) and around 3.5x for `bert_small`-class outputs (hidden states). Treat those as expectations until the benchmark re-run replaces them.
+
+See CHANGELOG.md for wire-format changes in 0.3.
 
 For graph models:
 
@@ -155,7 +170,19 @@ Options that change what gets served:
 - `--middleware pkg.module:Attr` (repeatable) attaches a `BaseHTTPMiddleware` subclass or an `async (request, call_next)` function. No middleware means no overhead.
 - `--output-encoding json|base64` (env `DOWNSHIFT_OUTPUT_ENCODING`, default `json`) sets the response encoding for requests that do not send their own `output_encoding`.
 - `--max-input-bytes N` (env `DOWNSHIFT_MAX_INPUT_BYTES`, default 256 MiB) caps the decoded size of one base64 input; larger is a `400`.
+- `--max-body-bytes N` (env `DOWNSHIFT_MAX_BODY_BYTES`, default 256 MiB) caps every request body, checked before it is parsed as JSON; larger is a `413`.
+- `--max-concurrency N` (env `DOWNSHIFT_MAX_CONCURRENCY`, default 1) caps inferences running at once per worker process. One inference already uses every core through ONNX Runtime's intra-op threads, so on CPU raising this rarely adds throughput; it mostly adds contention. Use `--workers` for more processes instead.
 - `--device auto|cpu|cuda`, `--warmup N` (inferences before `/ready` flips), `--host`, `--port`, `--log-level`, `--log-format json`.
+- `--version` prints the installed version and exits.
+
+### Errors
+
+| Status | Cause |
+|---|---|
+| `400` | Client-caused input problem: bad JSON shape/dtype, or an input the backend rejects (message like `input 'x': ...`). |
+| `413` | Request body larger than `--max-body-bytes`. |
+| `422` | Malformed JSON, or a required field is missing. |
+| `500` | Server-side fault. The body is always the fixed `{"detail": "inference failed on the server; see the server log"}`; the actual exception is logged, not returned. |
 
 ## Accepted model forms
 
@@ -173,29 +200,32 @@ Checkpoints are loaded with `torch.load(weights_only=True)`. A file that holds a
 
 - **CLEAN**: exports, matches PyTorch on every sample, survives shapes it was not traced on. Served via ONNX Runtime.
 - **DEGRADED**: exports without error, but numerics drift past tolerance on at least one sample. Served via eager PyTorch; `--force-onnx` overrides.
-- **FAILED**: does not export. Served via eager PyTorch. Not an error, a supported path.
+- **FAILED**: does not export, or exports but ONNX Runtime cannot load or run the graph. Served via eager PyTorch. Not an error, a supported path.
 - **UNVERIFIED**: a `.onnx` with no reference model, or `--no-verify`. Served via ONNX Runtime and labelled as never checked.
 
 ## Compatibility matrix
 
 Generated by `scripts/gen_matrix.py` from the fixture corpus in `tests/models/`, each fixture isolating one export hazard. CI regenerates it weekly against current torch and onnxruntime and opens a PR when it changes. Full file, with versions and legend: [docs/compatibility.md](docs/compatibility.md).
 
+<!-- matrix:start -->
 | Model | Hazard | Family | Export | Capture | Numerics | Shape-general | Backend |
 |---|---|---|---|---|---|---|---|
-| `clean_mlp` | Control fixture: no export hazards | generic-torch | CLEAN | strict=False | 1.2e-07 | ✓ | onnxruntime |
-| `custom_autograd` | custom autograd.Function with no symbolic override | generic-torch | CLEAN | strict=False | 4.2e-07 | ✓ | onnxruntime |
+| `bf16_weights` | bfloat16 weights: ONNX Runtime CPU has no bf16 Gemm kernel | generic-torch | FAILED | strict=False | — | — | torch |
+| `clean_mlp` | Control fixture: no export hazards | generic-torch | CLEAN | strict=False | 7.5e-08 | ✓ | onnxruntime |
+| `custom_autograd` | custom autograd.Function with no symbolic override | generic-torch | CLEAN | strict=False | 3.6e-07 | ✓ | onnxruntime |
 | `data_dependent_branch` | data-dependent control flow | generic-torch | FAILED | — | — | — | torch |
-| `dict_input` | dataclass container input | generic-torch | CLEAN | strict=False | 4.8e-07 | ✓ | onnxruntime |
-| `dropout_model` | stochastic layer | generic-torch | CLEAN | strict=False | 3.6e-07 | ✓ | onnxruntime |
-| `dynamic_batch_cnn` | batch-dim generalization | generic-torch | CLEAN | strict=False | 6.0e-08 | ✓ | onnxruntime |
+| `dict_input` | dataclass container input | generic-torch | CLEAN | strict=False | 2.4e-07 | ✓ | onnxruntime |
+| `dropout_model` | stochastic layer | generic-torch | CLEAN | strict=False | 2.4e-07 | ✓ | onnxruntime |
+| `dynamic_batch_cnn` | batch-dim generalization | generic-torch | CLEAN | strict=False | 3.0e-08 | ✓ | onnxruntime |
 | `gnn_gat` | GNN fixture: 3-layer GAT node classifier | pyg | CLEAN | strict=False | 1.2e-07 | ✓ | onnxruntime |
-| `gnn_gcn` | GNN fixture: 2-layer GCN node classifier | pyg | CLEAN | strict=False | 2.4e-07 | ✓ | onnxruntime |
-| `gnn_sage` | GNN fixture: 2-layer GraphSAGE node classifier | pyg | CLEAN | strict=False | 1.2e-07 | ✓ | onnxruntime |
-| `scatter_include_self_false` | scatter_reduce(include_self=False) has no faithful ONNX translation | generic-torch | DEGRADED | strict=False | 1.3e+00 | ✗ | torch |
+| `gnn_gcn` | GNN fixture: 2-layer GCN node classifier | pyg | CLEAN | strict=False | 3.6e-07 | ✓ | onnxruntime |
+| `gnn_sage` | GNN fixture: 2-layer GraphSAGE node classifier | pyg | CLEAN | strict=False | 1.8e-07 | ✓ | onnxruntime |
+| `scatter_include_self_false` | scatter_reduce(include_self=False) has no faithful ONNX translation | generic-torch | DEGRADED | strict=False | 1.6e+00 | ✗ | torch |
 | `tied_weights` | tied embedding/output weight (GPT-2/OPT-style) | generic-torch | CLEAN | strict=False | 1.9e-06 | ✓ | onnxruntime |
 | `tiny_bert` | HF fixture: a randomly initialised two-layer BERT encoder | hf-transformers | CLEAN | strict=False | 6.0e-07 | ✓ | onnxruntime |
+<!-- matrix:end -->
 
-Two rows worth reading twice. `custom_autograd` was expected to fail and is CLEAN, because `torch.export` traces straight through a `Function.forward` made of ordinary ops. `scatter_include_self_false` was expected to fail loudly and instead exports with zero errors and returns the wrong numbers; the only thing standing between that graph and production is the numerics check.
+Two rows worth reading twice. `custom_autograd` was expected to fail and is CLEAN, because `torch.export` traces straight through a `Function.forward` made of ordinary ops. `scatter_include_self_false` was expected to fail loudly and instead exports with zero errors and returns the wrong numbers; the only thing standing between that graph and production is the numerics check. A third: `bf16_weights` exports cleanly and ONNX Runtime can't run it — bfloat16 has no CPU Gemm kernel — which used to crash the tool outright and is now a FAILED verdict like any other.
 
 ## What this is not
 
@@ -209,13 +239,6 @@ Two rows worth reading twice. `custom_autograd` was expected to fail and is CLEA
 
 **vs. anydeploy.** `anydeploy` also does export, validate, and serve, with a pass/fail validation step and an edge/mobile focus. downshift differs in three places: the verdict is tiered, with DEGRADED as a real middle state between "works" and "crashes"; the eager PyTorch fallback sits behind the same endpoint so a FAILED or DEGRADED model still serves; and GNNs (PyTorch Geometric) are a supported family with independent node and edge dynamic dims.
 
-## Behaviour changes in 0.3
-
-Responses from `/predict` and `/predict/graph` are now serialized by orjson straight from the numpy buffers. The API is unchanged; two things on the wire are not:
-
-- `NaN` and `Inf` outputs serialize as `null`, which is valid JSON, instead of the `NaN`/`Infinity` tokens the stdlib encoder emitted. A client that parsed those tokens must handle `null`.
-- float32 values print with the shortest decimal that round-trips as float32 (`0.1`, not `0.10000000149011612`). Cast back to float32 and the values are bit-identical to before.
-
 ## Writing your own adapter
 
 An adapter knows one model family well enough to build example inputs when the user gave none, and to turn the model plus inputs into something `torch.export` can trace: a module with a flat tensor signature. Implement the `Adapter` protocol from `downshift.adapters.base`:
@@ -223,13 +246,15 @@ An adapter knows one model family well enough to build example inputs when the u
 ```python
 from downshift.adapters.base import Prepared
 
+
 class MyAdapter:
     name = "myfamily"
     family = "myfamily"
 
     def matches(self, model, example_inputs) -> bool: ...
-    def example_inputs(self, model) -> tuple | None: ...   # None if you can't guess
+    def example_inputs(self, model) -> tuple | None: ...  # None if you can't guess
     def prepare(self, model, example_inputs) -> Prepared: ...
+
 
 ADAPTER = MyAdapter()
 ```
@@ -256,10 +281,17 @@ The file needs a module-level `ADAPTER = MyAdapter()`, or point at the class dir
 ```bash
 pip install -e ".[dev,all]"
 ruff check .
+ruff format --check .
 mypy src
 pytest
-python scripts/gen_matrix.py     # regenerates docs/compatibility.md
+python scripts/gen_matrix.py     # regenerates docs/compatibility.md and this README's table
 ```
+
+Plain `pytest` enforces no coverage gate locally; CI runs it with `--cov-fail-under=95`.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

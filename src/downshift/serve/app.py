@@ -103,7 +103,9 @@ _PREDICT_ROUTE: dict[str, Any] = {
 
 def _json_ready(arr: np.ndarray) -> np.ndarray | list:
     """The contiguous array itself when orjson can write it in one pass, else a list."""
-    return arr if arr.dtype.name in _ORJSON_DTYPES and arr.ndim else arr.tolist()  # 0-d: orjson rejects
+    return (
+        arr if arr.dtype.name in _ORJSON_DTYPES and arr.ndim else arr.tolist()
+    )  # 0-d: orjson rejects
 
 
 def _base64_ready(arr: np.ndarray) -> dict[str, Any]:

@@ -34,6 +34,7 @@ import downshift
 # Nothing unusual here: two linear layers and a ReLU. This should export and match
 # exactly.
 
+
 # %%
 class CleanMLP(nn.Module):
     def __init__(self):
@@ -51,8 +52,10 @@ verdict = downshift.check(clean_model, clean_inputs)
 print(f"status:   {verdict.status}")
 print(f"backend:  {verdict.recommended_backend}")
 print(f"reason:   {verdict.reason}")
-print(f"numerics: max abs err {verdict.numerics.max_abs_err:.2e} over "
-      f"{verdict.numerics.samples_tested} samples, {verdict.numerics.failures} failed")
+print(
+    f"numerics: max abs err {verdict.numerics.max_abs_err:.2e} over "
+    f"{verdict.numerics.samples_tested} samples, {verdict.numerics.failures} failed"
+)
 
 # %% [markdown]
 # `verdict.numerics` is a `NumericsReport`. Its samples aren't all the same shape as
@@ -71,6 +74,7 @@ print("dynamic dims:", verdict.dynamic_dims)
 # translation. The exporter doesn't refuse — it emits a plain scatter with no reduction,
 # which type-checks, runs, and returns the wrong numbers. No exception anywhere in the
 # pipeline. This is exactly why numerical verification isn't optional in `downshift`.
+
 
 # %%
 class SegmentMean(nn.Module):
@@ -95,8 +99,10 @@ verdict = downshift.check(lying_model, lying_inputs)
 print(f"status:   {verdict.status}")
 print(f"backend:  {verdict.recommended_backend}")
 print(f"reason:   {verdict.reason}")
-print(f"{verdict.numerics.failures}/{verdict.numerics.samples_tested} samples wrong, "
-      f"max abs err {verdict.numerics.max_abs_err:.2f}")
+print(
+    f"{verdict.numerics.failures}/{verdict.numerics.samples_tested} samples wrong, "
+    f"max abs err {verdict.numerics.max_abs_err:.2f}"
+)
 
 # %% [markdown]
 # The export produced a real `.onnx` graph — `verdict.onnx_program` is set, and you
@@ -109,6 +115,7 @@ print(f"{verdict.numerics.failures}/{verdict.numerics.samples_tested} samples wr
 # Data-dependent control flow — branching on a value only known at runtime — is the
 # other broad hazard class. Here `torch.export` can't produce a single graph that covers
 # both branches.
+
 
 # %%
 class DataDependentBranch(nn.Module):

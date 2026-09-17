@@ -19,8 +19,16 @@ def _reload_after() -> None:
 
 def test_defaults_with_no_env_set(monkeypatch: pytest.MonkeyPatch) -> None:
     names = (
-        "HOST", "PORT", "DEVICE", "BACKEND", "WARMUP", "SAMPLES",
-        "OUTPUT_ENCODING", "MAX_INPUT_BYTES", "MAX_BODY_BYTES", "MAX_CONCURRENCY",
+        "HOST",
+        "PORT",
+        "DEVICE",
+        "BACKEND",
+        "WARMUP",
+        "SAMPLES",
+        "OUTPUT_ENCODING",
+        "MAX_INPUT_BYTES",
+        "MAX_BODY_BYTES",
+        "MAX_CONCURRENCY",
     )
     for name in names:
         monkeypatch.delenv(f"DOWNSHIFT_{name}", raising=False)

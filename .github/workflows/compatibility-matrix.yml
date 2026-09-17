@@ -29,4 +29,6 @@ jobs:
           title: "Weekly compatibility matrix refresh"
           body: "Automated run of `scripts/gen_matrix.py` against current torch / onnxruntime."
           branch: ci/compatibility-matrix
-          add-paths: docs/compatibility.md
+          add-paths: |
+            docs/compatibility.md
+            README.md

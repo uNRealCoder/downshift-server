@@ -154,7 +154,9 @@ def test_print_banner_unverified_with_prepared_backend_torch_skip():
         reason="--backend torch: export skipped",
         prepared=object(),
     )
-    state = _serving_state(verdict, backend=_StubBackend("torch"), options=ServeOptions(backend="torch"))
+    state = _serving_state(
+        verdict, backend=_StubBackend("torch"), options=ServeOptions(backend="torch")
+    )
     render.print_banner(state, "127.0.0.1", 8000)
 
 

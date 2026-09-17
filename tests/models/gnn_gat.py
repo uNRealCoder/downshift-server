@@ -12,7 +12,9 @@ from torch_geometric.nn import GATConv
 
 
 class GAT(nn.Module):
-    def __init__(self, in_channels: int = 8, hidden: int = 8, out_channels: int = 4, heads: int = 2):
+    def __init__(
+        self, in_channels: int = 8, hidden: int = 8, out_channels: int = 4, heads: int = 2
+    ):
         super().__init__()
         self.conv1 = GATConv(in_channels, hidden, heads=heads)
         self.conv2 = GATConv(hidden * heads, hidden, heads=heads)

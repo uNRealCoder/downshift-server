@@ -92,6 +92,7 @@ print("reason:", unverified.reason)
 # Going back to lesson 1's branching model: since there's no ONNX graph to save, `export`
 # writes no `.onnx` and no manifest. Check the verdict before assuming a file exists.
 
+
 # %%
 class DataDependentBranch(nn.Module):
     def __init__(self):
@@ -106,7 +107,9 @@ class DataDependentBranch(nn.Module):
 
 
 before = sorted(out_dir.iterdir())
-failed_verdict = downshift.export(DataDependentBranch().eval(), out_dir / "branch.onnx", (torch.randn(1, 8),))
+failed_verdict = downshift.export(
+    DataDependentBranch().eval(), out_dir / "branch.onnx", (torch.randn(1, 8),)
+)
 after = sorted(out_dir.iterdir())
 print("status:", failed_verdict.status)
 print("onnx_path:", failed_verdict.onnx_path)

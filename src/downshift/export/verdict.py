@@ -9,7 +9,7 @@ UNVERIFIED a .onnx handed to us with no reference model         -> serve via ORT
 import copy
 import re
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
@@ -25,18 +25,13 @@ from downshift.export.verify import NumericsReport, OnnxRuntimeError, verify
 Status = Literal["CLEAN", "DEGRADED", "FAILED", "UNVERIFIED"]
 
 
-class BackendName(str, Enum):
+class BackendName(StrEnum):
     """The concrete backends a verdict can recommend/serve; never "auto" (that's a CLI-only
     selection sentinel, not a real backend) - see engine.BackendChoice."""
 
     onnxruntime = "onnxruntime"
     torch = "torch"
 
-    def __str__(self) -> str:
-        # Python 3.11 made str(Enum)/format(Enum) print "BackendName.onnxruntime" instead of
-        # the plain value for any (str, Enum) mixin that isn't ReprEnum; banners embed this
-        # in f-strings, so pin it back to the value.
-        return self.value
 
 EXIT_CODES: dict[str, int] = {"CLEAN": 0, "FAILED": 1, "DEGRADED": 2, "UNVERIFIED": 3}
 

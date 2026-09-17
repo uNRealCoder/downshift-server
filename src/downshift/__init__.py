@@ -8,7 +8,7 @@ from downshift.export.prevalidated import intake
 from downshift.export.verdict import ExportVerdict, build_verdict, check, prepare_model
 from downshift.export.verify import NumericsReport, OnnxRuntimeError
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 
 def export(

@@ -2,8 +2,8 @@
 # # Lesson 7: the command line
 #
 # Everything in lessons 1-6 has a CLI equivalent. This lesson runs the real
-# `downshift` CLI as a subprocess against the fixture models shipped in the repo's test
-# suite, and prints exactly what it prints. Nothing here is simulated.
+# `downshift` CLI as a subprocess against the demo models shipped inside the `downshift`
+# package, and prints exactly what it prints. Nothing here is simulated.
 
 # %%
 import os
@@ -41,20 +41,20 @@ def run(*args: str) -> subprocess.CompletedProcess:
 # %% [markdown]
 # ## `check`
 #
-# Same verdict as `downshift.check()` in Python, as a table. `tests.models.clean_mlp` is
-# one of the repo's fixture modules — an import spec (`pkg.module:attr`) is one of the
-# four model forms the CLI accepts, alongside a `.onnx` path, a `weights.pt` state dict
-# with `--model-class`, and a Hugging Face repo id.
+# Same verdict as `downshift.check()` in Python, as a table. `downshift.demo.clean_mlp`
+# is one of the package's own demo modules — an import spec (`pkg.module:attr`) is one
+# of the four model forms the CLI accepts, alongside a `.onnx` path, a `weights.pt`
+# state dict with `--model-class`, and a Hugging Face repo id.
 
 # %%
-run("check", "tests.models.clean_mlp:make_model")
+run("check", "downshift.demo.clean_mlp:make_model")
 
 # %% [markdown]
 # `--json` for machine-readable output and a script-friendly exit code — this is what a
 # CI job greps.
 
 # %%
-run("check", "tests.models.scatter_include_self_false:make_model", "--json")
+run("check", "downshift.demo.scatter_include_self_false:make_model", "--json")
 
 # %% [markdown]
 # ## `export`
@@ -63,7 +63,7 @@ run("check", "tests.models.scatter_include_self_false:make_model", "--json")
 
 # %%
 export_dir = Path(tempfile.mkdtemp(prefix="downshift-cli-tutorial-"))
-run("export", "tests.models.clean_mlp:make_model", "-o", str(export_dir))
+run("export", "downshift.demo.clean_mlp:make_model", "-o", str(export_dir))
 
 # %% [markdown]
 # ## `serve`
@@ -72,7 +72,7 @@ run("export", "tests.models.clean_mlp:make_model", "-o", str(export_dir))
 # From a real shell:
 #
 # ```bash
-# downshift serve tests.models.scatter_include_self_false:make_model --port 8000
+# downshift serve downshift.demo.scatter_include_self_false:make_model --port 8000
 # ```
 #
 # prints the boot banner (lesson 1's DEGRADED verdict, formatted for a terminal) and

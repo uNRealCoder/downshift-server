@@ -7,7 +7,7 @@ import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
@@ -54,21 +54,23 @@ def _main(
     pass
 
 
-class LogLevel(str, Enum):
+class LogLevel(StrEnum):
     debug = "debug"
     info = "info"
     warning = "warning"
     error = "error"
 
 
-class LogFormat(str, Enum):
+class LogFormat(StrEnum):
     text = "text"
     json = "json"
 
 
 ModelArg = Annotated[
     str,
-    typer.Argument(metavar="MODEL", help="model.onnx | pkg.module:attr | weights.pt | org/repo | hf-repo-dir/"),
+    typer.Argument(
+        metavar="MODEL", help="model.onnx | pkg.module:attr | weights.pt | org/repo | hf-repo-dir/"
+    ),
 ]
 InputsOpt = Annotated[
     str | None,
@@ -164,9 +166,7 @@ MaxConcurrencyOpt = Annotated[
         "(ONNX Runtime's own intra-op threads still parallelise inside that one inference)",
     ),
 ]
-JsonOpt = Annotated[
-    bool, typer.Option("--json", help="Print the verdict as JSON and nothing else")
-]
+JsonOpt = Annotated[bool, typer.Option("--json", help="Print the verdict as JSON and nothing else")]
 LogLevelOpt = Annotated[LogLevel, typer.Option("--log-level")]
 LogFormatOpt = Annotated[LogFormat, typer.Option("--log-format")]
 
@@ -414,7 +414,9 @@ def serve_cmd(
     reference: ReferenceOpt = None,
     middleware: Annotated[
         list[str] | None,
-        typer.Option("--middleware", metavar="pkg.module:Attr", help="Middleware to attach; repeatable"),
+        typer.Option(
+            "--middleware", metavar="pkg.module:Attr", help="Middleware to attach; repeatable"
+        ),
     ] = None,
     inputs: InputsOpt = None,
     model_class: ModelClassOpt = None,

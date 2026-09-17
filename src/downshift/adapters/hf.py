@@ -56,7 +56,9 @@ class HFAdapter:
 
     def prepare(self, model: nn.Module, example_inputs: tuple) -> Prepared:
         input_ids, attention_mask = example_inputs
-        config = getattr(model, "config")
+        # getattr, not model.config: nn.Module's typeshed makes attribute access resolve to
+        # Tensor | Module, losing the actual PretrainedConfig type getattr(..., str) keeps as Any.
+        config = getattr(model, "config")  # noqa: B009
         # Position embeddings cap the sequence length; a looser bound trips export's guards.
         max_seq = int(getattr(config, "max_position_embeddings", 1 << 12))
         batch = torch.export.Dim("batch", min=1, max=1 << 12)

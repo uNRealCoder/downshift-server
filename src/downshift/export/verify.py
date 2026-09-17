@@ -233,8 +233,7 @@ def verify(
             except Exception as exc:  # noqa: BLE001 - reported as a verdict, not a crash
                 shapes = [tuple(t.shape) for t in sample if isinstance(t, torch.Tensor)]
                 raise OnnxRuntimeError(
-                    f"onnxruntime failed on sample {i} (input shapes {shapes}): "
-                    f"{_first_line(exc)}"
+                    f"onnxruntime failed on sample {i} (input shapes {shapes}): {_first_line(exc)}"
                 ) from exc
 
             sample_abs, sample_rel, sample_failed, note = _compare_sample(

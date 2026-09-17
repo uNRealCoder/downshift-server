@@ -91,6 +91,7 @@ print("inputs: ", [i["name"] for i in meta["backend"]["inputs"]])
 # and `/predict` still works — a client can't tell the difference except by reading
 # `/metadata`.
 
+
 # %%
 class DataDependentBranch(nn.Module):
     def __init__(self):
@@ -104,8 +105,9 @@ class DataDependentBranch(nn.Module):
         return self.neg(x)
 
 
-branch_loaded = LoadedModel(source="branch-model", model=DataDependentBranch().eval(),
-                             example_inputs=(torch.randn(1, 8),))
+branch_loaded = LoadedModel(
+    source="branch-model", model=DataDependentBranch().eval(), example_inputs=(torch.randn(1, 8),)
+)
 branch_state = prepare_serving(branch_loaded, ServeOptions(warmup=1))
 branch_client = TestClient(build_app(branch_state))
 

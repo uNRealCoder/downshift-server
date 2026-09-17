@@ -2,7 +2,7 @@
 
 import threading
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from functools import cached_property
 from pathlib import Path
 from typing import Any
@@ -18,7 +18,7 @@ from downshift.serve.schemas import OutputEncoding
 from downshift.settings import DEFAULT_MAX_BODY_BYTES, DEFAULT_MAX_INPUT_BYTES
 
 
-class BackendChoice(str, Enum):
+class BackendChoice(StrEnum):
     """What the caller asked for; "auto" defers to the verdict's recommendation."""
 
     auto = "auto"

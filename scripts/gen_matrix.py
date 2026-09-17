@@ -24,6 +24,9 @@ import downshift  # noqa: E402
 
 FIXTURES_DIR = REPO_ROOT / "tests" / "models"
 OUTPUT = REPO_ROOT / "docs" / "compatibility.md"
+README = REPO_ROOT / "README.md"
+MATRIX_START = "<!-- matrix:start -->"
+MATRIX_END = "<!-- matrix:end -->"
 K = 8
 VERSIONED = ("torch", "onnx", "onnxruntime", "torch_geometric", "transformers")
 COLUMNS = ("Model", "Hazard", "Family", "Export", "Capture", "Numerics", "Shape-general", "Backend")
@@ -33,9 +36,10 @@ LEGEND = (
     "**CLEAN** exports, matches PyTorch on every sample, and survives shapes the exporter "
     "never saw; served via ONNX Runtime. **DEGRADED** exports without error but produces "
     "numbers that differ from PyTorch beyond tolerance on at least one sample; served via "
-    "eager PyTorch unless `--force-onnx`. **FAILED** does not export at all; served via eager "
-    "PyTorch. **UNVERIFIED** is a `.onnx` file with no reference model, so numerics were never "
-    "checked; served via ONNX Runtime and labelled as such."
+    "eager PyTorch unless `--force-onnx`. **FAILED** does not export, or exports but ONNX "
+    "Runtime can't load or run the graph; served via eager PyTorch either way. **UNVERIFIED** "
+    "is a `.onnx` file with no reference model, so numerics were never checked; served via "
+    "ONNX Runtime and labelled as such."
 )
 HOW_TO_READ = (
     "CLEAN means the ONNX graph agrees with PyTorch, not that it is fast. DEGRADED means the "
@@ -120,6 +124,25 @@ def render(rows: list[Row]) -> str:
     return "\n".join(lines)
 
 
+def render_table(rows: list[Row]) -> str:
+    lines = ["| " + " | ".join(COLUMNS) + " |", "|" + "---|" * len(COLUMNS)]
+    for row in rows:
+        lines.append("| " + " | ".join((f"`{row.model}`", row.hazard, *row.cells)) + " |")
+    return "\n".join(lines)
+
+
+def update_readme(rows: list[Row]) -> None:
+    text = README.read_text(encoding="utf-8")
+    if MATRIX_START not in text or MATRIX_END not in text:
+        print(f"no {MATRIX_START}/{MATRIX_END} markers in {README}, skipping", file=sys.stderr)
+        return
+    before, rest = text.split(MATRIX_START, 1)
+    _, after = rest.split(MATRIX_END, 1)
+    new_text = f"{before}{MATRIX_START}\n{render_table(rows)}\n{MATRIX_END}{after}"
+    README.write_text(new_text, encoding="utf-8")
+    print(f"wrote {README}", file=sys.stderr)
+
+
 def main() -> int:
     rows = []
     for name in _discover():
@@ -128,6 +151,7 @@ def main() -> int:
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT.write_text(render(rows), encoding="utf-8")
     print(f"wrote {OUTPUT}", file=sys.stderr)
+    update_readme(rows)
     return 0
 
 

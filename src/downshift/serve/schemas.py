@@ -2,7 +2,7 @@
 
 import math
 import re
-from enum import Enum
+from enum import StrEnum
 from typing import Annotated, Any
 
 import numpy as np
@@ -12,7 +12,7 @@ from downshift.serve.codec import b64decode
 from downshift.settings import DEFAULT_MAX_INPUT_BYTES
 
 
-class OutputEncoding(str, Enum):
+class OutputEncoding(StrEnum):
     """How response tensors are written: nested lists, or {data, dtype, shape} base64 dicts."""
 
     json = "json"
@@ -116,7 +116,9 @@ class ReadyResponse(BaseModel):
     ready: bool
 
 
-def _from_base64(name: str, typed: TypedArray, dtype_name: str | None, max_bytes: int) -> np.ndarray:
+def _from_base64(
+    name: str, typed: TypedArray, dtype_name: str | None, max_bytes: int
+) -> np.ndarray:
     """A view over the decoded bytes: no cast, no copy. The caller's dtype wins."""
     if dtype_name is None or typed.shape is None:
         raise ValueError(
