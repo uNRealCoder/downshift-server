@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,7 @@ from downshift.export.prevalidated import intake
 from downshift.export.verdict import BackendName, ExportVerdict, build_verdict, prepare_model
 from downshift.loading import LoadedModel
 from downshift.serve.backends import Backend, OnnxRuntimeBackend, TorchBackend
+from downshift.serve.schemas import DEFAULT_MAX_INPUT_BYTES, OutputEncoding
 
 
 class BackendChoice(str, Enum):
@@ -33,6 +35,8 @@ class ServeOptions:
     dynamic: dict[str, list[int]] | None = None
     intra_op_threads: int = 0  # ORT SessionOptions; 0 = let ONNX Runtime choose
     inter_op_threads: int = 0
+    output_encoding: OutputEncoding = OutputEncoding.json  # requests may override per call
+    max_input_bytes: int = DEFAULT_MAX_INPUT_BYTES  # cap on one decoded base64 tensor input
 
 
 @dataclass
@@ -53,6 +57,11 @@ class ServingState:
     @property
     def forced_onnx(self) -> bool:
         return self.options.force_onnx and self.verdict.status == "DEGRADED"
+
+    @cached_property
+    def declared_dtypes(self) -> dict[str, str | None]:
+        """Input dtypes the backend advertises, computed once rather than per request."""
+        return {spec.name: spec.dtype for spec in self.backend.metadata().inputs}
 
 
 def _verdict_for(

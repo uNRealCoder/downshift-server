@@ -25,6 +25,7 @@ from downshift.export.verdict import ExportVerdict
 from downshift.loading import LoadedModel, LoadError, load_model
 from downshift.serve.app import build_app
 from downshift.serve.engine import BackendChoice, ServeOptions, ServingState, prepare_serving
+from downshift.serve.schemas import OutputEncoding
 
 EXIT_USAGE = 4  # bad model spec, bad option, unloadable file
 EXIT_CRASH = 5
@@ -111,6 +112,22 @@ WorkersOpt = Annotated[
         "--workers",
         min=1,
         help="Uvicorn worker processes; each independently loads/exports/warms the model",
+    ),
+]
+OutputEncodingOpt = Annotated[
+    OutputEncoding,
+    typer.Option(
+        "--output-encoding",
+        help="Default encoding of response tensors; clients override per request with "
+        "output_encoding",
+    ),
+]
+MaxInputBytesOpt = Annotated[
+    int,
+    typer.Option(
+        "--max-input-bytes",
+        min=1,
+        help="Reject base64 tensor inputs larger than this once decoded",
     ),
 ]
 JsonOpt = Annotated[
@@ -302,6 +319,8 @@ class ServeArgs:
     warmup: int
     intra_op_threads: int
     inter_op_threads: int
+    output_encoding: str
+    max_input_bytes: int
     log_level: str
     log_format: str
 
@@ -326,6 +345,8 @@ def _build_serving_app(args: ServeArgs) -> tuple[ServingState, FastAPI]:
         dynamic=parse_dynamic_spec(args.dynamic) if args.dynamic else None,
         intra_op_threads=args.intra_op_threads,
         inter_op_threads=args.inter_op_threads,
+        output_encoding=OutputEncoding(args.output_encoding),
+        max_input_bytes=args.max_input_bytes,
     )
     state = prepare_serving(loaded, opts, ref)
     api = build_app(state, tuple(args.middleware or ()))
@@ -368,6 +389,8 @@ def serve_cmd(
     dynamic: DynamicOpt = None,
     intra_op_threads: IntraOpThreadsOpt = settings.INTRA_OP_THREADS,
     inter_op_threads: InterOpThreadsOpt = settings.INTER_OP_THREADS,
+    output_encoding: OutputEncodingOpt = OutputEncoding(settings.OUTPUT_ENCODING),
+    max_input_bytes: MaxInputBytesOpt = settings.MAX_INPUT_BYTES,
     workers: WorkersOpt = settings.WORKERS,
     log_level: LogLevelOpt = LogLevel.info,
     log_format: LogFormatOpt = LogFormat.text,
@@ -391,6 +414,8 @@ def serve_cmd(
             warmup=warmup,
             intra_op_threads=intra_op_threads,
             inter_op_threads=inter_op_threads,
+            output_encoding=output_encoding.value,
+            max_input_bytes=max_input_bytes,
             log_level=log_level.value,
             log_format=log_format.value,
         )

@@ -1,20 +1,23 @@
 """FastAPI app over a ServingState. The same routes regardless of which backend is behind it."""
 
-from collections.abc import Sequence
+from collections.abc import Callable, Coroutine, Sequence
 from typing import Any
 
 import numpy as np
 import orjson
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
 
 import downshift
+from downshift.serve.codec import b64encode
 from downshift.serve.engine import ServingState
 from downshift.serve.middleware import load_middleware
 from downshift.serve.schemas import (
     GraphPredictRequest,
     HealthResponse,
     MetadataResponse,
+    OutputEncoding,
     PredictRequest,
     PredictResponse,
     ReadyResponse,
@@ -23,20 +26,7 @@ from downshift.serve.schemas import (
 
 # dtypes orjson's OPT_SERIALIZE_NUMPY writes straight from the array buffer (orjson >= 3.9).
 _ORJSON_DTYPES = frozenset(
-    {
-        "float16",
-        "float32",
-        "float64",
-        "int8",
-        "int16",
-        "int32",
-        "int64",
-        "uint8",
-        "uint16",
-        "uint32",
-        "uint64",
-        "bool",
-    }
+    "float16 float32 float64 int8 int16 int32 int64 uint8 uint16 uint32 uint64 bool".split()
 )
 
 
@@ -51,36 +41,78 @@ class NumpyJSONResponse(JSONResponse):
         return orjson.dumps(content, option=orjson.OPT_SERIALIZE_NUMPY)
 
 
-def _json_ready(arr: np.ndarray) -> np.ndarray | list:
-    """The array as orjson can write it in one pass, or a Python list for that array only.
+class _OrjsonRequest(Request):
+    async def json(self) -> Any:
+        if not hasattr(self, "_json"):
+            self._json = orjson.loads(await self.body())
+        return self._json
 
-    orjson needs a C-contiguous array of a supported dtype with at least one dimension
-    (`np.ascontiguousarray` would silently turn a 0-d array into a 1-d one).
+
+class OrjsonRoute(APIRoute):
+    """Parse request bodies with orjson: several times faster than stdlib on MiB-scale bodies.
+
+    orjson's JSONDecodeError subclasses the stdlib one, so malformed JSON still maps to 422.
     """
-    if arr.dtype.name in _ORJSON_DTYPES and arr.ndim > 0:
-        return np.ascontiguousarray(arr)
-    return arr.tolist()
+
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        handler = super().get_route_handler()
+
+        async def route_handler(request: Request) -> Response:
+            return await handler(_OrjsonRequest(request.scope, request.receive))
+
+        return route_handler
 
 
-def run_predict(state: ServingState, inputs: dict[str, Any]) -> NumpyJSONResponse:
+# The predict routes: orjson response, and PredictResponse kept in the OpenAPI schema without
+# the response_model re-validation walk over every output.
+_PREDICT_ROUTE: dict[str, Any] = {
+    "response_class": NumpyJSONResponse,
+    "responses": {200: {"model": PredictResponse}},
+}
+
+
+def _json_ready(arr: np.ndarray) -> np.ndarray | list:
+    """The contiguous array itself when orjson can write it in one pass, else a list."""
+    return arr if arr.dtype.name in _ORJSON_DTYPES and arr.ndim else arr.tolist()  # 0-d: orjson rejects
+
+
+def _base64_ready(arr: np.ndarray) -> dict[str, Any]:
+    """{data, dtype, shape}: base64 straight off the contiguous buffer."""
+    return {
+        "data": b64encode(arr).decode("ascii"),
+        "dtype": arr.dtype.name,
+        "shape": list(arr.shape),
+    }
+
+
+def run_predict(
+    state: ServingState, inputs: dict[str, Any], encoding: OutputEncoding | None
+) -> NumpyJSONResponse:
     """Validate, convert, infer. Raises HTTPException(400) for anything the client got wrong."""
     missing = [n for n in state.input_names if n not in inputs]
     if missing:
         raise HTTPException(400, f"missing inputs: {missing}")
 
-    declared = {spec.name: spec.dtype for spec in state.backend.metadata().inputs}
+    declared = state.declared_dtypes
+    max_bytes = state.options.max_input_bytes
     try:
-        feeds = {n: to_numpy(n, inputs[n], declared.get(n)) for n in state.input_names}
+        feeds = {
+            n: to_numpy(n, inputs[n], declared.get(n), max_bytes=max_bytes)
+            for n in state.input_names
+        }
         outputs = state.backend.infer(feeds)
     except HTTPException:
         raise
     except Exception as exc:  # shape/dtype errors from ORT or torch are the client's problem
         raise HTTPException(400, str(exc)) from exc
 
-    arrays = {name: np.asarray(arr) for name, arr in outputs.items()}
+    encoding = encoding or state.options.output_encoding
+    encode = _base64_ready if encoding == OutputEncoding.base64 else _json_ready
+    # C-contiguous once, up front (np.require keeps 0-d arrays 0-d; ascontiguousarray does not).
+    arrays = {name: np.require(arr, requirements="C") for name, arr in outputs.items()}
     # Same keys as PredictResponse; built by hand so orjson serializes the buffers directly.
     body = {
-        "outputs": {name: _json_ready(arr) for name, arr in arrays.items()},
+        "outputs": {name: encode(arr) for name, arr in arrays.items()},
         "shapes": {name: list(arr.shape) for name, arr in arrays.items()},
         "dtypes": {name: arr.dtype.name for name, arr in arrays.items()},
     }
@@ -89,6 +121,7 @@ def run_predict(state: ServingState, inputs: dict[str, Any]) -> NumpyJSONRespons
 
 def build_app(state: ServingState, middleware: Sequence[str] = ()) -> FastAPI:
     app = FastAPI(title="downshift", version=downshift.__version__)
+    app.router.route_class = OrjsonRoute
     app.state.serving = state
     load_middleware(app, middleware)
 
@@ -113,21 +146,11 @@ def build_app(state: ServingState, middleware: Sequence[str] = ()) -> FastAPI:
             version=downshift.__version__,
         )
 
-    # No response_model: that would re-validate and re-walk the outputs. `responses` keeps
-    # PredictResponse in the OpenAPI schema.
-    @app.post(
-        "/predict",
-        response_class=NumpyJSONResponse,
-        responses={200: {"model": PredictResponse}},
-    )
+    @app.post("/predict", **_PREDICT_ROUTE)
     def predict(req: PredictRequest) -> NumpyJSONResponse:
-        return run_predict(state, req.inputs)
+        return run_predict(state, req.inputs, req.output_encoding)
 
-    @app.post(
-        "/predict/graph",
-        response_class=NumpyJSONResponse,
-        responses={200: {"model": PredictResponse}},
-    )
+    @app.post("/predict/graph", **_PREDICT_ROUTE)
     def predict_graph(req: GraphPredictRequest) -> NumpyJSONResponse:
         if not {"x", "edge_index"} <= set(state.input_names):
             raise HTTPException(
@@ -135,12 +158,11 @@ def build_app(state: ServingState, middleware: Sequence[str] = ()) -> FastAPI:
                 f"model is not graph-shaped: inputs are {list(state.input_names)}, "
                 "expected at least 'x' and 'edge_index'",
             )
-        inputs: dict[str, Any] = {
-            "x": req.x,
-            "edge_index": {"data": req.edge_index, "dtype": "int64"},
-        }
+        # No dtype hints needed: to_numpy takes the backend's declared dtype (int64 for
+        # edge_index on both backends), and integer lists default to int64 anyway.
+        inputs: dict[str, Any] = {"x": req.x, "edge_index": req.edge_index}
         if req.edge_attr is not None:
             inputs["edge_attr"] = req.edge_attr
-        return run_predict(state, inputs)
+        return run_predict(state, inputs, req.output_encoding)
 
     return app

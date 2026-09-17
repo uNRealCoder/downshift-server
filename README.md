@@ -28,6 +28,7 @@ This graph exported without a single error and produces wrong numbers on 7 of 8 
 pip install downshift-server            # core: any nn.Module, any .onnx
 pip install "downshift-server[gnn]"     # + PyTorch Geometric adapter
 pip install "downshift-server[hf]"      # + Hugging Face encoder adapter
+pip install "downshift-server[fast]"    # + pybase64, ~12x faster binary tensor I/O
 pip install "downshift-server[all]"
 ```
 
@@ -102,7 +103,39 @@ curl -s localhost:8000/predict -H 'content-type: application/json' \
  "dtypes": {"output_0": "float32"}}
 ```
 
-Integer lists become `int64`, everything else `float32`. To be explicit, pass `{"data": [...], "dtype": "float16", "shape": [1, 16]}` instead of a bare list. For graph models:
+Integer lists become `int64`, everything else `float32`. To be explicit, pass `{"data": [...], "dtype": "float16", "shape": [1, 16]}` instead of a bare list.
+
+**Binary tensors.** The same `{"data", "dtype", "shape"}` form also takes a base64 string in `data`: the raw little-endian, C-contiguous bytes of the array, standard alphabet, with padding. Detection is by type, a string is base64 and a list is the JSON path above, so existing clients keep working. Any input on `/predict` accepts it, as do `x`, `edge_index` and `edge_attr` on `/predict/graph`. Outputs stay JSON unless asked: `"output_encoding": "base64"` next to `inputs` (or next to `x` on `/predict/graph`) turns each `outputs[name]` into the same `{"data", "dtype", "shape"}` dict, and `shapes` and `dtypes` stay populated either way. A client needs only the standard library and numpy:
+
+```python
+import base64, json, urllib.request
+import numpy as np
+
+def encode(a):
+    a = np.ascontiguousarray(a)
+    return {"data": base64.b64encode(a.tobytes()).decode(), "dtype": str(a.dtype), "shape": list(a.shape)}
+
+def decode(o):
+    return np.frombuffer(base64.b64decode(o["data"]), dtype=o["dtype"]).reshape(o["shape"])
+
+x = np.random.rand(32, 3, 64, 64).astype(np.float32)
+body = json.dumps({"inputs": {"x": encode(x)}, "output_encoding": "base64"}).encode()
+req = urllib.request.Request("http://localhost:8000/predict", body, {"content-type": "application/json"})
+y = decode(json.load(urllib.request.urlopen(req))["outputs"]["output_0"])
+```
+
+`downshift serve --output-encoding base64` (or `DOWNSHIFT_OUTPUT_ENCODING=base64`) makes base64 the default for every response without clients changing their requests; a per-request `output_encoding` still wins. The banner's `Encoding` row shows which default is in effect. Base64 input is validated, and each failure is a `400`:
+
+- `dtype` and `shape` are mandatory. Shape is not inferable from bytes.
+- The decoded length must equal `prod(shape) * itemsize`. The error says what was expected and what arrived.
+- Little-endian only. Big-endian dtype strings such as `>f4` are rejected.
+- The decoded size is capped by `--max-input-bytes` / `DOWNSHIFT_MAX_INPUT_BYTES` (default 256 MiB).
+
+Install `downshift-server[fast]` to get `pybase64`, a SIMD base64 codec about 12x faster than the standard library's on both directions. Without it the server works the same; the banner prints a tip. Request bodies on every route are parsed with `orjson`, which is several times faster than the standard library on MiB-scale bodies, so clients that keep sending nested lists get a smaller win for free.
+
+Do not expect this to help on small payloads: under roughly 100 KiB the JSON codec is not where the time goes, and base64 gains nothing. The win is on wide inputs and outputs. The in-process estimates from the benchmark corpus, not yet measured over HTTP, are around 5x on p50 for `cnn_large`-class inputs (a `32×3×64×64` float32 batch) and around 3.5x for `bert_small`-class outputs (hidden states). Treat those as expectations until the benchmark re-run replaces them.
+
+For graph models:
 
 ```bash
 curl -s localhost:8000/predict/graph -H 'content-type: application/json' \
@@ -120,6 +153,8 @@ Options that change what gets served:
 - `--force-onnx` serves a DEGRADED graph through ONNX Runtime anyway. The banner says so in red.
 - `--reference model` verifies a pre-built `.onnx` against a PyTorch model; without it the verdict is UNVERIFIED.
 - `--middleware pkg.module:Attr` (repeatable) attaches a `BaseHTTPMiddleware` subclass or an `async (request, call_next)` function. No middleware means no overhead.
+- `--output-encoding json|base64` (env `DOWNSHIFT_OUTPUT_ENCODING`, default `json`) sets the response encoding for requests that do not send their own `output_encoding`.
+- `--max-input-bytes N` (env `DOWNSHIFT_MAX_INPUT_BYTES`, default 256 MiB) caps the decoded size of one base64 input; larger is a `400`.
 - `--device auto|cpu|cuda`, `--warmup N` (inferences before `/ready` flips), `--host`, `--port`, `--log-level`, `--log-format json`.
 
 ## Accepted model forms
@@ -173,6 +208,13 @@ Two rows worth reading twice. `custom_autograd` was expected to fail and is CLEA
 - **No DGL adapter yet.** PyG only.
 
 **vs. anydeploy.** `anydeploy` also does export, validate, and serve, with a pass/fail validation step and an edge/mobile focus. downshift differs in three places: the verdict is tiered, with DEGRADED as a real middle state between "works" and "crashes"; the eager PyTorch fallback sits behind the same endpoint so a FAILED or DEGRADED model still serves; and GNNs (PyTorch Geometric) are a supported family with independent node and edge dynamic dims.
+
+## Behaviour changes in 0.3
+
+Responses from `/predict` and `/predict/graph` are now serialized by orjson straight from the numpy buffers. The API is unchanged; two things on the wire are not:
+
+- `NaN` and `Inf` outputs serialize as `null`, which is valid JSON, instead of the `NaN`/`Infinity` tokens the stdlib encoder emitted. A client that parsed those tokens must handle `null`.
+- float32 values print with the shortest decimal that round-trips as float32 (`0.1`, not `0.10000000149011612`). Cast back to float32 and the values are bit-identical to before.
 
 ## Writing your own adapter
 

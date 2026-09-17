@@ -148,8 +148,10 @@ class TorchBackend:
         missing = [n for n in self.input_names if n not in inputs]
         if missing:
             raise KeyError(f"missing inputs: {missing}")
+        # torch.from_numpy needs a C-contiguous, writable array. np.require copies only when
+        # one of those is missing (base64 inputs arrive as read-only frombuffer views).
         args = [
-            torch.from_numpy(np.ascontiguousarray(inputs[n])).to(self.device)
+            torch.from_numpy(np.require(inputs[n], requirements=["C", "W"])).to(self.device)
             for n in self.input_names
         ]
         with torch.inference_mode():

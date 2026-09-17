@@ -4,9 +4,11 @@ Export and verification are the slow part of the suite, so anything more than on
 needs is built once per session.
 """
 
+import base64
 from collections.abc import Callable
 from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 
@@ -14,6 +16,23 @@ import downshift
 from downshift.loading import load_model
 from downshift.serve.engine import ServeOptions, ServingState, prepare_serving
 from tests.models import clean_mlp
+
+
+def b64_input(arr: np.ndarray, **overrides) -> dict:
+    """The base64 TypedArray form of `arr`; overrides drop (None) or replace fields."""
+    payload = {
+        "data": base64.b64encode(np.ascontiguousarray(arr)).decode("ascii"),
+        "dtype": arr.dtype.name,
+        "shape": list(arr.shape),
+    }
+    payload.update(overrides)
+    return {k: v for k, v in payload.items() if v is not None}
+
+
+def b64_output(entry: dict) -> np.ndarray:
+    """Decode one base64-encoded response tensor back to an ndarray."""
+    raw = base64.b64decode(entry["data"], validate=True)
+    return np.frombuffer(raw, dtype=entry["dtype"]).reshape(entry["shape"])
 
 
 @pytest.fixture(scope="session")

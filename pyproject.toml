@@ -51,8 +51,11 @@ gnn = [
 hf = [
     "transformers>=4.40",
 ]
+fast = [
+    "pybase64>=1.4",  # SIMD base64 for binary tensor I/O; stdlib is used when absent
+]
 all = [
-    "downshift-server[gnn,hf]",
+    "downshift-server[gnn,hf,fast]",
 ]
 
 [project.scripts]

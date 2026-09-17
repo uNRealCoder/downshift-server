@@ -11,6 +11,8 @@ from typing import TypeVar
 
 import torch
 
+from downshift.serve.schemas import DEFAULT_MAX_INPUT_BYTES
+
 T = TypeVar("T")
 
 
@@ -46,6 +48,13 @@ SAMPLES = _env_int("DOWNSHIFT_SAMPLES", 8)
 # 0 means "let ONNX Runtime pick" (its own default: physical cores for intra-op, 1 for inter-op).
 INTRA_OP_THREADS = _env_int("DOWNSHIFT_INTRA_OP_THREADS", 0)
 INTER_OP_THREADS = _env_int("DOWNSHIFT_INTER_OP_THREADS", 0)
+
+# Default encoding of response tensors ("json" lists or "base64" buffers); a request's
+# output_encoding field overrides it.
+OUTPUT_ENCODING = _env_str("DOWNSHIFT_OUTPUT_ENCODING", "json")
+
+# Largest decoded size accepted for one base64 tensor input; bigger ones get a 400.
+MAX_INPUT_BYTES = _env_int("DOWNSHIFT_MAX_INPUT_BYTES", DEFAULT_MAX_INPUT_BYTES)
 
 # >1 spawns that many uvicorn worker processes, each independently loading/exporting/warming
 # the model, so memory and startup time scale with this number.

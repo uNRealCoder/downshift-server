@@ -1,6 +1,7 @@
 """HTTP contract tests. Each state is exported once per module; export is the slow part."""
 
 import dataclasses
+import warnings
 
 import numpy as np
 import pytest
@@ -12,14 +13,38 @@ from downshift.loading import LoadedModel, load_model
 from downshift.serve import app as serve_app
 from downshift.serve.app import build_app
 from downshift.serve.engine import ServeOptions, prepare_serving
+from downshift.serve.schemas import OutputEncoding
+from tests.conftest import b64_input, b64_output
 
 MLP_INPUT = {"inputs": {"x": [[0.0] * 16]}}
 
 
-def _client_emitting(state, monkeypatch, output: np.ndarray) -> TestClient:
-    """A client whose backend returns `output` (as output_0) whatever the input."""
-    monkeypatch.setattr(state.backend, "infer", lambda inputs: {"output_0": output})
+def _client_emitting(state, monkeypatch, outputs: dict) -> TestClient:
+    """A client whose backend returns `outputs` whatever the input."""
+    monkeypatch.setattr(state.backend, "infer", lambda inputs: outputs)
     return TestClient(build_app(state))
+
+
+def _assert_same_outputs(client: TestClient, path: str, reference_body: dict, body: dict) -> dict:
+    """POST both bodies; `reference_body` must answer with JSON lists, `body` may answer base64.
+
+    Asserts both succeed with the same output_0 and returns `body`'s response JSON.
+    """
+    reference = client.post(path, json=reference_body)
+    resp = client.post(path, json=body)
+    assert reference.status_code == 200, reference.text
+    assert resp.status_code == 200, resp.text
+    expected = reference.json()["outputs"]["output_0"]
+    assert isinstance(expected, list)
+    actual = resp.json()["outputs"]["output_0"]
+    if isinstance(actual, dict):
+        actual = b64_output(actual)
+    np.testing.assert_allclose(actual, expected)
+    return resp.json()
+
+
+def _with_options(state, **overrides):
+    return dataclasses.replace(state, options=dataclasses.replace(state.options, **overrides))
 
 
 @pytest.fixture(scope="module")
@@ -70,6 +95,15 @@ def test_predict_missing_input(mlp_client):
     assert "x" in resp.json()["detail"]
 
 
+def test_predict_malformed_json_body_is_422(mlp_client):
+    # Bodies are parsed by orjson (OrjsonRoute); its decode error must still map to FastAPI's 422.
+    resp = mlp_client.post(
+        "/predict", content=b'{"inputs": ', headers={"content-type": "application/json"}
+    )
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"][0]["msg"] == "JSON decode error"
+
+
 def test_predict_wrong_feature_size(mlp_client):
     resp = mlp_client.post("/predict", json={"inputs": {"x": [[0.0] * 5]}})
     assert resp.status_code == 400
@@ -81,6 +115,146 @@ def test_predict_typed_input(mlp_client):
     resp = mlp_client.post("/predict", json={"inputs": {"x": payload}})
     assert resp.status_code == 200, resp.text
     assert resp.json()["shapes"]["output_0"] == [2, 4]
+
+
+def test_predict_base64_input_matches_json_input(mlp_client):
+    x = np.random.randn(3, 16).astype(np.float32)
+    body = _assert_same_outputs(
+        mlp_client, "/predict", {"inputs": {"x": x.tolist()}}, {"inputs": {"x": b64_input(x)}}
+    )
+    assert body["shapes"]["output_0"] == [3, 4]
+
+
+def test_predict_base64_input_on_torch_backend_does_not_warn(serve_fixture):
+    # np.frombuffer views are read-only; torch.from_numpy warns on those unless the backend
+    # copies. Warnings are errors here so a regression fails instead of logging.
+    client = TestClient(build_app(serve_fixture("clean_mlp", backend="torch")))
+    x = np.random.randn(2, 16).astype(np.float32)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _assert_same_outputs(
+            client, "/predict", {"inputs": {"x": x.tolist()}}, {"inputs": {"x": b64_input(x)}}
+        )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_detail"),
+    [
+        ({"shape": None}, "needs dtype and shape"),
+        ({"dtype": None}, "needs dtype and shape"),
+        ({"shape": [2, 16]}, "expected 128 bytes"),
+        ({"data": "not*base64"}, "invalid base64"),
+        ({"data": "AAAA"}, "got 3"),
+        ({"dtype": ">f4"}, "little-endian"),
+        ({"dtype": "not-a-real-dtype"}, "unknown dtype"),
+        ({"shape": [-1, 16]}, "negative dimension"),
+    ],
+)
+def test_predict_base64_input_client_errors(mlp_client, overrides, expected_detail):
+    x = np.zeros((3, 16), dtype=np.float32)
+    resp = mlp_client.post("/predict", json={"inputs": {"x": b64_input(x, **overrides)}})
+    assert resp.status_code == 400, resp.text
+    detail = resp.json()["detail"]
+    assert "'x'" in detail
+    assert expected_detail in detail
+
+
+def test_predict_base64_input_over_size_cap(mlp_state):
+    client = TestClient(build_app(_with_options(mlp_state, max_input_bytes=64)))
+    x = np.zeros((3, 16), dtype=np.float32)  # 192 bytes
+    resp = client.post("/predict", json={"inputs": {"x": b64_input(x)}})
+    assert resp.status_code == 400, resp.text
+    detail = resp.json()["detail"]
+    assert "'x'" in detail
+    assert "192 bytes exceeds the server limit of 64 bytes" in detail
+
+    # Just under the cap is fine.
+    small = np.zeros((1, 16), dtype=np.float32)  # 64 bytes
+    resp = client.post("/predict", json={"inputs": {"x": b64_input(small)}})
+    assert resp.status_code == 200, resp.text
+
+
+def test_predict_output_encoding_base64_per_request(mlp_client):
+    request = {"inputs": {"x": np.random.randn(3, 16).tolist()}}
+    body = _assert_same_outputs(
+        mlp_client, "/predict", request, request | {"output_encoding": "base64"}
+    )
+    entry = body["outputs"]["output_0"]
+    assert set(entry) == {"data", "dtype", "shape"}
+    assert entry["dtype"] == "float32"
+    assert entry["shape"] == [3, 4]
+    assert body["shapes"]["output_0"] == [3, 4]
+    assert body["dtypes"]["output_0"] == "float32"
+
+
+def test_predict_graph_output_encoding_base64(gcn_client):
+    request = {
+        "x": np.random.randn(5, 8).tolist(),
+        "edge_index": [[0, 1, 2, 3, 4, 0, 2], [1, 2, 3, 4, 0, 3, 4]],
+    }
+    body = _assert_same_outputs(
+        gcn_client, "/predict/graph", request, request | {"output_encoding": "base64"}
+    )
+    assert body["outputs"]["output_0"]["shape"] == [5, 4]
+
+
+def test_predict_graph_base64_inputs(gcn_client):
+    x = np.random.randn(5, 8).astype(np.float32)
+    edge_index = np.array([[0, 1, 2, 3, 4, 0, 2], [1, 2, 3, 4, 0, 3, 4]], dtype=np.int64)
+    edge_attr = np.full((7, 1), 0.1, dtype=np.float32)
+    body = _assert_same_outputs(
+        gcn_client,
+        "/predict/graph",
+        {"x": x.tolist(), "edge_index": edge_index.tolist(), "edge_attr": edge_attr.tolist()},
+        {
+            "x": b64_input(x),
+            "edge_index": b64_input(edge_index),
+            "edge_attr": b64_input(edge_attr),
+            "output_encoding": "base64",
+        },
+    )
+    assert body["outputs"]["output_0"]["shape"] == [5, 4]
+
+
+def test_predict_server_default_base64_and_per_request_json_override(mlp_state):
+    client = TestClient(build_app(_with_options(mlp_state, output_encoding=OutputEncoding.base64)))
+    request = {"inputs": {"x": np.random.randn(2, 16).tolist()}}
+    # The per-request "json" override is the reference (the helper asserts it answers lists);
+    # the plain request must fall back to the server default and answer base64.
+    body = _assert_same_outputs(client, "/predict", request | {"output_encoding": "json"}, request)
+    entry = body["outputs"]["output_0"]
+    assert isinstance(entry, dict) and entry["shape"] == [2, 4]
+
+
+def test_predict_base64_output_of_non_contiguous_and_scalar_arrays(mlp_state, monkeypatch):
+    strided = np.arange(16, dtype=np.float32).reshape(4, 4)[:, ::2]
+    scalar = np.asarray(2.5, dtype=np.float16)
+    client = _client_emitting(mlp_state, monkeypatch, {"a": strided, "b": scalar})
+    resp = client.post("/predict", json=MLP_INPUT | {"output_encoding": "base64"})
+    assert resp.status_code == 200, resp.text
+    outputs = resp.json()["outputs"]
+    np.testing.assert_array_equal(b64_output(outputs["a"]), strided)
+    assert outputs["b"]["shape"] == []
+    assert outputs["b"]["dtype"] == "float16"
+    assert b64_output(outputs["b"]) == np.float16(2.5)
+
+
+def test_predict_rejects_unknown_output_encoding(mlp_client):
+    resp = mlp_client.post("/predict", json=MLP_INPUT | {"output_encoding": "hex"})
+    assert resp.status_code == 422
+    assert "output_encoding" in resp.text
+
+
+def test_openapi_documents_predict_contract(mlp_client):
+    schema = mlp_client.get("/openapi.json").json()
+    assert "PredictResponse" in schema["components"]["schemas"]
+    for path in ("/predict", "/predict/graph"):
+        ok = schema["paths"][path]["post"]["responses"]["200"]
+        assert ok["content"]["application/json"]["schema"]["$ref"].endswith("/PredictResponse")
+    for model in ("PredictRequest", "GraphPredictRequest"):
+        prop = schema["components"]["schemas"][model]["properties"]["output_encoding"]
+        assert "base64" in prop["description"]
 
 
 def test_predict_graph(gcn_client):
@@ -122,43 +296,31 @@ def test_predict_reraises_http_exception_raised_by_the_backend(mlp_state, monkey
 def test_predict_nan_and_inf_become_null(mlp_state, monkeypatch):
     # Deliberate wire behaviour: valid JSON (null), not stdlib's NaN/Infinity extension.
     output = np.array([[np.nan, np.inf, 1.0]], dtype=np.float32)
-    resp = _client_emitting(mlp_state, monkeypatch, output).post("/predict", json=MLP_INPUT)
+    client = _client_emitting(mlp_state, monkeypatch, {"output_0": output})
+    resp = client.post("/predict", json=MLP_INPUT)
     assert resp.status_code == 200, resp.text
     assert "null" in resp.text
     assert "NaN" not in resp.text and "Infinity" not in resp.text
     assert resp.json()["outputs"]["output_0"] == [[None, None, 1.0]]
 
 
-def test_predict_float16_output_serializes(mlp_state, monkeypatch):
-    output = np.array([[0.1, 1.5, -2.25], [65504.0, 3.14159, 0.0]], dtype=np.float16)
-    resp = _client_emitting(mlp_state, monkeypatch, output).post("/predict", json=MLP_INPUT)
+@pytest.mark.parametrize(
+    "output",
+    [
+        np.array([[0.1, 1.5, -2.25], [65504.0, 3.14159, 0.0]], dtype=np.float16),
+        np.arange(16, dtype=np.float32).reshape(4, 4)[:, ::2],  # strided view: contiguity copy
+        np.asarray(2.5, dtype=np.float32),  # 0-d: orjson rejects it, so the tolist() fallback
+    ],
+    ids=["float16", "non_contiguous", "scalar"],
+)
+def test_predict_output_serializes(mlp_state, monkeypatch, output):
+    client = _client_emitting(mlp_state, monkeypatch, {"output_0": output})
+    resp = client.post("/predict", json=MLP_INPUT)
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["dtypes"]["output_0"] == "float16"
-    assert body["shapes"]["output_0"] == [2, 3]
-    np.testing.assert_allclose(body["outputs"]["output_0"], output.astype(np.float32), rtol=1e-3)
-
-
-def test_predict_non_contiguous_output_serializes(mlp_state, monkeypatch):
-    output = np.arange(16, dtype=np.float32).reshape(4, 4)[:, ::2]  # strided view
-    assert not output.flags.c_contiguous
-    resp = _client_emitting(mlp_state, monkeypatch, output).post("/predict", json=MLP_INPUT)
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["shapes"]["output_0"] == [4, 2]
-    assert body["outputs"]["output_0"] == output.tolist()
-
-
-def test_predict_scalar_output_serializes(mlp_state, monkeypatch):
-    # 0-d arrays take the tolist() fallback: orjson rejects them and ascontiguousarray
-    # would silently promote them to shape (1,).
-    output = np.asarray(2.5, dtype=np.float32)
-    resp = _client_emitting(mlp_state, monkeypatch, output).post("/predict", json=MLP_INPUT)
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["outputs"]["output_0"] == 2.5
-    assert body["shapes"]["output_0"] == []
-    assert body["dtypes"]["output_0"] == "float32"
+    assert body["shapes"]["output_0"] == list(output.shape)
+    assert body["dtypes"]["output_0"] == output.dtype.name
+    np.testing.assert_allclose(body["outputs"]["output_0"], output.tolist(), rtol=1e-3)
 
 
 def test_predict_unsupported_dtype_falls_back_per_array(mlp_state, monkeypatch):
@@ -167,22 +329,12 @@ def test_predict_unsupported_dtype_falls_back_per_array(mlp_state, monkeypatch):
     monkeypatch.setattr(serve_app, "_ORJSON_DTYPES", serve_app._ORJSON_DTYPES - {"float32"})
     fallback = np.array([[1.0, 2.0]], dtype=np.float32)
     native = np.array([[3, 4]], dtype=np.int64)
-    monkeypatch.setattr(
-        mlp_state.backend, "infer", lambda inputs: {"a": fallback, "b": native}
-    )
-    resp = TestClient(build_app(mlp_state)).post("/predict", json=MLP_INPUT)
+    client = _client_emitting(mlp_state, monkeypatch, {"a": fallback, "b": native})
+    resp = client.post("/predict", json=MLP_INPUT)
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["outputs"] == {"a": [[1.0, 2.0]], "b": [[3, 4]]}
     assert body["dtypes"] == {"a": "float32", "b": "int64"}
-
-
-def test_openapi_still_documents_predict_response(mlp_client):
-    schema = mlp_client.get("/openapi.json").json()
-    assert "PredictResponse" in schema["components"]["schemas"]
-    for path in ("/predict", "/predict/graph"):
-        ok = schema["paths"][path]["post"]["responses"]["200"]
-        assert ok["content"]["application/json"]["schema"]["$ref"].endswith("/PredictResponse")
 
 
 def test_backends_agree_on_same_contract():
