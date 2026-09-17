@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
+import orjson
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
@@ -20,8 +21,48 @@ from downshift.serve.schemas import (
     to_numpy,
 )
 
+# dtypes orjson's OPT_SERIALIZE_NUMPY writes straight from the array buffer (orjson >= 3.9).
+_ORJSON_DTYPES = frozenset(
+    {
+        "float16",
+        "float32",
+        "float64",
+        "int8",
+        "int16",
+        "int32",
+        "int64",
+        "uint8",
+        "uint16",
+        "uint32",
+        "uint64",
+        "bool",
+    }
+)
 
-def run_predict(state: ServingState, inputs: dict[str, Any]) -> PredictResponse:
+
+class NumpyJSONResponse(JSONResponse):
+    """orjson with OPT_SERIALIZE_NUMPY: arrays are written from their buffers; NaN/Inf become null.
+
+    Not built on fastapi's ORJSONResponse: older versions lack the numpy flag, newer ones
+    deprecate the class and warn at import.
+    """
+
+    def render(self, content: Any) -> bytes:
+        return orjson.dumps(content, option=orjson.OPT_SERIALIZE_NUMPY)
+
+
+def _json_ready(arr: np.ndarray) -> np.ndarray | list:
+    """The array as orjson can write it in one pass, or a Python list for that array only.
+
+    orjson needs a C-contiguous array of a supported dtype with at least one dimension
+    (`np.ascontiguousarray` would silently turn a 0-d array into a 1-d one).
+    """
+    if arr.dtype.name in _ORJSON_DTYPES and arr.ndim > 0:
+        return np.ascontiguousarray(arr)
+    return arr.tolist()
+
+
+def run_predict(state: ServingState, inputs: dict[str, Any]) -> NumpyJSONResponse:
     """Validate, convert, infer. Raises HTTPException(400) for anything the client got wrong."""
     missing = [n for n in state.input_names if n not in inputs]
     if missing:
@@ -37,11 +78,13 @@ def run_predict(state: ServingState, inputs: dict[str, Any]) -> PredictResponse:
         raise HTTPException(400, str(exc)) from exc
 
     arrays = {name: np.asarray(arr) for name, arr in outputs.items()}
-    return PredictResponse(
-        outputs={name: arr.tolist() for name, arr in arrays.items()},
-        shapes={name: list(arr.shape) for name, arr in arrays.items()},
-        dtypes={name: arr.dtype.name for name, arr in arrays.items()},
-    )
+    # Same keys as PredictResponse; built by hand so orjson serializes the buffers directly.
+    body = {
+        "outputs": {name: _json_ready(arr) for name, arr in arrays.items()},
+        "shapes": {name: list(arr.shape) for name, arr in arrays.items()},
+        "dtypes": {name: arr.dtype.name for name, arr in arrays.items()},
+    }
+    return NumpyJSONResponse(body)
 
 
 def build_app(state: ServingState, middleware: Sequence[str] = ()) -> FastAPI:
@@ -70,12 +113,22 @@ def build_app(state: ServingState, middleware: Sequence[str] = ()) -> FastAPI:
             version=downshift.__version__,
         )
 
-    @app.post("/predict", response_model=PredictResponse)
-    def predict(req: PredictRequest) -> PredictResponse:
+    # No response_model: that would re-validate and re-walk the outputs. `responses` keeps
+    # PredictResponse in the OpenAPI schema.
+    @app.post(
+        "/predict",
+        response_class=NumpyJSONResponse,
+        responses={200: {"model": PredictResponse}},
+    )
+    def predict(req: PredictRequest) -> NumpyJSONResponse:
         return run_predict(state, req.inputs)
 
-    @app.post("/predict/graph", response_model=PredictResponse)
-    def predict_graph(req: GraphPredictRequest) -> PredictResponse:
+    @app.post(
+        "/predict/graph",
+        response_class=NumpyJSONResponse,
+        responses={200: {"model": PredictResponse}},
+    )
+    def predict_graph(req: GraphPredictRequest) -> NumpyJSONResponse:
         if not {"x", "edge_index"} <= set(state.input_names):
             raise HTTPException(
                 400,
