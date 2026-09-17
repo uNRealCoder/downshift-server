@@ -8,6 +8,7 @@ import pytest
 import torch
 
 from tests.models import (
+    bf16_weights,
     clean_mlp,
     custom_autograd,
     data_dependent_branch,
@@ -27,6 +28,7 @@ FIXTURE_MODULES = [
     dict_input,
     dropout_model,
     scatter_include_self_false,
+    bf16_weights,
 ]
 
 

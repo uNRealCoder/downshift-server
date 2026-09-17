@@ -11,14 +11,30 @@ draft_export step or TorchScript fallback any more.
 import contextlib
 import io
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 import torch
 
 _STRATEGIES: tuple[tuple[str, bool], ...] = (("strict=False", False), ("strict=True", True))
 
-# torch.onnx logs a warning per missing torchvision op on every export. Not actionable.
-logging.getLogger("torch.onnx._internal.exporter._registration").setLevel(logging.ERROR)
+_REGISTRATION_LOGGER = "torch.onnx._internal.exporter._registration"
+
+
+@contextlib.contextmanager
+def _quiet_registration_warnings() -> Iterator[None]:
+    """torch.onnx logs a warning per missing torchvision op on every export. Not actionable.
+
+    Scoped to one capture() call rather than set at import time - a library shouldn't
+    change another package's logging configuration just by being imported.
+    """
+    logger = logging.getLogger(_REGISTRATION_LOGGER)
+    previous = logger.level
+    logger.setLevel(logging.ERROR)
+    try:
+        yield
+    finally:
+        logger.setLevel(previous)
 
 
 @dataclass
@@ -44,7 +60,7 @@ def capture(
     # Keep that out of the user's terminal; the exception message is what matters.
     captured = io.StringIO()
 
-    with contextlib.redirect_stderr(captured):
+    with contextlib.redirect_stderr(captured), _quiet_registration_warnings():
         for name, strict in _STRATEGIES:
             try:
                 exported_program = torch.export.export(

@@ -6,7 +6,7 @@ from downshift.adapters.base import Adapter, Prepared
 from downshift.export.manifest import write_manifest
 from downshift.export.prevalidated import intake
 from downshift.export.verdict import ExportVerdict, build_verdict, check, prepare_model
-from downshift.export.verify import NumericsReport
+from downshift.export.verify import NumericsReport, OnnxRuntimeError
 
 __version__ = "0.2.0"
 
@@ -50,6 +50,7 @@ __all__ = [
     "Adapter",
     "ExportVerdict",
     "NumericsReport",
+    "OnnxRuntimeError",
     "Prepared",
     "build_verdict",
     "check",
