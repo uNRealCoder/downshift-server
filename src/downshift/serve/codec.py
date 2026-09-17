@@ -15,7 +15,8 @@ try:
     b64encode: Callable[..., bytes] = pybase64.b64encode
 
     def b64decode(data: str | bytes) -> bytearray:
-        return pybase64.b64decode_as_bytearray(data, validate=True)
+        out: bytearray = pybase64.b64decode_as_bytearray(data, validate=True)
+        return out
 
 except ImportError:  # pragma: no cover - exercised only where pybase64 is absent
     import base64
