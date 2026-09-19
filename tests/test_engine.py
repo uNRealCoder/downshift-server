@@ -13,7 +13,13 @@ from downshift.core.verdict import ExportVerdict, prepare_model
 from downshift.loading import LoadedModel, load_model
 from downshift.serve import backends as backends_mod
 from downshift.serve.backends import InferenceInputError, OnnxRuntimeBackend, TorchBackend
-from downshift.serve.engine import ServeOptions, choose_backend, prepare_serving
+from downshift.serve.engine import (
+    ServeOptions,
+    WarmupStats,
+    choose_backend,
+    prepare_serving,
+    synthesize_feeds,
+)
 from tests.models import clean_mlp
 
 
@@ -95,6 +101,43 @@ def test_onnx_file_without_reference_is_served_unverified(exported_mlp):
     assert state.ready is True
     out = state.backend.infer({"x": np.random.randn(2, 16).astype(np.float32)})
     assert out["output_0"].shape == (2, 4)
+
+
+def test_synthesize_feeds_fills_dynamic_axes_with_one(exported_mlp):
+    path, _, _ = exported_mlp
+    backend = OnnxRuntimeBackend(path, device="cpu")
+
+    feeds = synthesize_feeds(backend)
+
+    assert set(feeds) == {"x"}
+    assert feeds["x"].shape == (1, 16)
+    assert feeds["x"].dtype == np.float32
+
+
+def test_bare_onnx_warmup_runs_on_synthesized_inputs(exported_mlp, monkeypatch):
+    path, _, _ = exported_mlp
+    calls: list[dict] = []
+    real_infer = OnnxRuntimeBackend.infer
+
+    def counting_infer(self, inputs):
+        calls.append(inputs)
+        return real_infer(self, inputs)
+
+    monkeypatch.setattr(OnnxRuntimeBackend, "infer", counting_infer)
+
+    state = prepare_serving(load_model(str(path)), ServeOptions(warmup=3))
+
+    assert len(calls) == 3
+    assert calls[0]["x"].shape == (1, 16)
+    assert state.warmup_stats == WarmupStats(
+        count=3, mean_ms=state.warmup_stats.mean_ms, synthesized=True
+    )
+
+
+def test_warmup_stats_are_not_synthesized_when_example_inputs_exist(mlp_state):
+    assert mlp_state.warmup_stats is not None
+    assert mlp_state.warmup_stats.synthesized is False
+    assert mlp_state.warmup_stats.count == 1
 
 
 def test_onnx_file_with_reference_is_verified(exported_mlp):

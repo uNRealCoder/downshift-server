@@ -90,6 +90,11 @@ All notable changes to this project are documented here. Format follows
   `.capture_exceptions`).
 - The `Tolerance` row says `(--atol/--rtol)` instead of naming a dtype that didn't choose
   the values, when either flag overrides the default (`NumericsReport.tolerance_overridden`).
+- `serve` now warms up a bare `.onnx` served without `--reference` too:
+  `engine.synthesize_feeds()` builds one dummy input per input the graph declares (dynamic
+  or unknown axes at 1, floats from `randn`, integers/bools zero), so first-call costs no
+  longer land on the first real request. `warmup()` returns `WarmupStats` (count, mean ms,
+  whether inputs were synthesized), stored on `ServingState.warmup_stats`.
 
 ### Removed
 

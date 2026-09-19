@@ -1,6 +1,7 @@
 """From a loaded model to a warmed-up backend. The CLI's `serve` is render(prepare_serving())."""
 
 import threading
+import time
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
@@ -14,6 +15,16 @@ from downshift.core.verdict import BackendName, ExportVerdict, build_verdict, pr
 from downshift.loading import LoadedModel
 from downshift.serve.backends import Backend, OnnxRuntimeBackend, TorchBackend, resolve_device
 from downshift.serve.options import BackendChoice, ServeOptions
+from downshift.serve.schemas import normalize_dtype
+
+
+@dataclass
+class WarmupStats:
+    """What warmup() did, for the banner (Phase 4) and /metadata to report."""
+
+    count: int
+    mean_ms: float
+    synthesized: bool  # True when there was no example input, so warmup() made one up
 
 
 @dataclass
@@ -26,6 +37,7 @@ class ServingState:
     example_inputs: tuple | None = None
     ready: bool = False
     notes: list[str] = field(default_factory=list)  # things the banner should say
+    warmup_stats: WarmupStats | None = None
     # Not JSON-able and not part of a serving state's identity: rebuilt from options.max_concurrency.
     inference_semaphore: threading.Semaphore = field(init=False, repr=False, compare=False)
 
@@ -159,13 +171,40 @@ def prepare_serving(
     return state
 
 
-def warmup(state: ServingState, n: int) -> None:
+def synthesize_feeds(backend: Backend) -> dict[str, np.ndarray]:
+    """One dummy array per input the backend declares, for warming up a backend with no
+    example inputs (a bare .onnx served without --reference). Dynamic or unknown axes
+    become 1; floats are randn, integers and bools are zero/false."""
+    feeds: dict[str, np.ndarray] = {}
+    for spec in backend.metadata().inputs:
+        shape = tuple(dim if isinstance(dim, int) and dim > 0 else 1 for dim in (spec.shape or [1]))
+        dtype = np.dtype(normalize_dtype(spec.dtype) or "float32")
+        if dtype.kind == "f":
+            feeds[spec.name] = np.random.randn(*shape).astype(dtype)
+        else:
+            feeds[spec.name] = np.zeros(shape, dtype=dtype)
+    return feeds
+
+
+def warmup(state: ServingState, n: int) -> WarmupStats:
     """Run a few inferences before /ready flips; first-call costs shouldn't hit users."""
-    if state.example_inputs is not None:
-        feeds = {
-            name: t.numpy() if isinstance(t, torch.Tensor) else np.asarray(t)
-            for name, t in zip(state.input_names, state.example_inputs, strict=True)
-        }
+    example_inputs = state.example_inputs
+    synthesized = example_inputs is None
+    mean_ms = 0.0
+    if n > 0:
+        feeds = (
+            synthesize_feeds(state.backend)
+            if example_inputs is None
+            else {
+                name: t.numpy() if isinstance(t, torch.Tensor) else np.asarray(t)
+                for name, t in zip(state.input_names, example_inputs, strict=True)
+            }
+        )
+        start = time.perf_counter()
         for _ in range(n):
             state.backend.infer(feeds)
+        mean_ms = (time.perf_counter() - start) / n * 1000
+    stats = WarmupStats(count=n, mean_ms=mean_ms, synthesized=synthesized)
+    state.warmup_stats = stats
     state.ready = True
+    return stats
