@@ -4,6 +4,8 @@ Default heuristic: axis 0 of every tensor input is dynamic and they all share on
 (the batch case). Adapters override this where it's wrong, e.g. PyG's independent N/E.
 """
 
+from typing import Any
+
 import torch
 
 
@@ -36,7 +38,7 @@ def apply_dynamic_override(
     unknown = set(override) - set(input_names)
     if unknown:
         raise ValueError(f"--dynamic names {sorted(unknown)} not in inputs {list(input_names)}")
-    shapes: list[dict[int, torch.export.Dim] | None] = []
+    shapes: list[dict[int, Any] | None] = []
     for name, tensor in zip(input_names, inputs, strict=True):
         axes = override.get(name)
         if not axes or not isinstance(tensor, torch.Tensor):

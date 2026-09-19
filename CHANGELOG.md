@@ -9,15 +9,24 @@ All notable changes to this project are documented here. Format follows
 
 - `--adapter <typo>` on `check`/`export`/`serve` is now a usage error (exit code 4), not an
   unhandled `KeyError` reported as exit code 5.
+- The pinned dependency floors (`torch>=2.0`, `onnx>=1.14`, `onnxscript>=0.1`) didn't
+  actually install or export together: `onnxscript>=0.1` requires `onnx>=1.16`, and
+  `onnxscript` below `0.5` fails to translate ops torch 2.5's exporter emits for a
+  plain dynamic-batch `Conv2d`. Raised the floors; a new `floor` CI job pins and tests them.
 
 ### Changed
 
 - `downshift.export` (the subpackage) is `downshift.core` now; `downshift.export` still
   works for one release as a deprecated alias that warns `DeprecationWarning` on import.
+- `torch` floor raised to `2.5` (the dynamo exporter accepting an `ExportedProgram` with
+  `report=` is a 2.5 feature); `onnx` floor raised to `1.16`; `onnxscript` floor raised to
+  `0.5`. See Fixed above.
 
 ### Added
 
 - `python -m downshift` works as an alternative to the `downshift` script.
+- CI: a `floor` job (Python 3.11, the oldest torch/onnx/onnxruntime/onnxscript the pins
+  allow), a `windows` job, and an `examples` job that runs every tutorial script.
 
 ### Removed
 
