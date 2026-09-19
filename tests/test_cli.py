@@ -288,6 +288,23 @@ def test_serve_workers_uses_an_import_string_factory(monkeypatch):
     assert args.model == CLEAN
 
 
+def test_serve_workers_splits_threads_across_the_cpu_count(monkeypatch):
+    monkeypatch.setattr(os, "cpu_count", lambda: 16)
+    _, captured = _serve_captured(monkeypatch, "--workers", "4")
+    assert captured["workers"] == 4
+
+    args = main.ServeArgs(**json.loads(os.environ[main._SERVE_ARGS_ENV]))
+    assert args.intra_op_threads == 4
+
+
+def test_serve_workers_explicit_intra_op_threads_wins(monkeypatch):
+    monkeypatch.setattr(os, "cpu_count", lambda: 16)
+    _serve_captured(monkeypatch, "--workers", "4", "--intra-op-threads", "7")
+
+    args = main.ServeArgs(**json.loads(os.environ[main._SERVE_ARGS_ENV]))
+    assert args.intra_op_threads == 7
+
+
 def test_serve_app_factory_rebuilds_the_app_from_env(monkeypatch):
     pytest.importorskip("downshift.serve.app")
     args = main.ServeArgs(

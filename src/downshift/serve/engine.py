@@ -146,7 +146,9 @@ def _build_backend(name: BackendName, verdict: ExportVerdict, opts: ServeOptions
         return OnnxRuntimeBackend(source, opts.device, opts.intra_op_threads, opts.inter_op_threads)
     prepared = verdict.prepared
     assert prepared is not None
-    return TorchBackend(prepared.model, prepared.input_names, opts.device, prepared.inputs)
+    return TorchBackend(
+        prepared.model, prepared.input_names, opts.device, prepared.inputs, opts.intra_op_threads
+    )
 
 
 def prepare_serving(

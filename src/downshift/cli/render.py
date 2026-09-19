@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -167,7 +168,7 @@ def _backend_text(state: ServingState) -> Text:
     return text
 
 
-def print_banner(state: ServingState, host: str, port: int) -> None:
+def print_banner(state: ServingState, host: str, port: int, workers: int = 1) -> None:
     """Boot banner for `serve`. Says what is served, how it was judged, and where it listens."""
     verdict = state.verdict
     sub = _sym("└", "\\")
@@ -210,6 +211,11 @@ def print_banner(state: ServingState, host: str, port: int) -> None:
     grid.add_row("Dynamic dims", _dynamic_text(verdict))
     for warning in verdict.warnings:
         grid.add_row("", Text(f"{_sym('⚠', '!')} {warning}", style="yellow"))
+    if workers > 1:
+        logical = os.cpu_count() or workers
+        threads = Text(f"{state.options.intra_op_threads} intra-op per worker")
+        threads.append(f"  ({logical} logical / {workers} workers)", style="dim")
+        grid.add_row("Threads", threads)
     encoding = Text(state.options.output_encoding.value)
     encoding.append("  (clients override with output_encoding)", style="dim")
     grid.add_row("Encoding", encoding)

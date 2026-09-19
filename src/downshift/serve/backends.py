@@ -152,7 +152,10 @@ class TorchBackend:
         input_names: tuple[str, ...],
         device: str = "auto",
         example_inputs: tuple | None = None,
+        intra_op_threads: int = 0,
     ) -> None:
+        if intra_op_threads > 0:  # 0 means "leave torch's own default alone"
+            torch.set_num_threads(intra_op_threads)
         self.device = resolve_device(device)
         self.module = module.eval().to(self.device)
         self.input_names = list(input_names)

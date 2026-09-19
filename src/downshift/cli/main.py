@@ -513,7 +513,9 @@ def _build_from_torch_artifact(args: ServeArgs, opts: ServeOptions) -> ServingSt
         loaded.model, loaded.example_inputs, adapter, opts.dynamic, vary=args.vary
     )
     verdict.prepared = prepared
-    backend = TorchBackend(prepared.model, prepared.input_names, opts.device, prepared.inputs)
+    backend = TorchBackend(
+        prepared.model, prepared.input_names, opts.device, prepared.inputs, opts.intra_op_threads
+    )
     state = ServingState(
         args.model,
         verdict,
@@ -635,6 +637,10 @@ def serve_cmd(
 
     _setup_logging(log_level, log_format)
     with _exit_on_error(log_level is LogLevel.debug):
+        if workers > 1 and intra_op_threads == 0:
+            # Unset (0 means "let ONNX Runtime/torch choose") oversubscribes N-fold across
+            # worker processes; split the logical cores instead. Explicit flags still win.
+            intra_op_threads = max(1, (os.cpu_count() or 1) // workers)
         args = ServeArgs(
             model=model,
             inputs=inputs,
@@ -671,7 +677,7 @@ def serve_cmd(
             # capturing/verifying again. Skips warmup here; this throwaway copy never
             # serves traffic, only prints the banner and decides which backend to ship.
             state, _ = _build_serving_app(replace(args, warmup=0))
-            render.print_banner(state, host, port)
+            render.print_banner(state, host, port, workers=workers)
             temp_dir: Path | None = None
             if state.backend.name == "onnxruntime":
                 onnx_path, feeds_path, temp_dir = _write_onnx_artifact(state)

@@ -72,6 +72,12 @@ All notable changes to this project are documented here. Format follows
   capture/verify and take the verdict as given. The startup warning about
   per-worker cost is now printed only in that torch case, since the ONNX Runtime path no
   longer pays it.
+- `serve --workers N` with `--intra-op-threads` left at its default now splits the logical
+  CPU count across workers (`max(1, cpu_count // N)`) instead of leaving every worker free
+  to claim every core, N-fold oversubscription on the flag the README recommends for more
+  throughput. Passing `--intra-op-threads` explicitly still wins. The torch backend calls
+  `torch.set_num_threads` with the same budget. The banner gets a `Threads` row when
+  `--workers` is more than 1.
 
 ### Added
 

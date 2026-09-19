@@ -224,6 +224,20 @@ def test_serve_options_thread_counts_reach_the_ort_session(exported_mlp):
     assert opts.inter_op_num_threads == 2
 
 
+def test_torch_backend_sets_num_threads_when_given_a_budget(monkeypatch):
+    calls: list[int] = []
+    monkeypatch.setattr(torch, "set_num_threads", calls.append)
+    TorchBackend(clean_mlp.make_model(), ("x",), device="cpu", intra_op_threads=4)
+    assert calls == [4]
+
+
+def test_torch_backend_leaves_thread_count_alone_by_default(monkeypatch):
+    calls: list[int] = []
+    monkeypatch.setattr(torch, "set_num_threads", calls.append)
+    TorchBackend(clean_mlp.make_model(), ("x",), device="cpu")
+    assert calls == []
+
+
 def test_ort_providers_prefers_cuda_when_available(monkeypatch):
     monkeypatch.setattr(
         backends_mod.ort,

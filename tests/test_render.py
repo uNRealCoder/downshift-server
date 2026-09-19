@@ -215,6 +215,21 @@ def test_print_banner_shows_concurrency(capsys):
     assert "--max-concurrency" in out
 
 
+def test_print_banner_shows_threads_row_for_multiple_workers(capsys, monkeypatch):
+    monkeypatch.setattr(render.os, "cpu_count", lambda: 16)
+    state = _serving_state(_verdict(), options=ServeOptions(intra_op_threads=4))
+    render.print_banner(state, "127.0.0.1", 8000, workers=4)
+    out = capsys.readouterr().out
+    assert "Threads" in out
+    assert "4 intra-op per worker" in out
+    assert "16 logical / 4 workers" in out
+
+
+def test_print_banner_omits_threads_row_for_a_single_worker(capsys):
+    render.print_banner(_serving_state(_verdict()), "127.0.0.1", 8000)
+    assert "Threads" not in capsys.readouterr().out
+
+
 def test_print_banner_tips_pybase64_when_missing(capsys, monkeypatch):
     monkeypatch.setattr(render, "BASE64_CODEC", "stdlib")
     render.print_banner(_serving_state(_verdict()), "127.0.0.1", 8000)
