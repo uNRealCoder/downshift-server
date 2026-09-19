@@ -55,6 +55,7 @@ class ExportVerdict:
     warnings: list[str] = field(default_factory=list)
     onnx_path: Path | None = None
     onnx_program: object | None = field(default=None, repr=False)  # torch.onnx.ONNXProgram
+    onnx_bytes: bytes = field(default=b"", repr=False)  # serialized once by capture()
     prepared: Prepared | None = field(default=None, repr=False)
     # Debug-only: not JSON-able, excluded from to_dict(); the CLI logs these at --log-level
     # debug when the status is FAILED.
@@ -187,6 +188,7 @@ def build_verdict(
         dynamic_dims=prepared.dynamic_dims,
         warnings=warnings,
         onnx_program=result.onnx_program,
+        onnx_bytes=result.onnx_bytes,
         prepared=prepared,
         capture_stderr=result.stderr,
         capture_exceptions=capture_exceptions,
@@ -210,7 +212,7 @@ def build_verdict(
     try:
         numerics = verify(
             prepared.model,
-            result.onnx_program,
+            result.onnx_bytes,
             prepared.inputs,
             prepared.dynamic_shapes,
             vary_fn=prepared.vary_fn,

@@ -5,7 +5,7 @@ least some samples have shapes the exporter never saw. That's what catches a gra
 traced fine but froze a shape or specialised a data-dependent branch.
 """
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
@@ -58,13 +58,20 @@ class NumericsReport:
     sample_shapes: list[list[tuple[int, ...]]] = field(default_factory=list)
     seed: int = 0
     notes: list[str] = field(default_factory=list)
+    # The session verify() built (or was given) to run the samples; not JSON-able, so it's
+    # excluded from to_dict(). serve/engine.py reuses it instead of building a second one.
+    session: ort.InferenceSession | None = field(default=None, repr=False, compare=False)
 
     @property
     def passed(self) -> bool:
         return self.failures == 0
 
     def to_dict(self) -> dict:
-        return asdict(self) | {"passed": self.passed}
+        # asdict() deep-copies every field; swap the live session for None first so it's
+        # never touched, then drop the key entirely (it's not JSON-able).
+        data = asdict(replace(self, session=None))
+        del data["session"]
+        return data | {"passed": self.passed}
 
 
 _TOLERANCES_BY_DTYPE: dict[torch.dtype, tuple[float, float]] = {
@@ -138,13 +145,10 @@ def make_shared_axis0_vary_fn(base_inputs: tuple, dynamic_shapes: tuple) -> Vary
     return vary
 
 
-def _to_session(onnx_model) -> ort.InferenceSession:
-    if isinstance(onnx_model, (str, Path)):
-        source: str | bytes = str(onnx_model)
-    elif isinstance(onnx_model, bytes):
-        source = onnx_model
-    else:  # torch.onnx.ONNXProgram
-        source = onnx_model.model_proto.SerializeToString()
+def _to_session(onnx_model: bytes | str | Path | ort.InferenceSession) -> ort.InferenceSession:
+    if isinstance(onnx_model, ort.InferenceSession):
+        return onnx_model
+    source: str | bytes = str(onnx_model) if isinstance(onnx_model, (str, Path)) else onnx_model
     return ort.InferenceSession(source, providers=["CPUExecutionProvider"])
 
 
@@ -255,7 +259,7 @@ def _compare_sample(
 
 def verify(
     model: torch.nn.Module,
-    onnx_model,
+    onnx_model: bytes | str | Path | ort.InferenceSession,
     base_inputs: tuple,
     dynamic_shapes: tuple | None = None,
     vary_fn: VaryFn | None = None,
@@ -381,4 +385,5 @@ def verify(
         sample_shapes=sample_shapes,
         seed=seed,
         notes=notes,
+        session=session,
     )

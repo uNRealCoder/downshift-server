@@ -12,7 +12,7 @@ import torch
 from downshift.core.prevalidated import intake
 from downshift.core.verdict import BackendName, ExportVerdict, build_verdict, prepare_model
 from downshift.loading import LoadedModel
-from downshift.serve.backends import Backend, OnnxRuntimeBackend, TorchBackend
+from downshift.serve.backends import Backend, OnnxRuntimeBackend, TorchBackend, resolve_device
 from downshift.serve.options import BackendChoice, ServeOptions
 
 
@@ -109,13 +109,28 @@ def choose_backend(verdict: ExportVerdict, opts: ServeOptions) -> tuple[BackendN
     return wanted, notes
 
 
+def _reusable_verify_session(verdict: ExportVerdict, opts: ServeOptions) -> Any:
+    """The session verify() already built, if the serving options mean the same thing:
+    resolved device cpu and both thread counts 0, which is exactly what verify's own
+    session (ORT's defaults, CPU-only) already is. Anything else needs its own session."""
+    numerics = verdict.numerics
+    if numerics is None or numerics.session is None:
+        return None
+    if resolve_device(opts.device) != "cpu":
+        return None
+    if opts.intra_op_threads != 0 or opts.inter_op_threads != 0:
+        return None
+    return numerics.session
+
+
 def _build_backend(name: BackendName, verdict: ExportVerdict, opts: ServeOptions) -> Backend:
     if name == BackendName.onnxruntime:
-        if verdict.onnx_path is not None:
-            source: bytes | Path = verdict.onnx_path
-        else:
-            program: Any = verdict.onnx_program
-            source = program.model_proto.SerializeToString()
+        session = _reusable_verify_session(verdict, opts)
+        if session is not None:
+            return OnnxRuntimeBackend(session=session)
+        source: bytes | Path = (
+            verdict.onnx_path if verdict.onnx_path is not None else verdict.onnx_bytes
+        )
         return OnnxRuntimeBackend(source, opts.device, opts.intra_op_threads, opts.inter_op_threads)
     prepared = verdict.prepared
     assert prepared is not None

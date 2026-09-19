@@ -93,15 +93,21 @@ class OnnxRuntimeBackend:
 
     def __init__(
         self,
-        model: bytes | str | Path,
+        model: bytes | str | Path | None = None,
         device: str = "auto",
         intra_op_threads: int = 0,
         inter_op_threads: int = 0,
+        *,
+        session: ort.InferenceSession | None = None,
     ) -> None:
-        source = model if isinstance(model, bytes) else str(model)
-        providers = _ort_providers(resolve_device(device))
-        options = _session_options(intra_op_threads, inter_op_threads)
-        self.session = ort.InferenceSession(source, sess_options=options, providers=providers)
+        if session is not None:
+            self.session = session
+        else:
+            assert model is not None
+            source = model if isinstance(model, bytes) else str(model)
+            providers = _ort_providers(resolve_device(device))
+            options = _session_options(intra_op_threads, inter_op_threads)
+            self.session = ort.InferenceSession(source, sess_options=options, providers=providers)
         self.provider = self.session.get_providers()[0]
         self.input_names = [i.name for i in self.session.get_inputs()]
         self.onnx_output_names = [o.name for o in self.session.get_outputs()]

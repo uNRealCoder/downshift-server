@@ -57,6 +57,11 @@ All notable changes to this project are documented here. Format follows
 - A FAILED verdict's `reason` now quotes the first export strategy's exception
   (`strict=False`) instead of the last (`strict=True`), and `unsupported_ops` is mined from
   every strategy tried, not just the one whose message happened to survive.
+- `capture()` serialises the ONNX graph to bytes exactly once (`CaptureResult.onnx_bytes`,
+  `ExportVerdict.onnx_bytes`); `verify()` and `serve`'s backend selection both consume it,
+  and `serve` reuses `verify()`'s own `InferenceSession` when the serving options mean the
+  same thing (CPU, default thread counts), instead of building a second session from a
+  second serialisation. One `InferenceSession` per default boot instead of two.
 
 ### Added
 

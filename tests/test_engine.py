@@ -232,6 +232,45 @@ def test_onnxruntime_backend_metadata(exported_mlp):
     assert meta["outputs"][0]["shape"] is not None
 
 
+def _count_sessions(monkeypatch) -> list[int]:
+    """Subclass the real InferenceSession so every construction (not just the count of
+    calls to the constructor function) is caught, then swap it in on the onnxruntime module
+    itself: both verify.py and backends.py look up `ort.InferenceSession` by attribute at
+    call time, so patching the module's attribute reaches both."""
+    import onnxruntime
+
+    calls: list[int] = []
+    real_session = onnxruntime.InferenceSession
+
+    class CountingSession(real_session):
+        def __init__(self, *args, **kwargs):
+            calls.append(1)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(onnxruntime, "InferenceSession", CountingSession)
+    return calls
+
+
+def test_clean_model_serves_from_exactly_one_inference_session(monkeypatch):
+    calls = _count_sessions(monkeypatch)
+
+    loaded = load_model("tests.models.clean_mlp:make_model")
+    state = prepare_serving(loaded, ServeOptions(warmup=1))
+
+    assert state.verdict.status == "CLEAN"
+    assert len(calls) == 1
+
+
+def test_explicit_intra_op_threads_builds_a_second_session(monkeypatch):
+    calls = _count_sessions(monkeypatch)
+
+    loaded = load_model("tests.models.clean_mlp:make_model")
+    state = prepare_serving(loaded, ServeOptions(warmup=1, intra_op_threads=2))
+
+    assert state.verdict.status == "CLEAN"
+    assert len(calls) == 2
+
+
 def test_check_leaves_global_rng_alone():
     """verify() seeds its own sampler; it must not reseed the caller's RNG, or every
     model built after a check() would come out with the same weights."""

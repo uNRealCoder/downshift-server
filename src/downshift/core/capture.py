@@ -43,6 +43,7 @@ class CaptureResult:
     success: bool
     capture_strategy: str | None  # a _STRATEGIES name; None when nothing traced
     onnx_program: "torch.onnx.ONNXProgram | None" = None
+    onnx_bytes: bytes = field(default=b"", repr=False)  # model_proto.SerializeToString(), once
     opset: int | None = None
     op_types: dict[str, int] = field(default_factory=dict)  # count-descending histogram
     exception: Exception | None = None  # the exception build_verdict quotes as the reason
@@ -110,6 +111,7 @@ def capture(
         success=True,
         capture_strategy=strategy_used,
         onnx_program=onnx_program,
+        onnx_bytes=proto.SerializeToString(),
         opset=proto.opset_import[0].version if proto.opset_import else None,
         op_types=dict(sorted(counts.items(), key=lambda kv: kv[1], reverse=True)),
         stderr=captured.getvalue(),
