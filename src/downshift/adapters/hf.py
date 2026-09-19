@@ -14,7 +14,7 @@ from torch import nn
 from transformers import AutoModel, PreTrainedModel
 
 from downshift.adapters.base import Prepared, VaryFn
-from downshift.export.shapes import alternative_sizes
+from downshift.core.shapes import alternative_sizes
 
 INPUT_NAMES = ("input_ids", "attention_mask")
 _GUESS_BATCH = 2

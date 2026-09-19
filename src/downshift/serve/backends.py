@@ -11,7 +11,7 @@ import onnxruntime as ort
 import torch
 from torch import nn
 
-from downshift.export.verdict import BackendName
+from downshift.core.verdict import BackendName
 
 _CUDA_EP = "CUDAExecutionProvider"
 _CPU_EP = "CPUExecutionProvider"

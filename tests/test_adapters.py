@@ -10,7 +10,7 @@ from torch_geometric.data import Data as PyGData
 from torch_geometric.nn import SAGEConv
 
 from downshift.adapters import _flatten, generic, hf, pyg, registry
-from downshift.export.verdict import prepare_model
+from downshift.core.verdict import prepare_model
 from downshift.loading import LoadError
 from tests.models import (
     clean_mlp,

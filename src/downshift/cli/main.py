@@ -18,9 +18,9 @@ from fastapi import FastAPI
 import downshift
 from downshift import __version__, settings
 from downshift.cli import render
-from downshift.export.manifest import manifest_path_for
-from downshift.export.shapes import parse_dynamic_spec
-from downshift.export.verdict import ExportVerdict
+from downshift.core.manifest import manifest_path_for
+from downshift.core.shapes import parse_dynamic_spec
+from downshift.core.verdict import ExportVerdict
 from downshift.loading import LoadedModel, LoadError, is_import_spec, load_model
 from downshift.serve.app import build_app
 from downshift.serve.engine import BackendChoice, ServeOptions, ServingState, prepare_serving

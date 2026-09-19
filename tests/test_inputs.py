@@ -3,7 +3,7 @@
 import pytest
 
 from downshift.adapters import generic
-from downshift.export.inputs import synthesize
+from downshift.core.inputs import synthesize
 from tests.models import scatter_include_self_false
 
 

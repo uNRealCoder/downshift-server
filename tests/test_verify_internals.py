@@ -5,8 +5,8 @@ import onnxruntime as ort
 import pytest
 import torch
 
-from downshift.export import verify as verify_mod
-from downshift.export.verify import (
+from downshift.core import verify as verify_mod
+from downshift.core.verify import (
     OnnxRuntimeError,
     _as_tensor_list,
     _compare_sample,

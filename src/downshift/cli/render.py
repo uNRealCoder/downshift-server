@@ -10,7 +10,7 @@ from rich.table import Table
 from rich.text import Text
 
 from downshift import __version__
-from downshift.export.verdict import ExportVerdict
+from downshift.core.verdict import ExportVerdict
 from downshift.serve.codec import BASE64_CODEC
 from downshift.serve.engine import ServingState
 

@@ -9,7 +9,7 @@ import pytest
 from onnx import TensorProto, helper
 
 import downshift
-from downshift.export.manifest import _DTYPE_NAMES, manifest_path_for, observed_dtype
+from downshift.core.manifest import _DTYPE_NAMES, manifest_path_for, observed_dtype
 from tests.models import clean_mlp, data_dependent_branch
 
 

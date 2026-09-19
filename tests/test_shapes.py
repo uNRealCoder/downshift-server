@@ -4,7 +4,7 @@ import pytest
 import torch
 
 import downshift
-from downshift.export.shapes import (
+from downshift.core.shapes import (
     alternative_sizes,
     apply_dynamic_override,
     parse_dynamic_spec,

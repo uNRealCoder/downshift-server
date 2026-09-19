@@ -14,7 +14,7 @@ from torch import nn
 
 from downshift.adapters._flatten import build_shim_class
 from downshift.adapters.base import Prepared
-from downshift.export.shapes import infer_dynamic_shapes
+from downshift.core.shapes import infer_dynamic_shapes
 
 _GUESS_SPATIAL = 32
 

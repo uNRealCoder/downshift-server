@@ -5,8 +5,8 @@ these tests just exercise the branches with constructed verdicts and serving sta
 """
 
 from downshift.cli import render
-from downshift.export.verdict import ExportVerdict
-from downshift.export.verify import NumericsReport
+from downshift.core.verdict import ExportVerdict
+from downshift.core.verify import NumericsReport
 from downshift.serve.backends import BackendMeta
 from downshift.serve.engine import ServeOptions, ServingState
 from downshift.serve.schemas import OutputEncoding

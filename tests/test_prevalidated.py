@@ -1,7 +1,7 @@
 """intake(): a .onnx someone else produced, with and without a reference model."""
 
-from downshift.export import verify as verify_mod
-from downshift.export.prevalidated import intake
+from downshift.core import verify as verify_mod
+from downshift.core.prevalidated import intake
 from tests.models import clean_mlp
 
 

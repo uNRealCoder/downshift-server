@@ -9,7 +9,7 @@ import pytest
 import torch
 
 import downshift
-from downshift.export.verdict import ExportVerdict, prepare_model
+from downshift.core.verdict import ExportVerdict, prepare_model
 from downshift.loading import LoadedModel, load_model
 from downshift.serve import backends as backends_mod
 from downshift.serve.backends import InferenceInputError, OnnxRuntimeBackend, TorchBackend

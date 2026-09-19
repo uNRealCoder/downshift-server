@@ -1,7 +1,7 @@
 """capture(): the ONNX-translation failure paths, which never happen on the happy fixtures."""
 
-from downshift.export import capture as capture_mod
-from downshift.export.capture import capture
+from downshift.core import capture as capture_mod
+from downshift.core.capture import capture
 from tests.models import clean_mlp
 
 

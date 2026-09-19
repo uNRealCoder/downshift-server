@@ -10,8 +10,8 @@ from typing import Any
 import numpy as np
 import torch
 
-from downshift.export.prevalidated import intake
-from downshift.export.verdict import BackendName, ExportVerdict, build_verdict, prepare_model
+from downshift.core.prevalidated import intake
+from downshift.core.verdict import BackendName, ExportVerdict, build_verdict, prepare_model
 from downshift.loading import LoadedModel
 from downshift.serve.backends import Backend, OnnxRuntimeBackend, TorchBackend
 from downshift.serve.schemas import OutputEncoding
