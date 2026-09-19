@@ -65,6 +65,16 @@ MAX_BODY_BYTES = _env_int("DOWNSHIFT_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES)
 # every core for one inference, so raising this oversubscribes rather than adding throughput.
 MAX_CONCURRENCY = _env_int("DOWNSHIFT_MAX_CONCURRENCY", 1)
 
+# Predicts allowed to wait past max_concurrency before a new one gets a fast 503 instead of
+# joining the queue.
+DEFAULT_MAX_QUEUE = 64
+MAX_QUEUE = _env_int("DOWNSHIFT_MAX_QUEUE", DEFAULT_MAX_QUEUE)
+
+# Seconds a predict may wait admitted-but-not-running before it gets a 503 instead of an
+# inference; 0 means no limit.
+DEFAULT_REQUEST_TIMEOUT = 0.0
+REQUEST_TIMEOUT = _env_float("DOWNSHIFT_REQUEST_TIMEOUT", DEFAULT_REQUEST_TIMEOUT)
+
 # >1 spawns that many uvicorn worker processes, each independently loading/exporting/warming
 # the model, so memory and startup time scale with this number.
 WORKERS = _env_int("DOWNSHIFT_WORKERS", 1)

@@ -179,6 +179,23 @@ MaxConcurrencyOpt = Annotated[
         "(ONNX Runtime's own intra-op threads still parallelise inside that one inference)",
     ),
 ]
+MaxQueueOpt = Annotated[
+    int,
+    typer.Option(
+        "--max-queue",
+        min=0,
+        help="Predicts allowed to wait past --max-concurrency before a new one gets a fast 503",
+    ),
+]
+RequestTimeoutOpt = Annotated[
+    float,
+    typer.Option(
+        "--request-timeout",
+        min=0,
+        help="Seconds a predict may wait, unstarted, before a 503 instead of an inference; "
+        "0 = no limit",
+    ),
+]
 AtolOpt = Annotated[
     float | None,
     typer.Option("--atol", help="Absolute tolerance override; default: by output dtype"),
@@ -430,6 +447,8 @@ class ServeArgs:
     max_input_bytes: int
     max_body_bytes: int
     max_concurrency: int
+    max_queue: int
+    request_timeout: float
     atol: float | None
     rtol: float | None
     seed: int
@@ -468,6 +487,8 @@ def _serve_options(args: ServeArgs) -> ServeOptions:
         max_input_bytes=args.max_input_bytes,
         max_body_bytes=args.max_body_bytes,
         max_concurrency=args.max_concurrency,
+        max_queue=args.max_queue,
+        request_timeout=args.request_timeout,
         atol=args.atol,
         rtol=args.rtol,
         seed=args.seed,
@@ -624,6 +645,8 @@ def serve_cmd(
     max_input_bytes: MaxInputBytesOpt = settings.MAX_INPUT_BYTES,
     max_body_bytes: MaxBodyBytesOpt = settings.MAX_BODY_BYTES,
     max_concurrency: MaxConcurrencyOpt = settings.MAX_CONCURRENCY,
+    max_queue: MaxQueueOpt = settings.MAX_QUEUE,
+    request_timeout: RequestTimeoutOpt = settings.REQUEST_TIMEOUT,
     workers: WorkersOpt = settings.WORKERS,
     atol: AtolOpt = None,
     rtol: RtolOpt = None,
@@ -661,6 +684,8 @@ def serve_cmd(
             max_input_bytes=max_input_bytes,
             max_body_bytes=max_body_bytes,
             max_concurrency=max_concurrency,
+            max_queue=max_queue,
+            request_timeout=request_timeout,
             atol=atol,
             rtol=rtol,
             seed=seed,

@@ -2,7 +2,7 @@
 shared contract."""
 
 import dataclasses
-import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pytest
@@ -31,17 +31,15 @@ def test_clean_model_serves_via_onnxruntime(mlp_state):
     assert mlp_state.notes == []
 
 
-def test_serving_state_builds_a_semaphore_from_max_concurrency(mlp_state):
-    assert isinstance(mlp_state.inference_semaphore, type(threading.Semaphore()))
-    assert mlp_state.options.max_concurrency == 1
+def test_serving_state_builds_an_executor_from_max_concurrency(mlp_state):
+    assert isinstance(mlp_state.executor, ThreadPoolExecutor)
+    assert mlp_state.executor._max_workers == 1
+    assert mlp_state.in_flight == 0
 
     wider = dataclasses.replace(
         mlp_state, options=dataclasses.replace(mlp_state.options, max_concurrency=3)
     )
-    assert wider.inference_semaphore.acquire(blocking=False)
-    assert wider.inference_semaphore.acquire(blocking=False)
-    assert wider.inference_semaphore.acquire(blocking=False)
-    assert not wider.inference_semaphore.acquire(blocking=False)
+    assert wider.executor._max_workers == 3
 
 
 def test_degraded_model_falls_back_to_torch(serve_fixture):

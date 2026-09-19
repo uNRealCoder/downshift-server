@@ -6,7 +6,12 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from downshift.serve.schemas import OutputEncoding
-from downshift.settings import DEFAULT_MAX_BODY_BYTES, DEFAULT_MAX_INPUT_BYTES
+from downshift.settings import (
+    DEFAULT_MAX_BODY_BYTES,
+    DEFAULT_MAX_INPUT_BYTES,
+    DEFAULT_MAX_QUEUE,
+    DEFAULT_REQUEST_TIMEOUT,
+)
 
 
 class BackendChoice(StrEnum):
@@ -32,6 +37,8 @@ class ServeOptions:
     max_input_bytes: int = DEFAULT_MAX_INPUT_BYTES  # cap on one decoded base64 tensor input
     max_body_bytes: int = DEFAULT_MAX_BODY_BYTES  # cap on the whole request body
     max_concurrency: int = 1  # inferences allowed to run at once per worker process
+    max_queue: int = DEFAULT_MAX_QUEUE  # admitted predicts allowed to wait past max_concurrency
+    request_timeout: float = DEFAULT_REQUEST_TIMEOUT  # seconds queued before a 503; 0 = no limit
     atol: float | None = None  # None means "by the model's floating dtype"
     rtol: float | None = None
     seed: int = 0  # makes verification samples reproducible

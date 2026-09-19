@@ -219,8 +219,10 @@ def print_banner(state: ServingState, host: str, port: int, workers: int = 1) ->
     encoding = Text(state.options.output_encoding.value)
     encoding.append("  (clients override with output_encoding)", style="dim")
     grid.add_row("Encoding", encoding)
-    concurrency = Text(f"{state.options.max_concurrency} inference at a time")
-    concurrency.append("  (--max-concurrency)", style="dim")
+    concurrency = Text(
+        f"{state.options.max_concurrency} inference at a time, {state.options.max_queue} queued"
+    )
+    concurrency.append("  (--max-concurrency, --max-queue)", style="dim")
     grid.add_row("Concurrency", concurrency)
     if BASE64_CODEC == "stdlib":
         grid.add_row(

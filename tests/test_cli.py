@@ -273,6 +273,14 @@ def test_serve_passes_max_body_bytes_and_max_concurrency(monkeypatch):
     assert "Concurrency" in result.output
 
 
+def test_serve_passes_max_queue_and_request_timeout(monkeypatch):
+    result, captured = _serve_captured(monkeypatch, "--max-queue", "8", "--request-timeout", "2.5")
+    options = captured["app"].state.serving.options
+    assert options.max_queue == 8
+    assert options.request_timeout == 2.5
+    assert "Concurrency" in result.output
+
+
 def test_serve_rejects_unknown_output_encoding():
     result = run("serve", CLEAN, "--output-encoding", "hex")
     assert result.exit_code == 2, result.output  # typer usage error: not a choice
@@ -327,6 +335,8 @@ def test_serve_app_factory_rebuilds_the_app_from_env(monkeypatch):
         max_input_bytes=1024,
         max_body_bytes=2048,
         max_concurrency=2,
+        max_queue=64,
+        request_timeout=0.0,
         atol=None,
         rtol=None,
         seed=0,
@@ -421,6 +431,8 @@ def test_serve_app_factory_from_onnx_artifact_never_calls_capture(monkeypatch, t
         max_input_bytes=1024,
         max_body_bytes=2048,
         max_concurrency=1,
+        max_queue=64,
+        request_timeout=0.0,
         atol=None,
         rtol=None,
         seed=0,

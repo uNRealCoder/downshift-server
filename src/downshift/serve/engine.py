@@ -2,6 +2,7 @@
 
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
@@ -39,10 +40,30 @@ class ServingState:
     notes: list[str] = field(default_factory=list)  # things the banner should say
     warmup_stats: WarmupStats | None = None
     # Not JSON-able and not part of a serving state's identity: rebuilt from options.max_concurrency.
-    inference_semaphore: threading.Semaphore = field(init=False, repr=False, compare=False)
+    # `infer` (and, for the JSON path, request conversion) runs on these threads, never on the
+    # event loop, so /health and /ready are never stuck behind a queue of slow predicts.
+    executor: ThreadPoolExecutor = field(init=False, repr=False, compare=False)
+    # Admitted-but-not-yet-finished predicts (running in the executor or still queued there),
+    # guarded by _admission_lock since it's read-then-written from the event loop and written
+    # again from whichever executor thread finishes a request.
+    in_flight: int = field(init=False, repr=False, compare=False, default=0)
+    _admission_lock: threading.Lock = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        self.inference_semaphore = threading.Semaphore(self.options.max_concurrency)
+        self.executor = ThreadPoolExecutor(max_workers=self.options.max_concurrency)
+        self._admission_lock = threading.Lock()
+
+    def try_admit(self) -> bool:
+        """Atomically claim one of max_concurrency + max_queue slots, or refuse."""
+        with self._admission_lock:
+            if self.in_flight >= self.options.max_concurrency + self.options.max_queue:
+                return False
+            self.in_flight += 1
+            return True
+
+    def release(self) -> None:
+        with self._admission_lock:
+            self.in_flight -= 1
 
     @property
     def backend_auto_selected(self) -> bool:

@@ -19,6 +19,13 @@ All notable changes to this project are documented here. Format follows
   sequence-length ceiling) used to crash `check`/`export`/`serve` with a torch export error
   once the sampler tried a longer sequence; the sampler now clamps varied sequence lengths
   to that ceiling.
+- `/health` and `/ready` no longer share a thread pool with in-flight predicts, so they stay
+  fast (well under a millisecond) no matter how many predicts are running or queued; before,
+  every route was a sync `def` on starlette's default 40-token thread pool, and enough
+  predicts parked on it made `/health` wait behind them (measured: 5.7s at 60 in-flight).
+- Overload used to mean a growing, unbounded queue of predicts until clients timed out; a
+  predict past `--max-concurrency + --max-queue` admitted requests now gets an immediate
+  `503` instead.
 
 ### Changed
 
@@ -78,6 +85,12 @@ All notable changes to this project are documented here. Format follows
   throughput. Passing `--intra-op-threads` explicitly still wins. The torch backend calls
   `torch.set_num_threads` with the same budget. The banner gets a `Threads` row when
   `--workers` is more than 1.
+- `predict`/`predict/graph` are `async def` now. The missing-input check and admission
+  happen on the event loop; conversion of the request body, the inference itself, and
+  response encoding run in a per-`ServingState` `ThreadPoolExecutor(max_workers=
+  max_concurrency)` instead of inline behind a semaphore, so a large JSON body's conversion
+  never blocks the loop either. `ServingState.inference_semaphore` is gone, replaced by
+  `.executor` and an `.in_flight` counter.
 
 ### Added
 
@@ -111,6 +124,14 @@ All notable changes to this project are documented here. Format follows
   or unknown axes at 1, floats from `randn`, integers/bools zero), so first-call costs no
   longer land on the first real request. `warmup()` returns `WarmupStats` (count, mean ms,
   whether inputs were synthesized), stored on `ServingState.warmup_stats`.
+- `--max-queue N` (env `DOWNSHIFT_MAX_QUEUE`, default 64) caps predicts admitted past
+  `--max-concurrency`; past `max-concurrency + max-queue` a predict gets an immediate `503`
+  with `Retry-After: 1` and a body naming how many are running and queued, instead of
+  joining an unbounded queue. `/metadata`'s `limits` and the banner's `Concurrency` row
+  report it.
+- `--request-timeout SECONDS` (env `DOWNSHIFT_REQUEST_TIMEOUT`, default 0, off) fails an
+  admitted predict with a `503` if it is still waiting for its turn once the limit passes;
+  a request already running is never interrupted. Reported in `/metadata`'s `limits`.
 
 ### Removed
 

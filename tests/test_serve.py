@@ -85,6 +85,8 @@ def test_health_ready_metadata(mlp_client, mlp_state):
         "max_body_bytes": mlp_state.options.max_body_bytes,
         "max_input_bytes": mlp_state.options.max_input_bytes,
         "max_concurrency": mlp_state.options.max_concurrency,
+        "max_queue": mlp_state.options.max_queue,
+        "request_timeout": mlp_state.options.request_timeout,
     }
 
 
@@ -541,3 +543,102 @@ def test_predict_concurrency_option_allows_overlapping_inferences(mlp_state, mon
 
     assert all(r.status_code == 200 for r in results)
     assert max_active == 2
+
+
+def _wait_until(predicate, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        assert time.monotonic() < deadline, "condition never became true"
+        time.sleep(0.005)
+
+
+def test_predict_past_capacity_is_a_fast_503(mlp_state, monkeypatch):
+    release = threading.Event()
+
+    def blocking_infer(inputs):
+        release.wait(timeout=5)
+        return {"output_0": np.zeros((1, 4), dtype=np.float32)}
+
+    state = _with_options(mlp_state, max_concurrency=1, max_queue=1)
+    monkeypatch.setattr(state.backend, "infer", blocking_infer)
+    client = TestClient(build_app(state))
+
+    try:
+        with ThreadPoolExecutor(3) as pool:
+            admitted = [pool.submit(client.post, "/predict", json=MLP_INPUT) for _ in range(2)]
+            _wait_until(lambda: state.in_flight >= 2)
+
+            start = time.monotonic()
+            over = client.post("/predict", json=MLP_INPUT)
+            elapsed = time.monotonic() - start
+
+            release.set()
+            results = [f.result() for f in admitted]
+    finally:
+        release.set()
+
+    assert over.status_code == 503
+    assert over.headers["retry-after"] == "1"
+    assert "server is at capacity" in over.json()["detail"]
+    assert "1 running" in over.json()["detail"]
+    assert "1 queued" in over.json()["detail"]
+    assert elapsed < 0.5  # never touches the executor
+    assert all(r.status_code == 200 for r in results)
+
+
+def test_predict_queued_past_request_timeout_is_503_and_never_infers(mlp_state, monkeypatch):
+    calls: list[int] = []
+
+    def slow_infer(inputs):
+        calls.append(1)
+        time.sleep(0.3)
+        return {"output_0": np.zeros((1, 4), dtype=np.float32)}
+
+    state = _with_options(mlp_state, max_concurrency=1, max_queue=5, request_timeout=0.05)
+    monkeypatch.setattr(state.backend, "infer", slow_infer)
+    client = TestClient(build_app(state))
+
+    with ThreadPoolExecutor(2) as pool:
+        first = pool.submit(client.post, "/predict", json=MLP_INPUT)
+        _wait_until(lambda: state.in_flight >= 1)
+        second = pool.submit(client.post, "/predict", json=MLP_INPUT)
+
+        first_result = first.result()
+        second_result = second.result()
+
+    assert first_result.status_code == 200
+    assert second_result.status_code == 503
+    assert "--request-timeout" in second_result.json()["detail"]
+    assert len(calls) == 1  # the queued predict never reached infer()
+
+
+def test_health_stays_fast_while_predicts_are_queued(mlp_state, monkeypatch):
+    release = threading.Event()
+
+    def blocking_infer(inputs):
+        release.wait(timeout=5)
+        return {"output_0": np.zeros((1, 4), dtype=np.float32)}
+
+    state = _with_options(mlp_state, max_concurrency=1, max_queue=50)
+    monkeypatch.setattr(state.backend, "infer", blocking_infer)
+    client = TestClient(build_app(state))
+
+    try:
+        with ThreadPoolExecutor(10) as pool:
+            predicts = [pool.submit(client.post, "/predict", json=MLP_INPUT) for _ in range(10)]
+            _wait_until(lambda: state.in_flight >= 10)
+
+            start = time.monotonic()
+            health = client.get("/health")
+            elapsed = time.monotonic() - start
+
+            release.set()
+            for f in predicts:
+                assert f.result().status_code == 200
+    finally:
+        release.set()
+
+    assert health.status_code == 200
+    # Generously below the 5+ second stalls a shared sync threadpool used to cause; the
+    # point is "never blocks behind the predict queue", not a tight latency bound.
+    assert elapsed < 1.0

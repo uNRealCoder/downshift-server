@@ -1,7 +1,10 @@
 """FastAPI app over a ServingState. The same routes regardless of which backend is behind it."""
 
+import asyncio
 import logging
+import time
 from collections.abc import Callable, Coroutine, Sequence
+from functools import partial
 from typing import Any
 
 import numpy as np
@@ -117,18 +120,35 @@ def _base64_ready(arr: np.ndarray) -> dict[str, Any]:
     }
 
 
-def run_predict(
-    state: ServingState, inputs: dict[str, Any], encoding: OutputEncoding | None
+class QueuedTooLong(HTTPException):
+    """Raised inside the executor when a request waited past --request-timeout before its
+    conversion/inference even started. Never raised once infer() has begun."""
+
+    def __init__(self, waited: float, limit: float) -> None:
+        super().__init__(
+            503, f"request waited {waited:.1f}s in queue, past the {limit:.1f}s --request-timeout"
+        )
+
+
+def _predict_body(
+    state: ServingState,
+    inputs: dict[str, Any],
+    encoding: OutputEncoding | None,
+    admitted_at: float,
 ) -> NumpyJSONResponse:
-    """Validate, convert, infer.
+    """Runs in state.executor, never on the event loop: conversion of a large JSON body,
+    the inference itself, and response encoding. Admission and the cheap missing-input check
+    already happened on the loop by the time this is submitted.
 
     Raises HTTPException(400) for anything the client got wrong (bad shape/dtype/JSON).
     Anything else (a backend bug, OOM, ...) propagates so the app-level handler turns it into
     a 500 without leaking the exception text to the client.
     """
-    missing = [n for n in state.input_names if n not in inputs]
-    if missing:
-        raise HTTPException(400, f"missing inputs: {missing}")
+    request_timeout = state.options.request_timeout
+    if request_timeout > 0:
+        waited = time.monotonic() - admitted_at
+        if waited > request_timeout:
+            raise QueuedTooLong(waited, request_timeout)
 
     declared = state.declared_dtypes
     max_bytes = state.options.max_input_bytes
@@ -141,8 +161,7 @@ def run_predict(
         raise HTTPException(400, str(exc)) from exc
 
     try:
-        with state.inference_semaphore:
-            outputs = state.backend.infer(feeds)
+        outputs = state.backend.infer(feeds)
     except HTTPException:
         raise
     except (InferenceInputError, KeyError) as exc:
@@ -161,6 +180,37 @@ def run_predict(
     return NumpyJSONResponse(body)
 
 
+def _capacity_error(state: ServingState) -> HTTPException:
+    running = min(state.in_flight, state.options.max_concurrency)
+    queued = max(0, state.in_flight - state.options.max_concurrency)
+    return HTTPException(
+        503,
+        f"server is at capacity ({running} running, {queued} queued)",
+        headers={"Retry-After": "1"},
+    )
+
+
+async def run_predict(
+    state: ServingState, inputs: dict[str, Any], encoding: OutputEncoding | None
+) -> NumpyJSONResponse:
+    """Missing-input check and admission happen here, on the loop; everything else runs in
+    state.executor (see _predict_body) so a slow body or a slow backend never blocks /health
+    or /ready, which share this process's single event loop.
+    """
+    missing = [n for n in state.input_names if n not in inputs]
+    if missing:
+        raise HTTPException(400, f"missing inputs: {missing}")
+
+    if not state.try_admit():
+        raise _capacity_error(state)
+    try:
+        loop = asyncio.get_running_loop()
+        body = partial(_predict_body, state, inputs, encoding, time.monotonic())
+        return await loop.run_in_executor(state.executor, body)
+    finally:
+        state.release()
+
+
 def build_app(state: ServingState, middleware: Sequence[str] = ()) -> FastAPI:
     app = FastAPI(title="downshift", version=downshift.__version__)
     app.router.route_class = OrjsonRoute
@@ -175,16 +225,16 @@ def build_app(state: ServingState, middleware: Sequence[str] = ()) -> FastAPI:
         )
 
     @app.get("/health", response_model=HealthResponse)
-    def health() -> HealthResponse:
+    async def health() -> HealthResponse:
         return HealthResponse()
 
     @app.get("/ready", response_model=ReadyResponse)
-    def ready() -> JSONResponse:
+    async def ready() -> JSONResponse:
         status = 200 if state.ready else 503
         return JSONResponse({"ready": state.ready}, status_code=status)
 
     @app.get("/metadata", response_model=MetadataResponse)
-    def metadata() -> MetadataResponse:
+    async def metadata() -> MetadataResponse:
         return MetadataResponse(
             model=state.source,
             family=state.verdict.model_family,
@@ -197,15 +247,17 @@ def build_app(state: ServingState, middleware: Sequence[str] = ()) -> FastAPI:
                 "max_body_bytes": state.options.max_body_bytes,
                 "max_input_bytes": state.options.max_input_bytes,
                 "max_concurrency": state.options.max_concurrency,
+                "max_queue": state.options.max_queue,
+                "request_timeout": state.options.request_timeout,
             },
         )
 
     @app.post("/predict", **_PREDICT_ROUTE)
-    def predict(req: PredictRequest) -> NumpyJSONResponse:
-        return run_predict(state, req.inputs, req.output_encoding)
+    async def predict(req: PredictRequest) -> NumpyJSONResponse:
+        return await run_predict(state, req.inputs, req.output_encoding)
 
     @app.post("/predict/graph", **_PREDICT_ROUTE)
-    def predict_graph(req: GraphPredictRequest) -> NumpyJSONResponse:
+    async def predict_graph(req: GraphPredictRequest) -> NumpyJSONResponse:
         if not {"x", "edge_index"} <= set(state.input_names):
             raise HTTPException(
                 400,
@@ -217,6 +269,6 @@ def build_app(state: ServingState, middleware: Sequence[str] = ()) -> FastAPI:
         inputs: dict[str, Any] = {"x": req.x, "edge_index": req.edge_index}
         if req.edge_attr is not None:
             inputs["edge_attr"] = req.edge_attr
-        return run_predict(state, inputs, req.output_encoding)
+        return await run_predict(state, inputs, req.output_encoding)
 
     return app

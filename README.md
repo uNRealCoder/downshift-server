@@ -5,21 +5,21 @@ Serve a PyTorch model over HTTP with one command. Before the first request, down
 ```
 $ downshift serve downshift.demo.scatter_include_self_false:make_model
 
-┌─ downshift v0.4.0 ────────────────────────────────────────────────────────┐
-│                                                                           │
-│  Model          downshift.demo.scatter_include_self_false:make_model      │
-│  Family         generic-torch                                             │
-│  Verdict        DEGRADED  (strict=False, opset 20)                        │
-│  Numerics       max abs err 1.39e+00 over 8 samples  ✗ 6/8 failed         │
-│                 ⚠ numerics diverge on 6/8 samples (max abs err 1.39e+00)  │
-│  Override       --force-onnx to serve the ONNX graph anyway               │
-│  Backend        torch (eager) · cpu  ← auto-selected                      │
-│  Dynamic dims   x[0], segment_ids[0]                                      │
-│  Encoding       json  (clients override with output_encoding)             │
-│  Concurrency    1 inference at a time  (--max-concurrency)                │
-│  Endpoint       http://127.0.0.1:8000                                     │
-│                                                                           │
-└───────────────────────────────────────────────────────────────────────────┘
+┌─ downshift v0.4.0 ────────────────────────────────────────────────────────────────────┐
+│                                                                                       │
+│  Model          downshift.demo.scatter_include_self_false:make_model                  │
+│  Family         generic-torch                                                         │
+│  Verdict        DEGRADED  (strict=False, opset 20)                                    │
+│  Numerics       max abs err 1.39e+00 over 8 samples  ✗ 6/8 failed                     │
+│                 ⚠ numerics diverge on 6/8 samples (max abs err 1.39e+00)              │
+│  Override       --force-onnx to serve the ONNX graph anyway                           │
+│  Backend        torch (eager) · cpu  ← auto-selected                                  │
+│  Dynamic dims   x[0], segment_ids[0]                                                  │
+│  Encoding       json  (clients override with output_encoding)                         │
+│  Concurrency    1 inference at a time, 64 queued  (--max-concurrency, --max-queue)    │
+│  Endpoint       http://127.0.0.1:8000                                                 │
+│                                                                                       │
+└───────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 This graph exported without a single error and produces wrong numbers on 6 of 8 inputs. downshift caught it before the first request and is serving PyTorch instead.
@@ -133,7 +133,9 @@ Options that change what gets served:
 - `--output-encoding json|base64` (env `DOWNSHIFT_OUTPUT_ENCODING`, default `json`) sets the response encoding for requests that do not send their own `output_encoding`.
 - `--max-input-bytes N` (env `DOWNSHIFT_MAX_INPUT_BYTES`, default 256 MiB) caps the decoded size of one base64 input; larger is a `400`.
 - `--max-body-bytes N` (env `DOWNSHIFT_MAX_BODY_BYTES`, default 256 MiB) caps every request body, checked before it is parsed as JSON; larger is a `413`.
-- `--max-concurrency N` (env `DOWNSHIFT_MAX_CONCURRENCY`, default 1) caps inferences running at once per worker process. One inference already uses every core through ONNX Runtime's intra-op threads, so on CPU raising this rarely adds throughput; it mostly adds contention. Use `--workers` for more processes instead.
+- `--max-concurrency N` (env `DOWNSHIFT_MAX_CONCURRENCY`, default 1) caps inferences running at once per worker process, via a dedicated thread pool of that size; requests beyond it wait in a queue rather than run inline. One inference already uses every core through ONNX Runtime's intra-op threads, so on CPU raising this rarely adds throughput; it mostly adds contention. Use `--workers` for more processes instead.
+- `--max-queue N` (env `DOWNSHIFT_MAX_QUEUE`, default 64) caps predicts waiting past `--max-concurrency`. Once `max-concurrency + max-queue` requests are admitted, a new one gets an immediate `503` with `Retry-After: 1` instead of joining the queue.
+- `--request-timeout SECONDS` (env `DOWNSHIFT_REQUEST_TIMEOUT`, default 0, off) caps how long an admitted predict may wait for its turn before it gets a `503` instead of an inference. A request already running is never interrupted.
 - `--workers N` (env `DOWNSHIFT_WORKERS`, default 1) starts that many uvicorn worker processes. Each one independently loads, exports, verifies and warms the model, so memory and startup time scale with `N`.
 - `--device auto|cpu|cuda`, `--warmup N` (inferences before `/ready` flips), `--intra-op-threads N` and `--inter-op-threads N` (ONNX Runtime thread counts; 0 lets it choose), `--host`, `--port`, `--log-level`, `--log-format json`.
 - `--version` prints the installed version and exits.
@@ -148,6 +150,7 @@ Options that change what gets served:
 | `413` | Request body larger than `--max-body-bytes`. |
 | `422` | Malformed JSON, or a required field is missing. |
 | `500` | Server-side fault. The body is always the fixed `{"detail": "inference failed on the server; see the server log"}`; the actual exception is logged, not returned. |
+| `503` | Server at capacity (`max-concurrency + max-queue` predicts already admitted; carries `Retry-After: 1`), or a queued predict waited past `--request-timeout`. |
 
 ## The gate: export and verify before serving
 
