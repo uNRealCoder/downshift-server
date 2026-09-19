@@ -91,6 +91,8 @@ All notable changes to this project are documented here. Format follows
   max_concurrency)` instead of inline behind a semaphore, so a large JSON body's conversion
   never blocks the loop either. `ServingState.inference_semaphore` is gone, replaced by
   `.executor` and an `.in_flight` counter.
+- A `500`'s body now carries `"request_id"` alongside `"detail"`, and the server log line
+  for it carries the same id, so "see the server log" has a key to search for.
 
 ### Added
 
@@ -132,6 +134,11 @@ All notable changes to this project are documented here. Format follows
 - `--request-timeout SECONDS` (env `DOWNSHIFT_REQUEST_TIMEOUT`, default 0, off) fails an
   admitted predict with a `503` if it is still waiting for its turn once the limit passes;
   a request already running is never interrupted. Reported in `/metadata`'s `limits`.
+- Every response carries an `X-Request-Id` header: echoed from the client's own if it sent
+  one, otherwise a generated `uuid4().hex[:16]`.
+- `/predict` and `/predict/graph` responses carry `Server-Timing: codec;dur=<ms>,
+  infer;dur=<ms>`, splitting request/response conversion time from the backend call.
+- `--access-log`/`--no-access-log` (default on) passes through to `uvicorn.run(access_log=)`.
 
 ### Removed
 

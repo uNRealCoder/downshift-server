@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import time
+import uuid
 from collections.abc import Callable, Coroutine, Sequence
 from functools import partial
 from typing import Any
@@ -12,6 +13,8 @@ import orjson
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
+from starlette.datastructures import Headers, MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 import downshift
 from downshift.serve.backends import InferenceInputError
@@ -152,6 +155,7 @@ def _predict_body(
 
     declared = state.declared_dtypes
     max_bytes = state.options.max_input_bytes
+    codec_start = time.perf_counter()
     try:
         feeds = {
             n: to_numpy(n, inputs[n], declared.get(n), max_bytes=max_bytes)
@@ -159,16 +163,20 @@ def _predict_body(
         }
     except (ValueError, TypeError, KeyError) as exc:
         raise HTTPException(400, str(exc)) from exc
+    codec_ms = (time.perf_counter() - codec_start) * 1000
 
+    infer_start = time.perf_counter()
     try:
         outputs = state.backend.infer(feeds)
     except HTTPException:
         raise
     except (InferenceInputError, KeyError) as exc:
         raise HTTPException(400, str(exc)) from exc
+    infer_ms = (time.perf_counter() - infer_start) * 1000
 
     encoding = encoding or state.options.output_encoding
     encode = _base64_ready if encoding == OutputEncoding.base64 else _json_ready
+    encode_start = time.perf_counter()
     # C-contiguous once, up front (np.require keeps 0-d arrays 0-d; ascontiguousarray does not).
     arrays = {name: np.require(arr, requirements="C") for name, arr in outputs.items()}
     # Same keys as PredictResponse; built by hand so orjson serializes the buffers directly.
@@ -177,7 +185,11 @@ def _predict_body(
         "shapes": {name: list(arr.shape) for name, arr in arrays.items()},
         "dtypes": {name: arr.dtype.name for name, arr in arrays.items()},
     }
-    return NumpyJSONResponse(body)
+    codec_ms += (time.perf_counter() - encode_start) * 1000
+
+    response = NumpyJSONResponse(body)
+    response.headers["Server-Timing"] = f"codec;dur={codec_ms:.2f}, infer;dur={infer_ms:.2f}"
+    return response
 
 
 def _capacity_error(state: ServingState) -> HTTPException:
@@ -211,17 +223,59 @@ async def run_predict(
         state.release()
 
 
+class RequestIdMiddleware:
+    """Pure ASGI, not BaseHTTPMiddleware (which buffers the whole response body to let a
+    handler rewrite headers, extra copies this doesn't need): reads X-Request-Id or makes
+    one, stores it on request.state, and echoes it on the response. "See the server log"
+    then has something to search for.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request_id = Headers(scope=scope).get("x-request-id") or uuid.uuid4().hex[:16]
+        scope.setdefault("state", {})["request_id"] = request_id
+
+        async def send_with_request_id(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                MutableHeaders(scope=message).append("x-request-id", request_id)
+            await send(message)
+
+        await self.app(scope, receive, send_with_request_id)
+
+
 def build_app(state: ServingState, middleware: Sequence[str] = ()) -> FastAPI:
     app = FastAPI(title="downshift", version=downshift.__version__)
     app.router.route_class = OrjsonRoute
     app.state.serving = state
+    app.add_middleware(RequestIdMiddleware)
     load_middleware(app, middleware)
 
     @app.exception_handler(Exception)
     async def _unhandled_exception(request: Request, exc: Exception) -> JSONResponse:
-        logger.exception("unhandled exception serving %s %s", request.method, request.url.path)
+        # ServerErrorMiddleware, which dispatches this handler, sits outside
+        # RequestIdMiddleware (Starlette always makes it the outermost layer), so its
+        # response bypasses our send wrapper; set the header here too, directly on the
+        # response, rather than relying on that wrapper for this one path.
+        request_id = getattr(request.state, "request_id", None)
+        logger.exception(
+            "unhandled exception serving %s %s (request_id=%s)",
+            request.method,
+            request.url.path,
+            request_id,
+        )
         return JSONResponse(
-            {"detail": "inference failed on the server; see the server log"}, status_code=500
+            {
+                "detail": "inference failed on the server; see the server log",
+                "request_id": request_id,
+            },
+            status_code=500,
+            headers={"X-Request-Id": request_id} if request_id else None,
         )
 
     @app.get("/health", response_model=HealthResponse)

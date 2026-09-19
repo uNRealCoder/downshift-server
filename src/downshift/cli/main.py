@@ -217,6 +217,9 @@ VaryOpt = Annotated[
 JsonOpt = Annotated[bool, typer.Option("--json", help="Print the verdict as JSON and nothing else")]
 LogLevelOpt = Annotated[LogLevel, typer.Option("--log-level")]
 LogFormatOpt = Annotated[LogFormat, typer.Option("--log-format")]
+AccessLogOpt = Annotated[
+    bool, typer.Option("--access-log/--no-access-log", help="Uvicorn's per-request access log")
+]
 
 
 class _JsonFormatter(logging.Formatter):
@@ -654,6 +657,7 @@ def serve_cmd(
     vary: VaryOpt = None,
     log_level: LogLevelOpt = LogLevel.info,
     log_format: LogFormatOpt = LogFormat.text,
+    access_log: AccessLogOpt = True,
 ) -> None:
     """Check the model, pick a backend from the verdict, and serve it over HTTP."""
     import uvicorn
@@ -696,7 +700,7 @@ def serve_cmd(
         if workers <= 1:
             state, api = _build_serving_app(args)
             render.print_banner(state, host, port)
-            uvicorn.run(api, host=host, port=port, log_level=log_level.value)
+            uvicorn.run(api, host=host, port=port, log_level=log_level.value, access_log=access_log)
         else:
             # The one and only export: each worker loads this artifact instead of
             # capturing/verifying again. Skips warmup here; this throwaway copy never
@@ -737,6 +741,7 @@ def serve_cmd(
                     port=port,
                     workers=workers,
                     log_level=log_level.value,
+                    access_log=access_log,
                     factory=True,
                 )
             finally:

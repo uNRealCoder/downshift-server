@@ -138,7 +138,10 @@ Options that change what gets served:
 - `--request-timeout SECONDS` (env `DOWNSHIFT_REQUEST_TIMEOUT`, default 0, off) caps how long an admitted predict may wait for its turn before it gets a `503` instead of an inference. A request already running is never interrupted.
 - `--workers N` (env `DOWNSHIFT_WORKERS`, default 1) starts that many uvicorn worker processes. Each one independently loads, exports, verifies and warms the model, so memory and startup time scale with `N`.
 - `--device auto|cpu|cuda`, `--warmup N` (inferences before `/ready` flips), `--intra-op-threads N` and `--inter-op-threads N` (ONNX Runtime thread counts; 0 lets it choose), `--host`, `--port`, `--log-level`, `--log-format json`.
+- `--access-log/--no-access-log` (default on) passes through to uvicorn's per-request access log.
 - `--version` prints the installed version and exits.
+
+Every response carries an `X-Request-Id` header (echoing the client's own if it sent one, otherwise a generated one) and every `/predict`/`/predict/graph` response carries `Server-Timing: codec;dur=<ms>, infer;dur=<ms>` splitting conversion/encoding time from the backend call. A `500` body includes the same `request_id`, and the server log line for it does too, so "see the server log" has a key to search for.
 
 `serve` runs the same gate as `check`, so it also accepts `-k/--samples`, `--dynamic`, `--adapter`, `--inputs`, `--model-class`, `--unsafe-load`, `--atol`/`--rtol`, `--seed` and `--vary`, described below.
 
@@ -149,7 +152,7 @@ Options that change what gets served:
 | `400` | Client-caused input problem: bad JSON shape/dtype, or an input the backend rejects (message like `input 'x': ...`). |
 | `413` | Request body larger than `--max-body-bytes`. |
 | `422` | Malformed JSON, or a required field is missing. |
-| `500` | Server-side fault. The body is always the fixed `{"detail": "inference failed on the server; see the server log"}`; the actual exception is logged, not returned. |
+| `500` | Server-side fault. The body is `{"detail": "inference failed on the server; see the server log", "request_id": "..."}`; the actual exception is logged (with the same `request_id`), not returned. |
 | `503` | Server at capacity (`max-concurrency + max-queue` predicts already admitted; carries `Retry-After: 1`), or a queued predict waited past `--request-timeout`. |
 
 ## The gate: export and verify before serving

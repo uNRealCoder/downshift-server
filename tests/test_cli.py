@@ -281,6 +281,16 @@ def test_serve_passes_max_queue_and_request_timeout(monkeypatch):
     assert "Concurrency" in result.output
 
 
+def test_serve_access_log_defaults_to_enabled(monkeypatch):
+    _, captured = _serve_captured(monkeypatch)
+    assert captured["access_log"] is True
+
+
+def test_serve_no_access_log_disables_it(monkeypatch):
+    _, captured = _serve_captured(monkeypatch, "--no-access-log")
+    assert captured["access_log"] is False
+
+
 def test_serve_rejects_unknown_output_encoding():
     result = run("serve", CLEAN, "--output-encoding", "hex")
     assert result.exit_code == 2, result.output  # typer usage error: not a choice
@@ -369,10 +379,11 @@ def test_serve_workers_writes_and_ships_the_onnx_artifact(monkeypatch):
         seen["onnx_bytes"] = Path(args.artifact_onnx_path).read_bytes()
 
     monkeypatch.setattr(uvicorn, "run", fake_run)
-    result = run("serve", CLEAN, "--warmup", "1", "--workers", "2")
+    result = run("serve", CLEAN, "--warmup", "1", "--workers", "2", "--no-access-log")
     assert result.exit_code == 0, result.output
 
     assert seen["workers"] == 2
+    assert seen["access_log"] is False
     args = seen["args"]
     assert args.artifact_backend == "onnxruntime"
     assert args.artifact_verdict is not None

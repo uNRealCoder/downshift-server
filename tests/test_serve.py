@@ -100,6 +100,33 @@ def test_predict_batch(mlp_client):
     assert body["dtypes"]["output_0"] == "float32"
 
 
+def test_predict_generates_a_request_id_and_echoes_it(mlp_client):
+    resp = mlp_client.post("/predict", json=MLP_INPUT)
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["x-request-id"]
+
+
+def test_predict_echoes_a_client_supplied_request_id(mlp_client):
+    resp = mlp_client.post(
+        "/predict", json=MLP_INPUT, headers={"x-request-id": "caller-supplied-id"}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["x-request-id"] == "caller-supplied-id"
+
+
+def test_health_gets_its_own_request_id_too(mlp_client):
+    resp = mlp_client.get("/health")
+    assert resp.headers["x-request-id"]
+
+
+def test_predict_reports_server_timing(mlp_client):
+    resp = mlp_client.post("/predict", json=MLP_INPUT)
+    assert resp.status_code == 200, resp.text
+    timing = resp.headers["server-timing"]
+    assert "codec;dur=" in timing
+    assert "infer;dur=" in timing
+
+
 def test_predict_missing_input(mlp_client):
     resp = mlp_client.post("/predict", json={"inputs": {"y": [[0.0] * 16]}})
     assert resp.status_code == 400
@@ -440,10 +467,13 @@ def test_predict_backend_bug_maps_to_500_without_leaking_details(mlp_state, monk
         resp = client.post("/predict", json=MLP_INPUT)
 
     assert resp.status_code == 500
-    assert resp.json() == {"detail": "inference failed on the server; see the server log"}
+    body = resp.json()
+    assert body["detail"] == "inference failed on the server; see the server log"
+    assert body["request_id"] == resp.headers["x-request-id"]
     assert "some internal bug" not in resp.text
     assert "/etc/secret/path" not in resp.text
     assert "unhandled exception" in caplog.text
+    assert body["request_id"] in caplog.text
 
 
 def test_predict_torch_backend_out_of_memory_maps_to_500(serve_fixture):
