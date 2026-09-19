@@ -1,4 +1,13 @@
-"""downshift CLI. Each command loads, calls the library, and hands the result to render."""
+"""downshift CLI. Each command loads, calls the library, and hands the result to render.
+
+Heavy imports (torch, onnxruntime, uvicorn, fastapi, downshift.core, downshift.serve,
+downshift.loading) are deferred into the command bodies that need them, so `--help` and
+`--version` stay fast and torch-free. `from __future__ import annotations` lets the type
+hints below name those modules' types without importing them at module load time; the
+`TYPE_CHECKING` block below is what makes mypy still see them.
+"""
+
+from __future__ import annotations
 
 import json
 import logging
@@ -9,22 +18,22 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import typer
-import uvicorn
-from fastapi import FastAPI
 
 import downshift
 from downshift import __version__, settings
 from downshift.cli import render
-from downshift.core.manifest import manifest_path_for
-from downshift.core.shapes import parse_dynamic_spec
-from downshift.core.verdict import ExportVerdict
-from downshift.loading import LoadedModel, LoadError, is_import_spec, load_model
-from downshift.serve.app import build_app
-from downshift.serve.engine import BackendChoice, ServeOptions, ServingState, prepare_serving
+from downshift.serve.options import BackendChoice, ServeOptions
 from downshift.serve.schemas import OutputEncoding
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
+
+    from downshift.core.verdict import ExportVerdict
+    from downshift.loading import LoadedModel
+    from downshift.serve.engine import ServingState
 
 EXIT_USAGE = 4  # bad model spec, bad option, unloadable file
 EXIT_CRASH = 5
@@ -215,6 +224,8 @@ def _exit_on_error(debug: bool) -> Iterator[None]:
 
 
 def _load(spec: str, inputs: str | None, model_class: str | None, unsafe_load: bool) -> LoadedModel:
+    from downshift.loading import load_model
+
     if unsafe_load:
         render.warn(
             f"--unsafe-load: torch.load(weights_only=False) on {spec}; arbitrary code may run"
@@ -224,6 +235,8 @@ def _load(spec: str, inputs: str | None, model_class: str | None, unsafe_load: b
 
 def slug(spec: str) -> str:
     """tests.models.clean_mlp:make_model -> clean_mlp; ./gat_v3.pt -> gat_v3; org/repo -> repo."""
+    from downshift.loading import is_import_spec
+
     if is_import_spec(spec):
         return spec.partition(":")[0].rsplit(".", 1)[-1]
     return Path(spec).stem
@@ -253,6 +266,8 @@ def check_cmd(
     log_format: LogFormatOpt = LogFormat.text,
 ) -> None:
     """Export in memory and verify numerics. Exit 0 CLEAN, 1 FAILED, 2 DEGRADED, 3 UNVERIFIED."""
+    from downshift.core.shapes import parse_dynamic_spec
+
     _setup_logging(log_level, log_format)
     with _exit_on_error(log_level is LogLevel.debug):
         loaded = _load(model, inputs, model_class, unsafe_load)
@@ -304,6 +319,10 @@ def export_cmd(
     log_format: LogFormatOpt = LogFormat.text,
 ) -> None:
     """Export to DIR/NAME.onnx with a NAME.manifest.json sidecar. Nothing is written if FAILED."""
+    from downshift.core.manifest import manifest_path_for
+    from downshift.core.shapes import parse_dynamic_spec
+    from downshift.loading import LoadError
+
     _setup_logging(log_level, log_format)
     with _exit_on_error(log_level is LogLevel.debug):
         loaded = _load(model, inputs, model_class, unsafe_load)
@@ -362,6 +381,10 @@ _SERVE_ARGS_ENV = "_DOWNSHIFT_SERVE_ARGS"
 
 
 def _build_serving_app(args: ServeArgs) -> tuple[ServingState, FastAPI]:
+    from downshift.core.shapes import parse_dynamic_spec
+    from downshift.serve.app import build_app
+    from downshift.serve.engine import prepare_serving
+
     loaded = _load(args.model, args.inputs, args.model_class, args.unsafe_load)
     ref = (
         _load(args.reference, args.inputs, args.model_class, args.unsafe_load)
@@ -435,6 +458,8 @@ def serve_cmd(
     log_format: LogFormatOpt = LogFormat.text,
 ) -> None:
     """Check the model, pick a backend from the verdict, and serve it over HTTP."""
+    import uvicorn
+
     _setup_logging(log_level, log_format)
     with _exit_on_error(log_level is LogLevel.debug):
         args = ServeArgs(

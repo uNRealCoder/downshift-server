@@ -2,7 +2,6 @@
 
 import threading
 from dataclasses import dataclass, field
-from enum import StrEnum
 from functools import cached_property
 from pathlib import Path
 from typing import Any
@@ -14,33 +13,7 @@ from downshift.core.prevalidated import intake
 from downshift.core.verdict import BackendName, ExportVerdict, build_verdict, prepare_model
 from downshift.loading import LoadedModel
 from downshift.serve.backends import Backend, OnnxRuntimeBackend, TorchBackend
-from downshift.serve.schemas import OutputEncoding
-from downshift.settings import DEFAULT_MAX_BODY_BYTES, DEFAULT_MAX_INPUT_BYTES
-
-
-class BackendChoice(StrEnum):
-    """What the caller asked for; "auto" defers to the verdict's recommendation."""
-
-    auto = "auto"
-    onnxruntime = "onnxruntime"
-    torch = "torch"
-
-
-@dataclass
-class ServeOptions:
-    backend: BackendChoice = BackendChoice.auto
-    force_onnx: bool = False  # serve a DEGRADED graph via ORT anyway
-    device: str = "auto"
-    warmup: int = 3
-    k: int = 8
-    adapter: str | None = None
-    dynamic: dict[str, list[int]] | None = None
-    intra_op_threads: int = 0  # ORT SessionOptions; 0 = let ONNX Runtime choose
-    inter_op_threads: int = 0
-    output_encoding: OutputEncoding = OutputEncoding.json  # requests may override per call
-    max_input_bytes: int = DEFAULT_MAX_INPUT_BYTES  # cap on one decoded base64 tensor input
-    max_body_bytes: int = DEFAULT_MAX_BODY_BYTES  # cap on the whole request body
-    max_concurrency: int = 1  # inferences allowed to run at once per worker process
+from downshift.serve.options import BackendChoice, ServeOptions
 
 
 @dataclass

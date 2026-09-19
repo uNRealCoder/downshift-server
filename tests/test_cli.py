@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 import torch
+import uvicorn
 from typer.testing import CliRunner
 
 from downshift.cli import main
@@ -185,7 +186,7 @@ def _serve_captured(monkeypatch, *extra_args: str) -> tuple:
     """
     pytest.importorskip("downshift.serve.app")
     captured: dict = {}
-    monkeypatch.setattr(main.uvicorn, "run", lambda app, **kw: captured.update(app=app, **kw))
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: captured.update(app=app, **kw))
     result = run("serve", CLEAN, "--warmup", "1", *extra_args)
     assert result.exit_code == 0, result.output
     return result, captured

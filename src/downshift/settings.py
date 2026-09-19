@@ -9,8 +9,6 @@ import os
 from collections.abc import Callable
 from typing import TypeVar
 
-import torch
-
 T = TypeVar("T")
 
 # Decoded size a single base64 tensor input may reach; the server passes its own limit.
@@ -80,8 +78,8 @@ _TOLERANCE_DEFAULTS = {
     "bfloat16": (5e-2, 5e-2),
 }
 
-TOLERANCES: dict[torch.dtype, tuple[float, float]] = {
-    getattr(torch, name): (
+TOLERANCES: dict[str, tuple[float, float]] = {
+    name: (
         _env_float(f"DOWNSHIFT_TOL_{name.upper()}_ATOL", atol),
         _env_float(f"DOWNSHIFT_TOL_{name.upper()}_RTOL", rtol),
     )

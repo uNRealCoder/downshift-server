@@ -5,7 +5,6 @@ around each case rather than importing the constants once at collection time.
 import importlib
 
 import pytest
-import torch
 
 from downshift import settings
 
@@ -80,6 +79,6 @@ def test_bad_float_env_var_raises_clear_error(monkeypatch: pytest.MonkeyPatch) -
 def test_per_dtype_tolerance_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DOWNSHIFT_TOL_FLOAT16_ATOL", "0.05")
     mod = importlib.reload(settings)
-    assert mod.TOLERANCES[torch.float16] == (0.05, 1e-2)
+    assert mod.TOLERANCES["float16"] == (0.05, 1e-2)
     # Untouched dtypes keep their defaults.
-    assert mod.TOLERANCES[torch.float32] == (1e-4, 1e-3)
+    assert mod.TOLERANCES["float32"] == (1e-4, 1e-3)

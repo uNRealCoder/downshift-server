@@ -1,6 +1,9 @@
 """All rich output for the CLI lives here. Commands hand over objects; this module prints."""
 
+from __future__ import annotations
+
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from rich import box
 from rich.console import Console
@@ -10,9 +13,11 @@ from rich.table import Table
 from rich.text import Text
 
 from downshift import __version__
-from downshift.core.verdict import ExportVerdict
 from downshift.serve.codec import BASE64_CODEC
-from downshift.serve.engine import ServingState
+
+if TYPE_CHECKING:
+    from downshift.core.verdict import ExportVerdict
+    from downshift.serve.engine import ServingState
 
 console = Console()
 err_console = Console(stderr=True)

@@ -46,12 +46,17 @@ class NumericsReport:
         return asdict(self) | {"passed": self.passed}
 
 
+_TOLERANCES_BY_DTYPE: dict[torch.dtype, tuple[float, float]] = {
+    getattr(torch, name): value for name, value in TOLERANCES.items()
+}
+
+
 def default_tolerances(model: torch.nn.Module) -> tuple[float, float]:
     dtypes = {p.dtype for p in model.parameters() if p.is_floating_point()}
     for dtype in (torch.bfloat16, torch.float16):
         if dtype in dtypes:
-            return TOLERANCES[dtype]
-    return TOLERANCES[torch.float32]
+            return _TOLERANCES_BY_DTYPE[dtype]
+    return _TOLERANCES_BY_DTYPE[torch.float32]
 
 
 def _resize_dim0(tensor: torch.Tensor, new_size: int) -> torch.Tensor:
