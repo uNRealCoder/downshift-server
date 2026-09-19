@@ -1,6 +1,6 @@
 # downshift
 
-Check whether your PyTorch model survives ONNX export. Then serve it, falling back to eager PyTorch when ONNX would be lying to you.
+Serve a PyTorch model over HTTP with one command. Before the first request, downshift exports the model to ONNX, verifies the graph against PyTorch on inputs the exporter never saw, and serves eager PyTorch instead when the ONNX graph would be lying to you.
 
 ```
 $ downshift serve downshift.demo.scatter_include_self_false:make_model
@@ -17,12 +17,12 @@ $ downshift serve downshift.demo.scatter_include_self_false:make_model
 │  Dynamic dims   x[0], segment_ids[0]                                      │
 │  Encoding       json  (clients override with output_encoding)             │
 │  Concurrency    1 inference at a time  (--max-concurrency)                │
-│  Endpoint       http://127.0.0.1:8000                                       │
+│  Endpoint       http://127.0.0.1:8000                                     │
 │                                                                           │
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
-This graph exported without a single error and produces wrong numbers on 7 of 8 inputs. The tool caught it and served PyTorch instead.
+This graph exported without a single error and produces wrong numbers on 7 of 8 inputs. downshift caught it before the first request and is serving PyTorch instead.
 
 ## Install
 
@@ -38,55 +38,13 @@ For development, install editable from a checkout instead: `pip install -e ".[de
 
 Python 3.11 to 3.14. CPU-only is what this release was tested on. CUDA execution-provider selection exists (`--device cuda`) but is untested in this release.
 
-## Quick start
-
-### `check`: is the export trustworthy?
-
-```
-$ downshift check downshift.demo.scatter_include_self_false:make_model
-
-┌───────────────┬─────────────────────────────────────────────────────────────┐
-│ Model         │ downshift.demo.scatter_include_self_false:make_model        │
-│ Family        │ generic-torch                                               │
-│ Export        │ DEGRADED  (strict=False, opset 20)                          │
-│ Numerics      │ max abs err 1.34e+00 over 8 samples  ✗ 7/8 failed           │
-│ Shape-general │ no                                                          │
-│ Dynamic dims  │ x[0], segment_ids[0]                                        │
-│ Backend       │ torch                                                       │
-│ Reason        │ exported via strict=False but numerics diverge on 7/8       │
-│               │ samples (max abs err 1.34e+00)                              │
-└───────────────┴─────────────────────────────────────────────────────────────┘
-```
-
-`check` exports in memory, runs `k` random samples (default 8) through both PyTorch and ONNX Runtime, and varies the dynamic axes so some samples have shapes the exporter never saw. Nothing is written to disk.
-
-A sample passes when every output element satisfies `numpy.allclose`: `abs_err <= atol + rtol * |expected|`, the same rule numpy uses. Defaults are chosen by the widest floating dtype in the model's parameters and are overridable, e.g. `DOWNSHIFT_TOL_FLOAT32_ATOL=1e-3` or `DOWNSHIFT_TOL_FLOAT16_RTOL=0.05`.
-
-The exit code is the verdict, so it can gate CI: `0` CLEAN, `1` FAILED, `2` DEGRADED, `3` UNVERIFIED. (`4` is a usage error such as an unloadable model; `5` is a crash.) `--json` prints the full verdict as JSON and nothing else:
-
-```bash
-downshift check my_pkg.models:build --json -k 16 > verdict.json
-```
-
-Useful options: `-k/--samples`, `--dynamic "x:0,edge_index:1"` to override which axes are dynamic (default: axis 0 of every input), `--adapter generic|pyg|hf` to skip detection, `--inputs pkg.module:fn` to supply example inputs.
-
-### `export`: write the artifact
-
-```bash
-downshift export my_pkg.models:build -o artifacts/ --name classifier
-```
-
-Writes `artifacts/classifier.onnx` and `artifacts/classifier.manifest.json`. The manifest records the SHA-256 of the artifact and of the source checkpoint (when the model came from a file), torch/onnx/onnxruntime versions, opset, the observed weight dtype, and the full verdict including the numerics report. A DEGRADED export is still written, because the manifest records exactly how far off it is; a FAILED export writes nothing.
-
-`--fp16` casts the model to half before export (a plain `.half()`, not quantization). It works on a deep copy, so the model object you passed in is left untouched. `--no-verify` skips the numerics check and marks the verdict UNVERIFIED, with a warning.
-
-### `serve`: one endpoint, backend chosen by the verdict
+## Serve
 
 ```bash
 downshift serve my_pkg.models:build --port 8000
 ```
 
-Prints the banner above, then starts uvicorn. Routes:
+`serve` loads the model, runs the export-and-verify gate described in [The gate](#the-gate-export-and-verify-before-serving), picks a backend from the verdict, warms it up, prints the banner above, and starts uvicorn. The routes are the same whichever backend is behind them.
 
 | Route | What it does |
 |---|---|
@@ -94,7 +52,7 @@ Prints the banner above, then starts uvicorn. Routes:
 | `POST /predict/graph` | One graph: `x`, `edge_index`, optional `edge_attr` |
 | `GET /health` | Liveness |
 | `GET /ready` | `200` once warmup is done, `503` before |
-| `GET /metadata` | Family, backend, full verdict, input names |
+| `GET /metadata` | Family, backend, full verdict, input names, limits |
 
 ```bash
 curl -s localhost:8000/predict -H 'content-type: application/json' \
@@ -109,7 +67,21 @@ curl -s localhost:8000/predict -H 'content-type: application/json' \
 
 Integer lists become `int64`, everything else `float32`. To be explicit, pass `{"data": [...], "dtype": "float16", "shape": [1, 16]}` instead of a bare list.
 
-**Binary tensors.** The same `{"data", "dtype", "shape"}` form also takes a base64 string in `data`: the raw little-endian, C-contiguous bytes of the array, standard alphabet, with padding. Detection is by type, a string is base64 and a list is the JSON path above, so existing clients keep working. Any input on `/predict` accepts it, as do `x`, `edge_index` and `edge_attr` on `/predict/graph`. Outputs stay JSON unless asked: `"output_encoding": "base64"` next to `inputs` (or next to `x` on `/predict/graph`) turns each `outputs[name]` into the same `{"data", "dtype", "shape"}` dict, and `shapes` and `dtypes` stay populated either way. A client needs only the standard library and numpy:
+For graph models:
+
+```bash
+curl -s localhost:8000/predict/graph -H 'content-type: application/json' \
+  -d '{"x": [[0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
+             [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2],
+             [0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3]],
+       "edge_index": [[0, 1, 2], [1, 2, 0]]}'
+```
+
+The response has the same shape as `/predict`, with one output row per node.
+
+### Binary tensors
+
+The same `{"data", "dtype", "shape"}` form also takes a base64 string in `data`: the raw little-endian, C-contiguous bytes of the array, standard alphabet, with padding. Detection is by type, a string is base64 and a list is the JSON path above, so existing clients keep working. Any input on `/predict` accepts it, as do `x`, `edge_index` and `edge_attr` on `/predict/graph`. Outputs stay JSON unless asked: `"output_encoding": "base64"` next to `inputs` (or next to `x` on `/predict/graph`) turns each `outputs[name]` into the same `{"data", "dtype", "shape"}` dict, and `shapes` and `dtypes` stay populated either way. A client needs only the standard library and numpy:
 
 ```python
 import base64, json, urllib.request
@@ -150,17 +122,7 @@ Do not expect this to help on small payloads: under roughly 100 KiB the JSON cod
 
 See CHANGELOG.md for wire-format changes in 0.3.
 
-For graph models:
-
-```bash
-curl -s localhost:8000/predict/graph -H 'content-type: application/json' \
-  -d '{"x": [[0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
-             [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2],
-             [0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3]],
-       "edge_index": [[0, 1, 2], [1, 2, 0]]}'
-```
-
-The response has the same shape as `/predict`, with one output row per node.
+### Options
 
 Options that change what gets served:
 
@@ -172,8 +134,11 @@ Options that change what gets served:
 - `--max-input-bytes N` (env `DOWNSHIFT_MAX_INPUT_BYTES`, default 256 MiB) caps the decoded size of one base64 input; larger is a `400`.
 - `--max-body-bytes N` (env `DOWNSHIFT_MAX_BODY_BYTES`, default 256 MiB) caps every request body, checked before it is parsed as JSON; larger is a `413`.
 - `--max-concurrency N` (env `DOWNSHIFT_MAX_CONCURRENCY`, default 1) caps inferences running at once per worker process. One inference already uses every core through ONNX Runtime's intra-op threads, so on CPU raising this rarely adds throughput; it mostly adds contention. Use `--workers` for more processes instead.
-- `--device auto|cpu|cuda`, `--warmup N` (inferences before `/ready` flips), `--host`, `--port`, `--log-level`, `--log-format json`.
+- `--workers N` (env `DOWNSHIFT_WORKERS`, default 1) starts that many uvicorn worker processes. Each one independently loads, exports, verifies and warms the model, so memory and startup time scale with `N`.
+- `--device auto|cpu|cuda`, `--warmup N` (inferences before `/ready` flips), `--intra-op-threads N` and `--inter-op-threads N` (ONNX Runtime thread counts; 0 lets it choose), `--host`, `--port`, `--log-level`, `--log-format json`.
 - `--version` prints the installed version and exits.
+
+`serve` runs the same gate as `check`, so it also accepts `-k/--samples`, `--dynamic`, `--adapter`, `--inputs`, `--model-class` and `--unsafe-load`, described below.
 
 ### Errors
 
@@ -183,6 +148,55 @@ Options that change what gets served:
 | `413` | Request body larger than `--max-body-bytes`. |
 | `422` | Malformed JSON, or a required field is missing. |
 | `500` | Server-side fault. The body is always the fixed `{"detail": "inference failed on the server; see the server log"}`; the actual exception is logged, not returned. |
+
+## The gate: export and verify before serving
+
+`torch.onnx.export` succeeding is not evidence that the graph computes the same function as the model. So before anything is served, downshift exports the model in memory, runs `k` random samples (default 8) through both PyTorch and ONNX Runtime, and varies the dynamic axes so some samples have shapes the exporter never saw. Nothing is written to disk. The result is one of four verdicts, and the verdict picks the backend:
+
+- **CLEAN**: exports, matches PyTorch on every sample, survives shapes it was not traced on. Served via ONNX Runtime.
+- **DEGRADED**: exports without error, but numerics drift past tolerance on at least one sample. Served via eager PyTorch; `--force-onnx` overrides.
+- **FAILED**: does not export, or exports but ONNX Runtime cannot load or run the graph. Served via eager PyTorch. Not an error, a supported path.
+- **UNVERIFIED**: a `.onnx` with no reference model, or `--no-verify`. Served via ONNX Runtime and labelled as never checked.
+
+A sample passes when every output element satisfies `numpy.allclose`: `abs_err <= atol + rtol * |expected|`, the same rule numpy uses. Defaults are chosen by the widest floating dtype in the model's parameters and are overridable, e.g. `DOWNSHIFT_TOL_FLOAT32_ATOL=1e-3` or `DOWNSHIFT_TOL_FLOAT16_RTOL=0.05`.
+
+The gate also runs on its own, to gate CI and to write artifacts.
+
+### `check`: is the export trustworthy?
+
+```
+$ downshift check downshift.demo.scatter_include_self_false:make_model
+
+┌───────────────┬─────────────────────────────────────────────────────────────┐
+│ Model         │ downshift.demo.scatter_include_self_false:make_model        │
+│ Family        │ generic-torch                                               │
+│ Export        │ DEGRADED  (strict=False, opset 20)                          │
+│ Numerics      │ max abs err 1.34e+00 over 8 samples  ✗ 7/8 failed           │
+│ Shape-general │ no                                                          │
+│ Dynamic dims  │ x[0], segment_ids[0]                                        │
+│ Backend       │ torch                                                       │
+│ Reason        │ exported via strict=False but numerics diverge on 7/8       │
+│               │ samples (max abs err 1.34e+00)                              │
+└───────────────┴─────────────────────────────────────────────────────────────┘
+```
+
+The exit code is the verdict, so it can gate CI: `0` CLEAN, `1` FAILED, `2` DEGRADED, `3` UNVERIFIED. (`4` is a usage error such as an unloadable model; `5` is a crash.) `--json` prints the full verdict as JSON and nothing else:
+
+```bash
+downshift check my_pkg.models:build --json -k 16 > verdict.json
+```
+
+Useful options: `-k/--samples`, `--dynamic "x:0,edge_index:1"` to override which axes are dynamic (default: axis 0 of every input), `--adapter generic|pyg|hf` to skip detection, `--inputs pkg.module:fn` to supply example inputs.
+
+### `export`: write the artifact
+
+```bash
+downshift export my_pkg.models:build -o artifacts/ --name classifier
+```
+
+Writes `artifacts/classifier.onnx` and `artifacts/classifier.manifest.json`. The manifest records the SHA-256 of the artifact and of the source checkpoint (when the model came from a file), torch/onnx/onnxruntime versions, opset, the observed weight dtype, and the full verdict including the numerics report. A DEGRADED export is still written, because the manifest records exactly how far off it is; a FAILED export writes nothing.
+
+`--fp16` casts the model to half before export (a plain `.half()`, not quantization). It works on a deep copy, so the model object you passed in is left untouched. `--no-verify` skips the numerics check and marks the verdict UNVERIFIED, with a warning.
 
 ## Accepted model forms
 
@@ -195,13 +209,6 @@ Options that change what gets served:
 | `path/to/repo/dir/` | Locally downloaded Hugging Face repo: a directory containing `config.json`. Needs the `[hf]` extra. |
 
 Checkpoints are loaded with `torch.load(weights_only=True)`. A file that holds a pickled full module will not load that way; `--unsafe-load` switches to `weights_only=False`, which means running arbitrary code from the file. Only use it on files you would run as a script.
-
-## The four verdicts
-
-- **CLEAN**: exports, matches PyTorch on every sample, survives shapes it was not traced on. Served via ONNX Runtime.
-- **DEGRADED**: exports without error, but numerics drift past tolerance on at least one sample. Served via eager PyTorch; `--force-onnx` overrides.
-- **FAILED**: does not export, or exports but ONNX Runtime cannot load or run the graph. Served via eager PyTorch. Not an error, a supported path.
-- **UNVERIFIED**: a `.onnx` with no reference model, or `--no-verify`. Served via ONNX Runtime and labelled as never checked.
 
 ## Compatibility matrix
 
@@ -225,7 +232,7 @@ Generated by `scripts/gen_matrix.py` from the fixture corpus in `tests/models/`,
 | `tiny_bert` | HF fixture: a randomly initialised two-layer BERT encoder | hf-transformers | CLEAN | strict=False | 6.0e-07 | ✓ | onnxruntime |
 <!-- matrix:end -->
 
-Two rows worth reading twice. `custom_autograd` was expected to fail and is CLEAN, because `torch.export` traces straight through a `Function.forward` made of ordinary ops. `scatter_include_self_false` was expected to fail loudly and instead exports with zero errors and returns the wrong numbers; the only thing standing between that graph and production is the numerics check. A third: `bf16_weights` exports cleanly and ONNX Runtime can't run it — bfloat16 has no CPU Gemm kernel — which used to crash the tool outright and is now a FAILED verdict like any other.
+Two rows worth reading twice. `custom_autograd` was expected to fail and is CLEAN, because `torch.export` traces straight through a `Function.forward` made of ordinary ops. `scatter_include_self_false` was expected to fail loudly and instead exports with zero errors and returns the wrong numbers; the only thing standing between that graph and production is the numerics check. A third: `bf16_weights` exports cleanly and ONNX Runtime can't run it, since bfloat16 has no CPU Gemm kernel; that used to crash the tool outright and is now a FAILED verdict like any other.
 
 ## What this is not
 

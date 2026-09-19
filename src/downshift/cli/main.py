@@ -30,7 +30,7 @@ EXIT_USAGE = 4  # bad model spec, bad option, unloadable file
 EXIT_CRASH = 5
 
 app = typer.Typer(
-    help="Check whether a PyTorch model survives ONNX export, then serve it.",
+    help="Serve a PyTorch model over HTTP, with its ONNX export verified against PyTorch first.",
     no_args_is_help=True,
     add_completion=False,
 )

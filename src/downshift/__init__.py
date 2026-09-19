@@ -1,4 +1,4 @@
-"""downshift: check whether a PyTorch model survives ONNX export, then serve it."""
+"""downshift: serve a PyTorch model over HTTP, with its ONNX export verified against PyTorch first."""
 
 from pathlib import Path
 

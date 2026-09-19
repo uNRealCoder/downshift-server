@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "downshift-server"
 version = "0.3.0"
-description = "Universal PyTorch → ONNX verification and serving, with graceful fallback."
+description = "Serve PyTorch models over HTTP through ONNX Runtime, verified against PyTorch before serving, with eager fallback."
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
 license = {text = "MIT"}
