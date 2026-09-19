@@ -27,17 +27,35 @@ class OnnxRuntimeError(RuntimeError):
 
 
 @dataclass
+class WorstMismatch:
+    """The single element with the largest absolute error, across every sample tried."""
+
+    sample: int
+    output: int
+    index: tuple[int, ...]
+    expected: float
+    got: float
+    input_shapes: list[tuple[int, ...]]
+
+
+@dataclass
 class NumericsReport:
     samples_tested: int
     max_abs_err: float
     max_rel_err: float
     failures: int
-    shape_generalization: bool  # did every non-baseline-shape sample also pass?
+    # None when the baseline sample itself failed (shape generalization was never evaluated),
+    # False when the baseline passes but a varied shape fails, True otherwise.
+    shape_generalization: bool | None
     tolerance_abs: float
     tolerance_rel: float
     tolerance_dtype: str = (
         "float32"  # the dtype whose default (tolerance_abs, tolerance_rel) applied
     )
+    tolerance_overridden: bool = False  # --atol/--rtol picked the values, not tolerance_dtype
+    baseline_failed: bool = False
+    worst: WorstMismatch | None = None
+    sample_shapes: list[list[tuple[int, ...]]] = field(default_factory=list)
     seed: int = 0
     notes: list[str] = field(default_factory=list)
 
@@ -164,19 +182,26 @@ def _to_numpy(tensor: torch.Tensor) -> np.ndarray:
     return tensor.detach().numpy()
 
 
+# (output index, unravelled element index, expected, got, abs_err) for the argmax element
+# of one output; abs_err is dropped before it reaches WorstMismatch, it only ranks candidates.
+WorstCandidate = tuple[int, tuple[int, ...], float, float, float]
+
+
 def _compare_sample(
     torch_outs: list[torch.Tensor],
     ort_outs: list,
     atol: float,
     rtol: float,
     sample_index: int,
-) -> tuple[float, float, bool, str | None]:
-    """Per-element allclose rule for one sample: (max_abs_err, max_rel_err, failed, note).
+) -> tuple[float, float, bool, str | None, WorstCandidate | None]:
+    """Per-element allclose rule for one sample: (max_abs_err, max_rel_err, failed, note, worst).
 
     A sample fails if any single element has abs_err > atol + rtol * |expected|, using
     np.isclose(equal_nan=False) semantics: NaN vs NaN is a mismatch, same-sign inf vs inf
     matches. Shape/count mismatches between the torch and ORT outputs also fail the sample,
-    with a human-readable note, instead of raising.
+    with a human-readable note, instead of raising. `worst` is the argmax-abs-error element
+    across every output that was actually comparable (None when none were, e.g. a shape or
+    count mismatch on every output).
     """
     note: str | None
     if len(torch_outs) != len(ort_outs):
@@ -184,12 +209,14 @@ def _compare_sample(
             f"sample {sample_index}: {len(torch_outs)} torch outputs "
             f"vs {len(ort_outs)} onnxruntime outputs"
         )
-        return 0.0, 0.0, True, note
+        return 0.0, 0.0, True, note, None
 
     sample_abs = 0.0
     sample_rel = 0.0
     failed = False
     note = None
+    worst: WorstCandidate | None = None
+    worst_abs = -1.0
     for idx, (expected, got) in enumerate(zip(torch_outs, ort_outs, strict=True)):
         expected_np = _to_numpy(expected)
         got_np = np.asarray(got)
@@ -208,10 +235,22 @@ def _compare_sample(
         sample_abs = max(sample_abs, float(abs_err.max(initial=0.0)))
         sample_rel = max(sample_rel, float(rel_err.max(initial=0.0)))
 
+        if abs_err.size and float(abs_err.max()) > worst_abs:
+            flat_index = int(np.argmax(abs_err))
+            unravelled = tuple(int(x) for x in np.unravel_index(flat_index, abs_err.shape))
+            worst_abs = float(abs_err.flat[flat_index])
+            worst = (
+                idx,
+                unravelled,
+                float(expected64.flat[flat_index]),
+                float(got64.flat[flat_index]),
+                worst_abs,
+            )
+
         if np.any(~np.isclose(got64, expected64, rtol=rtol, atol=atol, equal_nan=False)):
             failed = True
 
-    return sample_abs, sample_rel, failed, note
+    return sample_abs, sample_rel, failed, note, worst
 
 
 def verify(
@@ -230,6 +269,7 @@ def verify(
             raise ValueError("verify() needs either dynamic_shapes or an explicit vary_fn")
         vary_fn = make_shared_axis0_vary_fn(base_inputs, dynamic_shapes)
 
+    tolerance_overridden = atol is not None or rtol is not None
     tolerance_dtype, default_atol, default_rtol = default_tolerances(model)
     atol = default_atol if atol is None else atol
     rtol = default_rtol if rtol is None else rtol
@@ -247,13 +287,21 @@ def verify(
     max_rel_err = 0.0
     failures = 0
     non_baseline_failures = 0
+    baseline_failed = False
     notes: list[str] = []
+    sample_shapes: list[list[tuple[int, ...]]] = []
+    worst: WorstMismatch | None = None
+    worst_abs = -1.0
 
     # Seed inside a forked RNG so callers' global random state is untouched afterwards.
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(seed)
         for i in range(k):
             sample = vary_fn(i)
+            shapes_this_sample = [
+                tuple(t.shape) if isinstance(t, torch.Tensor) else () for t in sample
+            ]
+            sample_shapes.append(shapes_this_sample)
             try:
                 with torch.inference_mode():
                     raw_output = model(*sample)
@@ -290,28 +338,47 @@ def verify(
                     f"onnxruntime failed on sample {i} (input shapes {shapes}): {_first_line(exc)}"
                 ) from exc
 
-            sample_abs, sample_rel, sample_failed, note = _compare_sample(
+            sample_abs, sample_rel, sample_failed, note, candidate = _compare_sample(
                 torch_outs, ort_outs, atol, rtol, i
             )
             if note is not None:
                 notes.append(note)
+            if candidate is not None:
+                output_idx, index, expected_val, got_val, candidate_abs = candidate
+                if candidate_abs > worst_abs:
+                    worst_abs = candidate_abs
+                    worst = WorstMismatch(
+                        sample=i,
+                        output=output_idx,
+                        index=index,
+                        expected=expected_val,
+                        got=got_val,
+                        input_shapes=shapes_this_sample,
+                    )
 
             max_abs_err = max(max_abs_err, sample_abs)
             max_rel_err = max(max_rel_err, sample_rel)
             if sample_failed:
                 failures += 1
-                if i > 0:
+                if i == 0:
+                    baseline_failed = True
+                else:
                     non_baseline_failures += 1
 
+    shape_generalization = None if baseline_failed else non_baseline_failures == 0
     return NumericsReport(
         samples_tested=k,
         max_abs_err=max_abs_err,
         max_rel_err=max_rel_err,
         failures=failures,
-        shape_generalization=non_baseline_failures == 0,
+        shape_generalization=shape_generalization,
         tolerance_abs=atol,
         tolerance_rel=rtol,
         tolerance_dtype=tolerance_dtype,
+        tolerance_overridden=tolerance_overridden,
+        baseline_failed=baseline_failed,
+        worst=worst,
+        sample_shapes=sample_shapes,
         seed=seed,
         notes=notes,
     )

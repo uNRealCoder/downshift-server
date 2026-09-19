@@ -12,6 +12,8 @@ import pytest
 import torch
 
 import downshift
+from downshift.core import verdict as verdict_mod
+from downshift.core.capture import CaptureResult
 from tests.models import (
     bf16_weights,
     clean_mlp,
@@ -100,6 +102,29 @@ def test_check_with_fp16_does_not_mutate_the_callers_model() -> None:
     assert next(model.parameters()).dtype == original_dtype
     assert verdict.prepared is not None
     assert next(verdict.prepared.model.parameters()).dtype == torch.float16
+
+
+def test_build_verdict_uses_first_failure_and_mines_unsupported_ops_from_all(monkeypatch) -> None:
+    first = RuntimeError("aten.scatter_reduce.two not supported")
+    second = RuntimeError("generic export failure mentioning aten.index_put too")
+
+    def fake_capture(model, inputs, dynamic_shapes=None):
+        return CaptureResult(
+            success=False,
+            capture_strategy=None,
+            exception=first,
+            exceptions=[("strict=False", first), ("strict=True", second)],
+        )
+
+    monkeypatch.setattr(verdict_mod, "capture", fake_capture)
+    prepared = verdict_mod.prepare_model(clean_mlp.make_model(), clean_mlp.make_inputs())
+
+    verdict = verdict_mod.build_verdict(prepared)
+
+    assert verdict.status == "FAILED"
+    assert "aten.scatter_reduce" in verdict.reason  # the first failure, not the second's
+    assert verdict.unsupported_ops == ["index_put", "scatter_reduce"]  # mined from both
+    assert verdict.capture_exceptions == [("strict=False", first), ("strict=True", second)]
 
 
 def test_scatter_fixture_numerics_actually_diverge() -> None:

@@ -46,6 +46,17 @@ All notable changes to this project are documented here. Format follows
   model raise, the error now says the sample came from downshift's sampler, gives the
   shapes and bounds it was drawn from, and points at `--vary` or a custom adapter, instead
   of suggesting `--dynamic`/`--inputs` as if it were the user's own input.
+- `op_types` is a count-descending histogram now, not a flat list: `["Gemm", "Relu", "Gemm"]`
+  is `{"Gemm": 2, "Relu": 1}`. Affects `CaptureResult.op_types`, `ExportVerdict.op_types`,
+  and so `check --json`, the manifest, and `/metadata`.
+- `shape_generalization` is `null` (not `false`) when the baseline sample itself failed,
+  since shape generalization was never evaluated in that case; a new
+  `shape_generalization_reason` string in `to_dict()` says why. The `check` table's
+  `Shape-general` row shows `n/a (baseline fails)`, `no`, or `yes` accordingly
+  (`NumericsReport.baseline_failed`).
+- A FAILED verdict's `reason` now quotes the first export strategy's exception
+  (`strict=False`) instead of the last (`strict=True`), and `unsupported_ops` is mined from
+  every strategy tried, not just the one whose message happened to survive.
 
 ### Added
 
@@ -64,6 +75,16 @@ All notable changes to this project are documented here. Format follows
   its `torch.export.Dim`, falling back to `(1, 1 << 16)` if the attributes aren't there.
   The default sampler and the `pyg`/`hf` adapters now clamp their varied sizes to it, so a
   generated sample never exceeds what the model was actually declared to support.
+- `NumericsReport.worst`, the single largest-error output element across every sample tried
+  (output index, unravelled element index, expected value, got value, input shapes);
+  rendered as a `Worst` row in the `check` table on DEGRADED.
+- `NumericsReport.sample_shapes`, the input shapes of every verification sample tried;
+  rendered as a `Samples` row.
+- A FAILED `Reason` row now points at `--log-level debug`, which logs torch's export
+  stderr and every strategy's traceback (`ExportVerdict.capture_stderr`,
+  `.capture_exceptions`).
+- The `Tolerance` row says `(--atol/--rtol)` instead of naming a dtype that didn't choose
+  the values, when either flag overrides the default (`NumericsReport.tolerance_overridden`).
 
 ### Removed
 

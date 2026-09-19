@@ -67,7 +67,7 @@ def test_compare_sample_uses_per_element_allclose_not_the_maxima():
     expected = torch.tensor([1000.0, 1e-6])
     got = np.array([1000.5, 1e-6 + 5e-5])
 
-    sample_abs, sample_rel, failed, note = _compare_sample([expected], [got], atol, rtol, 0)
+    sample_abs, sample_rel, failed, note, _ = _compare_sample([expected], [got], atol, rtol, 0)
 
     assert failed is False
     assert note is None
@@ -81,7 +81,7 @@ def test_compare_sample_fails_when_any_single_element_exceeds_allclose():
     expected = torch.tensor([1.0])
     got = np.array([2.0])  # abs_err 1.0 >> atol + rtol * |expected| == 1.1e-3
 
-    _, _, failed, note = _compare_sample([expected], [got], atol, rtol, 0)
+    _, _, failed, note, _ = _compare_sample([expected], [got], atol, rtol, 0)
 
     assert failed is True
     assert note is None
@@ -91,7 +91,7 @@ def test_compare_sample_notes_a_shape_mismatch_instead_of_raising():
     expected = torch.zeros(2, 4)
     got = np.zeros((2, 3))
 
-    _, _, failed, note = _compare_sample([expected], [got], 1e-4, 1e-3, 3)
+    _, _, failed, note, _ = _compare_sample([expected], [got], 1e-4, 1e-3, 3)
 
     assert failed is True
     assert note == "sample 3: output_0 shape (2, 4) from torch vs (2, 3) from onnxruntime"
@@ -101,10 +101,32 @@ def test_compare_sample_notes_an_output_count_mismatch_instead_of_raising():
     expected = [torch.zeros(2), torch.zeros(2)]
     got = [np.zeros(2)]
 
-    _, _, failed, note = _compare_sample(expected, got, 1e-4, 1e-3, 1)
+    _, _, failed, note, _ = _compare_sample(expected, got, 1e-4, 1e-3, 1)
 
     assert failed is True
     assert note == "sample 1: 2 torch outputs vs 1 onnxruntime outputs"
+
+
+def test_compare_sample_worst_is_the_argmax_error_element():
+    expected = torch.tensor([[1.0, 2.0], [3.0, 100.0]])
+    got = np.array([[1.0, 2.0], [3.0, 90.0]])  # only [1, 1] is off, by 10
+
+    _, _, _, _, worst = _compare_sample([expected], [got], 1e-4, 1e-3, 5)
+
+    assert worst is not None
+    output_idx, index, expected_val, got_val, abs_err = worst
+    assert (output_idx, index) == (0, (1, 1))
+    assert (expected_val, got_val) == (100.0, 90.0)
+    assert abs_err == pytest.approx(10.0)
+
+
+def test_compare_sample_worst_is_none_when_no_output_is_comparable():
+    expected = torch.zeros(2, 4)
+    got = np.zeros((2, 3))
+
+    _, _, _, _, worst = _compare_sample([expected], [got], 1e-4, 1e-3, 0)
+
+    assert worst is None
 
 
 def test_verify_records_a_note_and_fails_when_output_shapes_differ(monkeypatch):
@@ -135,7 +157,7 @@ def test_bf16_output_is_cast_to_float32_before_numpy_conversion():
     assert expected.dtype is torch.bfloat16
 
     got = expected.float().numpy()
-    sample_abs, sample_rel, failed, note = _compare_sample([expected], [got], 1.0, 1.0, 0)
+    sample_abs, sample_rel, failed, note, _ = _compare_sample([expected], [got], 1.0, 1.0, 0)
 
     assert note is None
     assert failed is False
@@ -283,6 +305,7 @@ def test_verify_records_tolerance_dtype_and_seed_on_the_report(monkeypatch):
     assert report.tolerance_dtype == "float64"
     assert (report.tolerance_abs, report.tolerance_rel) == (1e-6, 1e-5)
     assert report.seed == 3
+    assert report.tolerance_overridden is False
 
 
 def test_atol_rtol_override_the_dtype_default(monkeypatch):
@@ -294,6 +317,7 @@ def test_atol_rtol_override_the_dtype_default(monkeypatch):
 
     assert (report.tolerance_abs, report.tolerance_rel) == (1.0, 2.0)
     assert report.tolerance_dtype == "float32"  # still records what the dtype would have picked
+    assert report.tolerance_overridden is True
 
 
 def test_seed_makes_samples_reproducible(monkeypatch):
@@ -307,6 +331,51 @@ def test_seed_makes_samples_reproducible(monkeypatch):
 
     assert r1.to_dict() == r2.to_dict()
     assert r1.seed == 7
+
+
+def test_verify_records_sample_shapes_and_worst_mismatch(monkeypatch):
+    class Double(torch.nn.Module):
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            return x * 2
+
+    class OffOnSecondElement:
+        def get_inputs(self):
+            return [_FakeInput()]
+
+        def run(self, output_names, feeds):
+            return [feeds["x"] * 2 + np.array([[0.0, 50.0]], dtype=np.float32)]
+
+    monkeypatch.setattr(verify_mod, "_to_session", lambda onnx_model: OffOnSecondElement())
+    inputs = (torch.tensor([[1.0, 100.0]]),)
+
+    report = verify(Double(), "unused.onnx", inputs, k=1, vary_fn=lambda i: inputs)
+
+    assert report.sample_shapes == [[(1, 2)]]
+    assert report.worst is not None
+    assert report.worst.sample == 0
+    assert (report.worst.output, report.worst.index) == (0, (0, 1))
+    assert report.worst.input_shapes == [(1, 2)]
+    assert report.worst.expected == pytest.approx(200.0)  # x[0,1]*2
+    assert report.worst.got == pytest.approx(250.0)
+
+
+def test_verify_shape_generalization_is_none_when_the_baseline_sample_fails(monkeypatch):
+    class AlwaysWrong:
+        def get_inputs(self):
+            return [_FakeInput()]
+
+        def run(self, output_names, feeds):
+            return [feeds["x"] * 0]
+
+    monkeypatch.setattr(verify_mod, "_to_session", lambda onnx_model: AlwaysWrong())
+    model = clean_mlp.make_model()
+    inputs = clean_mlp.make_inputs()
+    dynamic_shapes = ({0: torch.export.Dim("n", min=1, max=64)},)
+
+    report = verify(model, "unused.onnx", inputs, dynamic_shapes, k=3)
+
+    assert report.baseline_failed is True
+    assert report.shape_generalization is None
 
 
 def test_shared_axis0_vary_fn_never_exceeds_the_dims_max():

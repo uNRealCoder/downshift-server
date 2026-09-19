@@ -61,7 +61,40 @@ def _tolerance_text(verdict: ExportVerdict) -> str | None:
     n = verdict.numerics
     if n is None:
         return None
-    return f"atol {n.tolerance_abs:.0e}, rtol {n.tolerance_rel:.0e} ({n.tolerance_dtype})"
+    picked_by = "--atol/--rtol" if n.tolerance_overridden else n.tolerance_dtype
+    return f"atol {n.tolerance_abs:.0e}, rtol {n.tolerance_rel:.0e} ({picked_by})"
+
+
+def _shape_tuple_text(shape: tuple[int, ...]) -> str:
+    return "(" + ",".join(str(dim) for dim in shape) + ")"
+
+
+def _worst_text(verdict: ExportVerdict) -> str | None:
+    n = verdict.numerics
+    if n is None or n.worst is None:
+        return None
+    w = n.worst
+    index = ", ".join(str(i) for i in w.index)
+    names = verdict.input_names or tuple(f"input_{i}" for i in range(len(w.input_shapes)))
+    shapes = ", ".join(
+        f"{name} {_shape_tuple_text(shape)}"
+        for name, shape in zip(names, w.input_shapes, strict=True)
+    )
+    return (
+        f"output_{w.output}[{index}]: torch {w.expected:.4f}, onnxruntime {w.got:.4f}"
+        f"  (sample {w.sample}, {shapes})"
+    )
+
+
+def _samples_text(verdict: ExportVerdict) -> str | None:
+    n = verdict.numerics
+    if n is None or not n.sample_shapes:
+        return None
+    names = verdict.input_names or tuple(f"input_{i}" for i in range(len(n.sample_shapes[0])))
+    lines = []
+    for name, shapes in zip(names, zip(*n.sample_shapes, strict=True), strict=True):
+        lines.append(f"{name}: " + " ".join(_shape_tuple_text(shape) for shape in shapes))
+    return "\n".join(lines)
 
 
 def _dynamic_text(verdict: ExportVerdict) -> str:
@@ -73,8 +106,11 @@ def _dynamic_text(verdict: ExportVerdict) -> str:
 
 
 def _shape_text(verdict: ExportVerdict) -> str:
-    if verdict.shape_generalization is None:
+    n = verdict.numerics
+    if n is None:
         return _sym("—", "-")
+    if n.baseline_failed:
+        return "n/a (baseline fails)"
     return "yes" if verdict.shape_generalization else "no"
 
 
@@ -89,6 +125,13 @@ def print_verdict(verdict: ExportVerdict, model_name: str) -> None:
     tolerance = _tolerance_text(verdict)
     if tolerance is not None:
         table.add_row("Tolerance", tolerance)
+    if verdict.status == "DEGRADED":
+        worst = _worst_text(verdict)
+        if worst is not None:
+            table.add_row("Worst", worst)
+    samples = _samples_text(verdict)
+    if samples is not None:
+        table.add_row("Samples", samples)
     table.add_row("Shape-general", _shape_text(verdict))
     table.add_row("Dynamic dims", _dynamic_text(verdict))
     if verdict.unsupported_ops:
@@ -96,7 +139,10 @@ def print_verdict(verdict: ExportVerdict, model_name: str) -> None:
     if verdict.warnings:
         table.add_row("Warnings", Text("\n".join(verdict.warnings), style="yellow"))
     table.add_row("Backend", verdict.recommended_backend)
-    table.add_row("Reason", escape(verdict.reason))
+    reason = verdict.reason
+    if verdict.status == "FAILED":
+        reason += " (run with --log-level debug for the torch.export trace)"
+    table.add_row("Reason", escape(reason))
     console.print(table)
 
 

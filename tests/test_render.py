@@ -6,7 +6,7 @@ these tests just exercise the branches with constructed verdicts and serving sta
 
 from downshift.cli import render
 from downshift.core.verdict import ExportVerdict
-from downshift.core.verify import NumericsReport
+from downshift.core.verify import NumericsReport, WorstMismatch
 from downshift.serve.backends import BackendMeta
 from downshift.serve.engine import ServeOptions, ServingState
 from downshift.serve.schemas import OutputEncoding
@@ -24,16 +24,24 @@ class _StubBackend:
         raise NotImplementedError
 
 
-def _numerics(passed: bool, shape_generalization: bool = True) -> NumericsReport:
-    return NumericsReport(
+def _numerics(
+    passed: bool,
+    shape_generalization: bool | None = True,
+    baseline_failed: bool = False,
+    **overrides,
+) -> NumericsReport:
+    fields = dict(
         samples_tested=8,
         max_abs_err=0.0 if passed else 1.0,
         max_rel_err=0.0 if passed else 1.0,
         failures=0 if passed else 3,
         shape_generalization=shape_generalization,
+        baseline_failed=baseline_failed,
         tolerance_abs=1e-4,
         tolerance_rel=1e-3,
     )
+    fields.update(overrides)
+    return NumericsReport(**fields)
 
 
 def _verdict(**overrides) -> ExportVerdict:
@@ -42,7 +50,7 @@ def _verdict(**overrides) -> ExportVerdict:
         model_family="generic-torch",
         capture_strategy="strict=False",
         opset=18,
-        op_types=["Gemm", "Relu"],
+        op_types={"Gemm": 2, "Relu": 1},
         numerics=_numerics(True),
         recommended_backend="onnxruntime",
         reason="exported via strict=False; numerics ok",
@@ -90,6 +98,61 @@ def test_print_verdict_failed_shows_unsupported_ops_and_warnings():
         unsupported_ops=["scatter_reduce"],
         warnings=["tied weights: b shares storage with a"],
     )
+    render.print_verdict(verdict, "model")
+
+
+def test_print_verdict_failed_reason_points_at_debug_logging(capsys):
+    verdict = _verdict(status="FAILED", numerics=None, recommended_backend="torch", reason="nope")
+    render.print_verdict(verdict, "model")
+    out = capsys.readouterr().out
+    assert "--log-level debug" in out
+
+
+def test_print_verdict_shows_overridden_tolerance(capsys):
+    verdict = _verdict(numerics=_numerics(True, tolerance_overridden=True))
+    render.print_verdict(verdict, "model")
+    out = capsys.readouterr().out
+    assert "--atol/--rtol" in out
+    assert "float32" not in out
+
+
+def test_print_verdict_shows_shape_general_na_when_baseline_fails(capsys):
+    verdict = _verdict(
+        status="DEGRADED",
+        numerics=_numerics(False, shape_generalization=None, baseline_failed=True),
+        recommended_backend="torch",
+    )
+    render.print_verdict(verdict, "model")
+    out = capsys.readouterr().out
+    assert "n/a (baseline fails)" in out
+
+
+def test_print_verdict_shows_worst_and_samples_rows(capsys):
+    worst = WorstMismatch(
+        sample=3, output=0, index=(2, 5), expected=0.4113, got=-0.8327, input_shapes=[(12, 8)]
+    )
+    verdict = _verdict(
+        status="DEGRADED",
+        numerics=_numerics(
+            False,
+            shape_generalization=False,
+            worst=worst,
+            sample_shapes=[[(1, 8)], [(2, 8)], [(12, 8)]],
+        ),
+        recommended_backend="torch",
+        input_names=("x",),
+    )
+    render.print_verdict(verdict, "model")
+    out = capsys.readouterr().out
+    assert "Worst" in out
+    assert "output_0[2, 5]" in out
+    assert "(sample" in out
+    assert "Samples" in out
+    assert "(1,8)" in out and "(12,8)" in out
+
+
+def test_print_verdict_omits_worst_row_when_clean():
+    verdict = _verdict(numerics=_numerics(True, sample_shapes=[[(1, 16)], [(2, 16)]]))
     render.print_verdict(verdict, "model")
 
 

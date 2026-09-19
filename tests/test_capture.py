@@ -2,7 +2,25 @@
 
 from downshift.core import capture as capture_mod
 from downshift.core.capture import capture
-from tests.models import clean_mlp
+from tests.models import clean_mlp, data_dependent_branch
+
+
+def test_no_strategy_worked_records_every_attempt_and_quotes_the_first():
+    result = capture(data_dependent_branch.make_model(), data_dependent_branch.make_inputs())
+
+    assert result.success is False
+    assert result.capture_strategy is None
+    assert [name for name, _ in result.exceptions] == ["strict=False", "strict=True"]
+    assert result.exception is result.exceptions[0][1]
+
+
+def test_op_types_is_a_count_descending_histogram():
+    result = capture(clean_mlp.make_model(), clean_mlp.make_inputs())
+
+    assert result.success is True
+    assert result.op_types == {"Gemm": 2, "Relu": 1}
+    counts = list(result.op_types.values())
+    assert counts == sorted(counts, reverse=True)
 
 
 def test_onnx_translation_exception_is_captured(monkeypatch):

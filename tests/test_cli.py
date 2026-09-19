@@ -128,6 +128,19 @@ def test_check_crash_with_debug_prints_traceback():
     assert result.exit_code == main.EXIT_CRASH, result.output
 
 
+def test_check_failed_table_points_at_debug_logging():
+    result = run("check", FAILED)
+    assert result.exit_code == 1, result.output
+    assert "--log-level debug" in result.output
+
+
+def test_check_failed_debug_logs_every_strategys_traceback():
+    result = run("check", FAILED, "--log-level", "debug")
+    assert result.exit_code == 1, result.output
+    assert "strict=False failed" in result.output
+    assert "strict=True failed" in result.output
+
+
 def test_check_unsafe_load_prints_a_warning(tmp_path: Path):
     path = tmp_path / "full.pt"
     torch.save(clean_mlp.make_model(), path)

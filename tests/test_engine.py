@@ -196,7 +196,7 @@ def _bare_verdict(**overrides) -> ExportVerdict:
         model_family="generic-torch",
         capture_strategy=None,
         opset=None,
-        op_types=[],
+        op_types={},
         numerics=None,
         recommended_backend="onnxruntime",
         reason="",

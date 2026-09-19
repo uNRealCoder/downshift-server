@@ -76,7 +76,7 @@ def _verdict_for(
             model_family=prepared.family,
             capture_strategy=None,
             opset=None,
-            op_types=[],
+            op_types={},
             numerics=None,
             recommended_backend=BackendName.torch,
             reason="--backend torch: export skipped",

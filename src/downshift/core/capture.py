@@ -11,6 +11,7 @@ draft_export step or TorchScript fallback any more.
 import contextlib
 import io
 import logging
+from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
@@ -43,8 +44,9 @@ class CaptureResult:
     capture_strategy: str | None  # a _STRATEGIES name; None when nothing traced
     onnx_program: "torch.onnx.ONNXProgram | None" = None
     opset: int | None = None
-    op_types: list[str] = field(default_factory=list)
-    exception: Exception | None = None
+    op_types: dict[str, int] = field(default_factory=dict)  # count-descending histogram
+    exception: Exception | None = None  # the exception build_verdict quotes as the reason
+    exceptions: list[tuple[str, Exception]] = field(default_factory=list)  # every strategy tried
     stderr: str = ""  # whatever torch printed while we tried; useful at debug level
 
 
@@ -55,7 +57,7 @@ def capture(
 ) -> CaptureResult:
     exported_program = None
     strategy_used: str | None = None
-    last_exception: Exception | None = None
+    exceptions: list[tuple[str, Exception]] = []
     # torch prints whole FX graphs straight to stderr when a data-dependent guard fails.
     # Keep that out of the user's terminal; the exception message is what matters.
     captured = io.StringIO()
@@ -67,7 +69,7 @@ def capture(
                     model, example_inputs, dynamic_shapes=dynamic_shapes, strict=strict
                 )
             except Exception as exc:  # noqa: BLE001 - a failed strategy means try the next
-                last_exception = exc
+                exceptions.append((name, exc))
             else:
                 strategy_used = name
                 break
@@ -76,7 +78,11 @@ def capture(
             return CaptureResult(
                 success=False,
                 capture_strategy=None,
-                exception=last_exception,
+                # The reason quotes the first failure (strict=False); unsupported_ops is
+                # mined from all of them, since strict=True's message is often just "no
+                # strategy worked" and loses whatever strict=False said about the real op.
+                exception=exceptions[0][1] if exceptions else None,
+                exceptions=exceptions,
                 stderr=captured.getvalue(),
             )
 
@@ -99,11 +105,12 @@ def capture(
         )
 
     proto = onnx_program.model_proto
+    counts = Counter(node.op_type for node in proto.graph.node)
     return CaptureResult(
         success=True,
         capture_strategy=strategy_used,
         onnx_program=onnx_program,
         opset=proto.opset_import[0].version if proto.opset_import else None,
-        op_types=[node.op_type for node in proto.graph.node],
+        op_types=dict(sorted(counts.items(), key=lambda kv: kv[1], reverse=True)),
         stderr=captured.getvalue(),
     )

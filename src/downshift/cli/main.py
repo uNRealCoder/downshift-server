@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import sys
+import traceback
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
@@ -269,6 +270,19 @@ def _emit(
         render.print_verdict(verdict, model_name)
 
 
+def _log_capture_failure(verdict: ExportVerdict, log_level: LogLevel) -> None:
+    """At --log-level debug, a FAILED verdict logs what the CLI table only summarises:
+    torch's own stderr and every strategy's traceback, not just the first line."""
+    if log_level is not LogLevel.debug or verdict.status != "FAILED":
+        return
+    logger = logging.getLogger("downshift.cli")
+    if verdict.capture_stderr:
+        logger.debug("torch.export/onnx stderr:\n%s", verdict.capture_stderr)
+    for name, exc in verdict.capture_exceptions:
+        trace = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        logger.debug("%s failed:\n%s", name, trace)
+
+
 @app.command("check")
 def check_cmd(
     model: ModelArg,
@@ -321,6 +335,7 @@ def check_cmd(
                 seed=seed,
                 vary=vary,
             )
+        _log_capture_failure(verdict, log_level)
         _emit(verdict, model, json_out)
         raise typer.Exit(verdict.exit_code)
 
@@ -380,6 +395,7 @@ def export_cmd(
             seed=seed,
             vary=vary,
         )
+        _log_capture_failure(verdict, log_level)
         manifest = manifest_path_for(onnx_path) if verdict.onnx_path else None
         _emit(verdict, model, json_out, {"manifest_path": str(manifest) if manifest else None})
         if not json_out:

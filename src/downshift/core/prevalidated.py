@@ -4,6 +4,7 @@ No reference model -> UNVERIFIED. We serve it, we just say we never checked it.
 With --reference -> the normal verify path, exactly as for a fresh export.
 """
 
+from collections import Counter
 from pathlib import Path
 
 import onnx
@@ -14,12 +15,14 @@ from downshift.core.verdict import BackendName, ExportVerdict, numerics_outcome,
 from downshift.core.verify import OnnxRuntimeError, verify
 
 
-def _graph_summary(onnx_path: Path) -> tuple[int | None, list[str], tuple[str, ...]]:
+def _graph_summary(onnx_path: Path) -> tuple[int | None, dict[str, int], tuple[str, ...]]:
     proto = onnx.load(str(onnx_path), load_external_data=False)
     opset = next((imp.version for imp in proto.opset_import if imp.domain in ("", "ai.onnx")), None)
     initializers = {init.name for init in proto.graph.initializer}
     input_names = tuple(i.name for i in proto.graph.input if i.name not in initializers)
-    return opset, [n.op_type for n in proto.graph.node], input_names
+    counts = Counter(n.op_type for n in proto.graph.node)
+    op_types = dict(sorted(counts.items(), key=lambda kv: kv[1], reverse=True))
+    return opset, op_types, input_names
 
 
 def intake(

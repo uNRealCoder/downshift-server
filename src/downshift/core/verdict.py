@@ -45,7 +45,7 @@ class ExportVerdict:
     model_family: str
     capture_strategy: str | None
     opset: int | None
-    op_types: list[str]
+    op_types: dict[str, int]  # count-descending histogram
     numerics: NumericsReport | None
     recommended_backend: BackendName
     reason: str
@@ -56,10 +56,20 @@ class ExportVerdict:
     onnx_path: Path | None = None
     onnx_program: object | None = field(default=None, repr=False)  # torch.onnx.ONNXProgram
     prepared: Prepared | None = field(default=None, repr=False)
+    # Debug-only: not JSON-able, excluded from to_dict(); the CLI logs these at --log-level
+    # debug when the status is FAILED.
+    capture_stderr: str = field(default="", repr=False)
+    capture_exceptions: list[tuple[str, Exception]] = field(default_factory=list, repr=False)
 
     @property
     def shape_generalization(self) -> bool | None:
         return self.numerics.shape_generalization if self.numerics else None
+
+    @property
+    def shape_generalization_reason(self) -> str | None:
+        if self.numerics is not None and self.numerics.baseline_failed:
+            return "baseline sample failed; shape generalization was never evaluated"
+        return None
 
     @property
     def exit_code(self) -> int:
@@ -74,6 +84,7 @@ class ExportVerdict:
             "op_types": self.op_types,
             "numerics": self.numerics.to_dict() if self.numerics else None,
             "shape_generalization": self.shape_generalization,
+            "shape_generalization_reason": self.shape_generalization_reason,
             "recommended_backend": self.recommended_backend,
             "reason": self.reason,
             "input_names": list(self.input_names),
@@ -156,6 +167,13 @@ def build_verdict(
         safe_capture_inputs(prepared.inputs, prepared.dynamic_shapes),
         prepared.dynamic_shapes,
     )
+    # exceptions is normally one entry per strategy tried; a translation failure (torch.export
+    # itself succeeded) has none of those, so it falls back to the single exception it raised.
+    capture_exceptions = result.exceptions or (
+        [(result.capture_strategy or "translation", result.exception)]
+        if result.exception is not None
+        else []
+    )
     verdict = ExportVerdict(
         status="FAILED",
         model_family=prepared.family,
@@ -170,13 +188,18 @@ def build_verdict(
         warnings=warnings,
         onnx_program=result.onnx_program,
         prepared=prepared,
+        capture_stderr=result.stderr,
+        capture_exceptions=capture_exceptions,
     )
 
     if not result.success:
         exc = result.exception
         message = f"{type(exc).__name__}: {exc}" if exc is not None else "export failed"
         verdict.reason = message.splitlines()[0]
-        verdict.unsupported_ops = sorted(set(_ATEN_OP.findall(message)))
+        # Mined from every strategy's message when there were several (strict=True's message
+        # is often generic and would lose whatever strict=False said about the real op).
+        messages = [str(e) for _, e in result.exceptions] if result.exceptions else [message]
+        verdict.unsupported_ops = sorted({op for m in messages for op in _ATEN_OP.findall(m)})
         return verdict
 
     if not verify_numerics:
