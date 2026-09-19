@@ -340,6 +340,26 @@ def test_serve_load_failure_on_the_loader_thread_exits_with_the_usual_code(monke
     assert "doesnotexist" in result.output
 
 
+def test_serve_backend_onnxruntime_on_degraded_is_a_usage_error(monkeypatch):
+    captured: dict = {}
+    _fake_uvicorn_server(monkeypatch, captured)
+
+    result = run("serve", DEGRADED, "--backend", "onnxruntime")
+
+    assert result.exit_code == main.EXIT_USAGE, result.output
+    assert "--force-onnx" in result.output
+
+
+def test_serve_backend_onnxruntime_and_force_onnx_on_degraded_is_accepted(monkeypatch):
+    captured: dict = {}
+    _fake_uvicorn_server(monkeypatch, captured)
+
+    result = run("serve", DEGRADED, "--backend", "onnxruntime", "--force-onnx", "--warmup", "0")
+
+    assert result.exit_code == 0, result.output
+    assert captured["app"].state.serving.backend.name == "onnxruntime"
+
+
 def test_serve_workers_uses_an_import_string_factory(monkeypatch):
     _, captured = _serve_captured(monkeypatch, "--workers", "2")
     assert captured["app"] == "downshift.cli.main:_serve_app_factory"

@@ -101,6 +101,9 @@ All notable changes to this project are documented here. Format follows
   `.executor` and an `.in_flight` counter.
 - A `500`'s body now carries `"request_id"` alongside `"detail"`, and the server log line
   for it carries the same id, so "see the server log" has a key to search for.
+- `serve --backend onnxruntime` on a DEGRADED verdict is now a usage error (exit code 4)
+  naming `--force-onnx`, instead of a second warning next to the one `--force-onnx` already
+  prints. `--backend onnxruntime --force-onnx` still serves the ONNX graph.
 - `build_app(state, ...)` becomes `build_app(state=None, *, loader=None, middleware=())`:
   pass `state` for the old synchronous behaviour, or `loader` for the bind-first behaviour
   above. `run_predict`/`_predict_body` are unchanged.

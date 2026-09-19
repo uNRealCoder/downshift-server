@@ -128,6 +128,12 @@ def choose_backend(verdict: ExportVerdict, opts: ServeOptions) -> tuple[BackendN
         if opts.backend == BackendChoice.auto
         else BackendName(opts.backend)
     )
+    onnx_requested = opts.backend == BackendChoice.onnxruntime
+    if onnx_requested and verdict.status == "DEGRADED" and not opts.force_onnx:
+        raise ValueError(
+            "--backend onnxruntime: the verdict is DEGRADED; pass --force-onnx to serve the "
+            "ONNX graph anyway"
+        )
     if opts.force_onnx and verdict.status == "DEGRADED":
         wanted = BackendName.onnxruntime
         notes.append("--force-onnx: serving a DEGRADED graph; outputs may be wrong")

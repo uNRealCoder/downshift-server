@@ -3,6 +3,7 @@ shared contract."""
 
 import dataclasses
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -274,6 +275,19 @@ def test_choose_backend_falls_back_to_torch_when_no_onnx_is_available():
 
     assert name == "torch"
     assert any("falling back to torch" in n for n in notes)
+
+
+def test_choose_backend_onnxruntime_on_degraded_is_an_error():
+    verdict = _bare_verdict(status="DEGRADED")
+    with pytest.raises(ValueError, match="--force-onnx"):
+        choose_backend(verdict, ServeOptions(backend="onnxruntime"))
+
+
+def test_choose_backend_onnxruntime_and_force_onnx_on_degraded_is_accepted():
+    verdict = _bare_verdict(status="DEGRADED", onnx_path=Path("fake.onnx"))
+    name, notes = choose_backend(verdict, ServeOptions(backend="onnxruntime", force_onnx=True))
+    assert name == "onnxruntime"
+    assert any("--force-onnx" in n for n in notes)
 
 
 def test_onnxruntime_backend_metadata(exported_mlp):

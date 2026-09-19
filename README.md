@@ -126,7 +126,7 @@ See CHANGELOG.md for wire-format changes in 0.3.
 
 Options that change what gets served:
 
-- `--backend auto|onnxruntime|torch`. `auto` follows the verdict. `torch` skips the export entirely.
+- `--backend auto|onnxruntime|torch`. `auto` follows the verdict. `torch` skips the export entirely. `--backend onnxruntime` on a DEGRADED verdict is an error unless `--force-onnx` is also given.
 - `--force-onnx` serves a DEGRADED graph through ONNX Runtime anyway. The banner says so in red.
 - `--reference model` verifies a pre-built `.onnx` against a PyTorch model; without it the verdict is UNVERIFIED.
 - `--middleware pkg.module:Attr` (repeatable) attaches a `BaseHTTPMiddleware` subclass or an `async (request, call_next)` function. No middleware means no overhead.
