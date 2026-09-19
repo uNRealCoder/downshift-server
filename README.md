@@ -5,21 +5,29 @@ Serve a PyTorch model over HTTP with one command. Before the first request, down
 ```
 $ downshift serve downshift.demo.scatter_include_self_false:make_model
 
-┌─ downshift v0.4.0 ────────────────────────────────────────────────────────────────────┐
-│                                                                                       │
-│  Model          downshift.demo.scatter_include_self_false:make_model                  │
-│  Family         generic-torch                                                         │
-│  Verdict        DEGRADED  (strict=False, opset 20)                                    │
-│  Numerics       max abs err 1.39e+00 over 8 samples  ✗ 6/8 failed                     │
-│                 ⚠ numerics diverge on 6/8 samples (max abs err 1.39e+00)              │
-│  Override       --force-onnx to serve the ONNX graph anyway                           │
-│  Backend        torch (eager) · cpu  ← auto-selected                                  │
-│  Dynamic dims   x[0], segment_ids[0]                                                  │
-│  Encoding       json  (clients override with output_encoding)                         │
-│  Concurrency    1 inference at a time, 64 queued  (--max-concurrency, --max-queue)    │
-│  Endpoint       http://127.0.0.1:8000                                                 │
-│                                                                                       │
-└───────────────────────────────────────────────────────────────────────────────────────┘
+┌─ downshift v0.4.0 ───────────────────────────────────────────────────────────────────┐
+│                                                                                      │
+│  Model          downshift.demo.scatter_include_self_false:make_model                 │
+│  Family         generic-torch                                                        │
+│  Verdict        DEGRADED  (strict=False, opset 20)                                   │
+│  Numerics       max abs err 1.40e+00 over 8 samples  ✗ 6/8 failed                    │
+│                 ⚠ numerics diverge on 6/8 samples (max abs err 1.40e+00)             │
+│  Override       --force-onnx to serve the ONNX graph anyway                          │
+│  Tolerance      atol 1e-04, rtol 1e-03 (float32)                                     │
+│  Worst          output_0[3, 5]: torch -0.6548, onnxruntime -2.0534  (sample 7, x     │
+│                 (7,8), segment_ids (7))                                              │
+│  Samples        x: (6,8) (12,8) (7,8) (7,8) (1,8) (12,8) (1,8) (7,8)                 │
+│                 segment_ids: (6) (12) (7) (7) (1) (12) (1) (7)                       │
+│  Warmup         3 inferences, 0.13 ms each                                           │
+│  Queue          64 waiting max, no timeout  (--max-queue, --request-timeout)         │
+│  Boot           4.5 s: load 0.0, export 4.5, verify 0.0, session 0.0, warmup 0.0     │
+│  Backend        torch (eager) · cpu  ← auto-selected                                 │
+│  Dynamic dims   x[0], segment_ids[0]                                                 │
+│  Encoding       json  (clients override with output_encoding)                        │
+│  Concurrency    1 inference at a time, 64 queued  (--max-concurrency, --max-queue)   │
+│  Endpoint       http://127.0.0.1:8000                                                │
+│                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 This graph exported without a single error and produces wrong numbers on 6 of 8 inputs. downshift caught it before the first request and is serving PyTorch instead.
@@ -36,6 +44,8 @@ pip install "downshift-server[all]"
 
 For development, install editable from a checkout instead: `pip install -e ".[dev,all]"`.
 
+`downshift` is also runnable as `python -m downshift` if you'd rather not rely on the console script being on `PATH`.
+
 Python 3.11 to 3.14. CPU-only is what this release was tested on. CUDA execution-provider selection exists (`--device cuda`) but is untested in this release.
 
 ## Serve
@@ -46,13 +56,15 @@ downshift serve my_pkg.models:build --port 8000
 
 `serve` binds the port first, then loads the model, runs the export-and-verify gate described in [The gate](#the-gate-export-and-verify-before-serving), picks a backend from the verdict, warms it up and prints the banner above, all on a background thread. `--workers N` is the exception: the parent still does that work before uvicorn binds, since every worker needs the export it produces. The routes are the same whichever backend is behind them.
 
+Running this behind a real deployment (probes, sizing, Kubernetes, no built-in auth or TLS) is its own page: [docs/production.md](docs/production.md).
+
 | Route | What it does |
 |---|---|
 | `POST /predict` | Named tensor inputs, any model; `503` (with `Retry-After`) until the model is ready |
 | `POST /predict/graph` | One graph: `x`, `edge_index`, optional `edge_attr`; same `503` until ready |
 | `GET /health` | Liveness: `200` as soon as the process is up, even mid-load |
 | `GET /ready` | `503` (`{"ready": false, "phase": "export"}`) until the model has loaded, exported, verified and warmed up; `200` after, and it never goes back to `503` without a restart |
-| `GET /metadata` | Family, backend, full verdict, input names, limits; `503` until ready |
+| `GET /metadata` | Family, backend, full verdict, input names, limits, boot timings, warmup stats; `503` until ready |
 
 ```bash
 curl -s localhost:8000/predict -H 'content-type: application/json' \

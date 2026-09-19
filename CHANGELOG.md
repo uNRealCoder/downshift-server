@@ -34,6 +34,11 @@ All notable changes to this project are documented here. Format follows
   never carried information a client could act on. A failed load still exits the process
   with the same code `check`/`export` would use for the same error, instead of leaving the
   server up and permanently unready.
+- `downshift --help` (and every other subcommand's `--help`) no longer imports torch,
+  onnxruntime, fastapi or uvicorn, and returns in well under a second instead of about
+  5s. `downshift/__init__.py` is lazy (PEP 562): `check`, `intake`, `ExportVerdict` and
+  the rest of `downshift.__all__` resolve on first access instead of at import time, and
+  `downshift.cli.main` defers its own heavy imports into each command's body.
 
 ### Changed
 
@@ -166,6 +171,10 @@ All notable changes to this project are documented here. Format follows
   (`app.mount("/model", app_for(model))`) instead of running a whole process. `model` is
   a `torch.nn.Module` or a pre-built `.onnx` path (`reference` then verifies it, like
   `--reference`). Exported from `downshift.__all__` too.
+- [docs/production.md](docs/production.md): probe semantics per `--workers` mode,
+  admission control and what a `503` means, thread budgeting, sizing off the banner's
+  `Boot` row, request ids/`Server-Timing`/`--log-format json`, and a Kubernetes snippet.
+  Linked from the README's Serve section.
 
 ### Removed
 
