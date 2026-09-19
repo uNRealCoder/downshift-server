@@ -22,8 +22,8 @@ All notable changes to this project are documented here. Format follows
 
 ### Changed
 
-- `downshift.export` (the subpackage) is `downshift.core` now; `downshift.export` still
-  works for one release as a deprecated alias that warns `DeprecationWarning` on import.
+- `downshift.export` (the subpackage) is renamed to `downshift.core`, with no compatibility
+  shim. `downshift.export(...)` the function (write a `.onnx` and its manifest) is unchanged.
 - `torch` floor raised to `2.5` (the dynamo exporter accepting an `ExportedProgram` with
   `report=` is a 2.5 feature); `onnx` floor raised to `1.16`; `onnxscript` floor raised to
   `0.5`. See Fixed above.

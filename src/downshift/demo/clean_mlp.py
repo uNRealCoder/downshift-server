@@ -1,7 +1,7 @@
 """CLEAN: two linear layers and a ReLU, no export hazards."""
 
 import torch
-from torch import nn
+from torch import Tensor, nn
 
 
 class CleanMLP(nn.Module):
@@ -13,8 +13,8 @@ class CleanMLP(nn.Module):
             nn.Linear(hidden, out_features),
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        out: torch.Tensor = self.net(x)
+    def forward(self, x: Tensor) -> Tensor:
+        out: Tensor = self.net(x)
         return out
 
 
@@ -24,5 +24,5 @@ def make_model() -> CleanMLP:
     return model
 
 
-def make_inputs(batch: int = 1) -> tuple[torch.Tensor]:
+def make_inputs(batch: int = 1) -> tuple[Tensor]:
     return (torch.randn(batch, 16),)
