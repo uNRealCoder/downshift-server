@@ -79,8 +79,12 @@ def _run_fixture(name: str) -> Row:
     except ImportError as exc:
         missing = exc.name or "dependency"
         return Row(name, hazard, (DASH, f"skipped (missing {missing})", DASH, DASH, DASH, DASH))
-    inputs = module.make_inputs() if hasattr(module, "make_inputs") else None
-    verdict = downshift.check(module.make_model(), inputs, k=K)
+    try:
+        inputs = module.make_inputs() if hasattr(module, "make_inputs") else None
+        verdict = downshift.check(module.make_model(), inputs, k=K)
+    except Exception as exc:  # noqa: BLE001 - a fixture that isn't a hazard (e.g. a factory
+        # that raises on purpose for CLI tests) is a skip, not a crash of the whole script.
+        return Row(name, hazard, (DASH, f"skipped ({type(exc).__name__})", DASH, DASH, DASH, DASH))
     numerics = verdict.numerics
     shape = {True: "✓", False: "✗", None: DASH}[verdict.shape_generalization]
     return Row(

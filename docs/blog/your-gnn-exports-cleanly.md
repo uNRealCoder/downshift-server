@@ -9,16 +9,21 @@ Here is the output of `downshift check` on a PyTorch module small enough to quot
 │ Model         │ tests.models.scatter_include_self_false:make_model          │
 │ Family        │ generic-torch                                               │
 │ Export        │ DEGRADED  (strict=False, opset 20)                          │
-│ Numerics      │ max abs err 1.34e+00 over 8 samples  ✗ 7/8 failed           │
-│ Shape-general │ no                                                          │
+│ Numerics      │ max abs err 1.17e+00 over 8 samples  ✗ 6/8 failed           │
+│ Tolerance     │ atol 1e-04, rtol 1e-03 (float32)                            │
+│ Worst         │ output_0[0, 4]: torch -0.4008, onnxruntime 0.7733  (sample  │
+│               │ 1, x (12,8), segment_ids (12))                              │
+│ Samples       │ x: (6,8) (12,8) (7,8) (7,8) (1,8) (12,8) (1,8) (7,8)        │
+│               │ segment_ids: (6) (12) (7) (7) (1) (12) (1) (7)              │
+│ Shape-general │ n/a (baseline fails)                                        │
 │ Dynamic dims  │ x[0], segment_ids[0]                                        │
 │ Backend       │ torch                                                       │
-│ Reason        │ exported via strict=False but numerics diverge on 7/8       │
-│               │ samples (max abs err 1.34e+00)                              │
+│ Reason        │ exported via strict=False but numerics diverge on 6/8       │
+│               │ samples (max abs err 1.17e+00)                              │
 └───────────────┴─────────────────────────────────────────────────────────────┘
 ```
 
-Seven of eight random inputs come back with different numbers from ONNX Runtime than from PyTorch. The outputs are roughly unit scale, so a max absolute error above one means the answer is not slightly off. It is a different answer.
+Six of eight random inputs come back with different numbers from ONNX Runtime than from PyTorch — including sample 0, the exact input this graph was traced on. The outputs are roughly unit scale, so a max absolute error above one means the answer is not slightly off. It is a different answer.
 
 ## The model
 
@@ -46,7 +51,7 @@ Nothing in that process is a bug you could file. The exporter translated what it
 
 The general point is not about scatter. It is that "the export succeeded" is a statement about the exporter, not about the model. A successful export tells you a graph was produced and that it type-checks. It does not tell you the graph computes the same function.
 
-The only way to know that is to run both and compare. Not once, on the example input you traced with, because that input is the one case the exporter has effectively seen. You need several samples, and some of them need to have shapes the exporter never saw, because a graph that silently froze a dimension will pass on the trace shape and fail on the next one. In the table above, `Shape-general: no` is that check failing.
+The only way to know that is to run both and compare. Not once, on the example input you traced with, because that input is the one case the exporter has effectively seen. You need several samples, and some of them need to have shapes the exporter never saw, because a graph that silently froze a dimension will pass on the trace shape and fail on the next one. This model fails even harder than that: `Shape-general: n/a (baseline fails)` in the table above means the very first sample — the exact shape it was traced on — already disagrees with PyTorch, so shape generalization was never even evaluated.
 
 Once you do that comparison, you need somewhere to put the result, and a pass/fail flag is not enough. This model did not fail. It also did not pass. It exported and lied. That is a third state, and most export tooling has no name for it, which is exactly how graphs like this reach production. In `downshift` the state is called DEGRADED, and it sits between CLEAN and FAILED with its own exit code so a CI job can refuse to ship it.
 

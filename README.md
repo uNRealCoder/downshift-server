@@ -5,13 +5,13 @@ Serve a PyTorch model over HTTP with one command. Before the first request, down
 ```
 $ downshift serve downshift.demo.scatter_include_self_false:make_model
 
-┌─ downshift v0.3.0 ────────────────────────────────────────────────────────┐
+┌─ downshift v0.4.0 ────────────────────────────────────────────────────────┐
 │                                                                           │
 │  Model          downshift.demo.scatter_include_self_false:make_model      │
 │  Family         generic-torch                                             │
 │  Verdict        DEGRADED  (strict=False, opset 20)                        │
-│  Numerics       max abs err 1.16e+00 over 8 samples  ✗ 7/8 failed         │
-│                 ⚠ numerics diverge on 7/8 samples (max abs err 1.16e+00)  │
+│  Numerics       max abs err 1.39e+00 over 8 samples  ✗ 6/8 failed         │
+│                 ⚠ numerics diverge on 6/8 samples (max abs err 1.39e+00)  │
 │  Override       --force-onnx to serve the ONNX graph anyway               │
 │  Backend        torch (eager) · cpu  ← auto-selected                      │
 │  Dynamic dims   x[0], segment_ids[0]                                      │
@@ -22,7 +22,7 @@ $ downshift serve downshift.demo.scatter_include_self_false:make_model
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
-This graph exported without a single error and produces wrong numbers on 7 of 8 inputs. downshift caught it before the first request and is serving PyTorch instead.
+This graph exported without a single error and produces wrong numbers on 6 of 8 inputs. downshift caught it before the first request and is serving PyTorch instead.
 
 ## Install
 
@@ -158,7 +158,7 @@ Options that change what gets served:
 - **FAILED**: does not export, or exports but ONNX Runtime cannot load or run the graph. Served via eager PyTorch. Not an error, a supported path.
 - **UNVERIFIED**: a `.onnx` with no reference model, or `--no-verify`. Served via ONNX Runtime and labelled as never checked.
 
-A sample passes when every output element satisfies `numpy.allclose`: `abs_err <= atol + rtol * |expected|`, the same rule numpy uses. Defaults are chosen by the narrowest floating dtype present in the model's parameters: bfloat16 or float16 win first if either appears (their tolerances are the loosest), float64 wins only when it's the *only* floating dtype present (a model mixing float32 and float64 is still bound by float32's precision), and float32 is the fallback. Overridable per dtype via `DOWNSHIFT_TOL_FLOAT32_ATOL=1e-3` / `DOWNSHIFT_TOL_FLOAT16_RTOL=0.05`, or outright with `--atol`/`--rtol` on `check`, `export` and `serve`. The `check` table's `Tolerance` row shows which dtype picked the default.
+A sample passes when every output element satisfies `numpy.allclose`: `abs_err <= atol + rtol * |expected|`, the same rule numpy uses. Defaults are chosen by the narrowest floating dtype present in the model's parameters: bfloat16 or float16 win first if either appears (their tolerances are the loosest), float64 wins only when it's the *only* floating dtype present (a model mixing float32 and float64 is still bound by float32's precision), and float32 is the fallback. Overridable per dtype via `DOWNSHIFT_TOL_FLOAT32_ATOL=1e-3` / `DOWNSHIFT_TOL_FLOAT16_RTOL=0.05`, or outright with `--atol`/`--rtol` on `check`, `export` and `serve`. The `check` table's `Tolerance` row shows which dtype picked the default, or `(--atol/--rtol)` when either flag overrides it.
 
 The gate also runs on its own, to gate CI and to write artifacts.
 
@@ -171,14 +171,21 @@ $ downshift check downshift.demo.scatter_include_self_false:make_model
 │ Model         │ downshift.demo.scatter_include_self_false:make_model        │
 │ Family        │ generic-torch                                               │
 │ Export        │ DEGRADED  (strict=False, opset 20)                          │
-│ Numerics      │ max abs err 1.34e+00 over 8 samples  ✗ 7/8 failed           │
-│ Shape-general │ no                                                          │
+│ Numerics      │ max abs err 1.35e+00 over 8 samples  ✗ 6/8 failed           │
+│ Tolerance     │ atol 1e-04, rtol 1e-03 (float32)                            │
+│ Worst         │ output_0[3, 0]: torch 0.0516, onnxruntime -1.2979  (sample  │
+│               │ 3, x (7,8), segment_ids (7))                                │
+│ Samples       │ x: (6,8) (12,8) (7,8) (7,8) (1,8) (12,8) (1,8) (7,8)        │
+│               │ segment_ids: (6) (12) (7) (7) (1) (12) (1) (7)              │
+│ Shape-general │ n/a (baseline fails)                                        │
 │ Dynamic dims  │ x[0], segment_ids[0]                                        │
 │ Backend       │ torch                                                       │
-│ Reason        │ exported via strict=False but numerics diverge on 7/8       │
-│               │ samples (max abs err 1.34e+00)                              │
+│ Reason        │ exported via strict=False but numerics diverge on 6/8       │
+│               │ samples (max abs err 1.35e+00)                              │
 └───────────────┴─────────────────────────────────────────────────────────────┘
 ```
+
+The `Tolerance` row shows which dtype picked the default (or `--atol/--rtol` when either overrides it); `Worst` (DEGRADED only) is the single largest-error output element across every sample tried; `Samples` lists every sample's input shapes, so shape generalization has visible content; `Shape-general` is `yes`, `no`, or `n/a (baseline fails)` when the un-varied example itself didn't pass (shape generalization was never evaluated in that case).
 
 The exit code is the verdict, so it can gate CI: `0` CLEAN, `1` FAILED, `2` DEGRADED, `3` UNVERIFIED. (`4` is a usage error such as an unloadable model; `5` is a crash.) `--json` prints the full verdict as JSON and nothing else:
 
@@ -218,16 +225,17 @@ Generated by `scripts/gen_matrix.py` from the fixture corpus in `tests/models/`,
 | Model | Hazard | Family | Export | Capture | Numerics | Shape-general | Backend |
 |---|---|---|---|---|---|---|---|
 | `bf16_weights` | bfloat16 weights: ONNX Runtime CPU has no bf16 Gemm kernel | generic-torch | FAILED | strict=False | — | — | torch |
-| `clean_mlp` | Control fixture: no export hazards | generic-torch | CLEAN | strict=False | 7.5e-08 | ✓ | onnxruntime |
-| `custom_autograd` | custom autograd.Function with no symbolic override | generic-torch | CLEAN | strict=False | 3.6e-07 | ✓ | onnxruntime |
+| `broken_factory` | Not an export hazard fixture: raises as soon as it's instantiated | — | skipped (RuntimeError) | — | — | — | — |
+| `clean_mlp` | Control fixture: no export hazards | generic-torch | CLEAN | strict=False | 8.9e-08 | ✓ | onnxruntime |
+| `custom_autograd` | custom autograd.Function with no symbolic override | generic-torch | CLEAN | strict=False | 8.9e-08 | ✓ | onnxruntime |
 | `data_dependent_branch` | data-dependent control flow | generic-torch | FAILED | — | — | — | torch |
-| `dict_input` | dataclass container input | generic-torch | CLEAN | strict=False | 2.4e-07 | ✓ | onnxruntime |
+| `dict_input` | dataclass container input | generic-torch | CLEAN | strict=False | 1.2e-07 | ✓ | onnxruntime |
 | `dropout_model` | stochastic layer | generic-torch | CLEAN | strict=False | 2.4e-07 | ✓ | onnxruntime |
 | `dynamic_batch_cnn` | batch-dim generalization | generic-torch | CLEAN | strict=False | 3.0e-08 | ✓ | onnxruntime |
-| `gnn_gat` | GNN fixture: 3-layer GAT node classifier | pyg | CLEAN | strict=False | 1.2e-07 | ✓ | onnxruntime |
+| `gnn_gat` | GNN fixture: 3-layer GAT node classifier | pyg | CLEAN | strict=False | 1.5e-07 | ✓ | onnxruntime |
 | `gnn_gcn` | GNN fixture: 2-layer GCN node classifier | pyg | CLEAN | strict=False | 3.6e-07 | ✓ | onnxruntime |
-| `gnn_sage` | GNN fixture: 2-layer GraphSAGE node classifier | pyg | CLEAN | strict=False | 1.8e-07 | ✓ | onnxruntime |
-| `scatter_include_self_false` | scatter_reduce(include_self=False) has no faithful ONNX translation | generic-torch | DEGRADED | strict=False | 1.6e+00 | ✗ | torch |
+| `gnn_sage` | GNN fixture: 2-layer GraphSAGE node classifier | pyg | CLEAN | strict=False | 1.2e-07 | ✓ | onnxruntime |
+| `scatter_include_self_false` | scatter_reduce(include_self=False) has no faithful ONNX translation | generic-torch | DEGRADED | strict=False | 1.3e+00 | — | torch |
 | `tied_weights` | tied embedding/output weight (GPT-2/OPT-style) | generic-torch | CLEAN | strict=False | 1.9e-06 | ✓ | onnxruntime |
 | `tiny_bert` | HF fixture: a randomly initialised two-layer BERT encoder | hf-transformers | CLEAN | strict=False | 6.0e-07 | ✓ | onnxruntime |
 <!-- matrix:end -->
