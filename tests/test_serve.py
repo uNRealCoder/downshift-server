@@ -15,10 +15,12 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from downshift.loading import LoadedModel, load_model
 from downshift.serve import app as serve_app
+from downshift.serve import app_for
 from downshift.serve.app import build_app
 from downshift.serve.engine import ServeOptions, prepare_serving
 from downshift.serve.schemas import OutputEncoding
 from tests.conftest import b64_input, b64_output
+from tests.models import clean_mlp
 
 MLP_INPUT = {"inputs": {"x": [[0.0] * 16]}}
 
@@ -94,6 +96,32 @@ def test_health_ready_metadata(mlp_client, mlp_state):
         "mean_ms": mlp_state.warmup_stats.mean_ms,
         "synthesized": mlp_state.warmup_stats.synthesized,
     }
+
+
+def test_app_for_serves_predict_immediately():
+    client = TestClient(app_for(clean_mlp.make_model(), clean_mlp.make_inputs(), warmup=1))
+    resp = client.post("/predict", json=MLP_INPUT)
+    assert resp.status_code == 200, resp.text
+    assert client.get("/ready").json() == {"ready": True}
+
+
+def test_app_for_verifies_a_pre_built_onnx_against_a_reference(exported_mlp):
+    path, model, _ = exported_mlp
+    client = TestClient(app_for(str(path), clean_mlp.make_inputs(), reference=model, warmup=1))
+    meta = client.get("/metadata").json()
+    assert meta["verdict"]["status"] == "CLEAN", meta["verdict"]["reason"]
+    assert meta["backend"]["name"] == "onnxruntime"
+
+
+def test_app_for_mounts_under_a_prefix():
+    from fastapi import FastAPI
+
+    outer = FastAPI()
+    outer.mount("/model", app_for(clean_mlp.make_model(), clean_mlp.make_inputs(), warmup=1))
+    client = TestClient(outer)
+    assert client.get("/model/health").json() == {"status": "ok"}
+    resp = client.post("/model/predict", json=MLP_INPUT)
+    assert resp.status_code == 200, resp.text
 
 
 def test_predict_batch(mlp_client):

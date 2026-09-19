@@ -2,8 +2,9 @@
 
 Lazy by PEP 562: importing `downshift` (and so `downshift.cli.main`, which imports this module
 first) doesn't pull in torch, onnx or onnxruntime. Every name in `__all__` resolves on first
-access via `__getattr__`, from the `downshift.core`/`downshift.adapters` module that actually
-defines it, and is cached on the module so later access skips `__getattr__` entirely.
+access via `__getattr__`, from the `downshift.core`/`downshift.adapters`/`downshift.serve`
+module that actually defines it, and is cached on the module so later access skips
+`__getattr__` entirely.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ __all__ = [
     "NumericsReport",
     "OnnxRuntimeError",
     "Prepared",
+    "app_for",
     "build_verdict",
     "check",
     "export",
@@ -44,6 +46,7 @@ _LAZY = {
     "NumericsReport": ("downshift.core.verify", "NumericsReport"),
     "OnnxRuntimeError": ("downshift.core.verify", "OnnxRuntimeError"),
     "intake": ("downshift.core.prevalidated", "intake"),
+    "app_for": ("downshift.serve", "app_for"),
 }
 
 

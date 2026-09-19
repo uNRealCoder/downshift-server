@@ -122,6 +122,20 @@ Do not expect this to help on small payloads: under roughly 100 KiB the JSON cod
 
 See CHANGELOG.md for wire-format changes in 0.3.
 
+### Mount it in your own app
+
+Already have a FastAPI service? `downshift.serve.app_for(model, example_inputs)` runs the same export-and-verify gate and warmup as `downshift serve`, synchronously, and hands back a plain `FastAPI` app - no subprocess, no second port:
+
+```python
+from fastapi import FastAPI
+from downshift.serve import app_for
+
+app = FastAPI()
+app.mount("/model", app_for(my_model, example_inputs))
+```
+
+`/model/predict`, `/model/health` and the rest behave exactly like a standalone `downshift serve`. `app_for` takes `ServeOptions` fields as keyword arguments (`backend=`, `warmup=`, `max_concurrency=`, ...) and a `reference=` model for verifying a pre-built ONNX graph. See [lesson 3](examples/03_serve_and_query.py) for the full walkthrough, including the `LoadedModel`/`prepare_serving`/`build_app` pieces `app_for` wraps.
+
 ### Options
 
 Options that change what gets served:

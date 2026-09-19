@@ -160,6 +160,12 @@ All notable changes to this project are documented here. Format follows
   (`ServingState.timings`).
 - `/metadata` gains `boot` (the same per-phase timings as the banner's `Boot` row) and
   `warmup` (`count`, `mean_ms`, `synthesized`).
+- `downshift.serve.app_for(model, example_inputs=None, *, source=, reference=,
+  middleware=, **options)`: `LoadedModel` + `prepare_serving()` + `build_app(state=...)`
+  in one synchronous call, for mounting downshift's routes inside an existing FastAPI app
+  (`app.mount("/model", app_for(model))`) instead of running a whole process. `model` is
+  a `torch.nn.Module` or a pre-built `.onnx` path (`reference` then verifies it, like
+  `--reference`). Exported from `downshift.__all__` too.
 
 ### Removed
 
