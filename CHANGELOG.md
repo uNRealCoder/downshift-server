@@ -5,6 +5,18 @@ All notable changes to this project are documented here. Format follows
 
 ## 0.4.0 - Unreleased
 
+### Changed
+
+- `downshift.export` (the subpackage) is `downshift.core` now; `downshift.export` still
+  works for one release as a deprecated alias that warns `DeprecationWarning` on import.
+
+### Removed
+
+- The built-in `generic`/`pyg`/`hf` adapters are no longer registered as `downshift.adapters`
+  entry points. `downshift.adapters.registry` loads them directly, gated on
+  `transformers`/`torch_geometric` already being imported, so discovering adapters for a
+  plain PyTorch model no longer imports either.
+
 ## 0.3.0 - Unreleased
 
 ### Fixed

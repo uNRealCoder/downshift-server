@@ -69,10 +69,9 @@ Issues = "https://github.com/uNRealCoder/downshift-server/issues"
 [project.scripts]
 downshift = "downshift.cli.main:app"
 
-[project.entry-points."downshift.adapters"]
-generic = "downshift.adapters.generic:ADAPTER"
-pyg = "downshift.adapters.pyg:ADAPTER"
-hf = "downshift.adapters.hf:ADAPTER"
+# The built-in adapters (generic, pyg, hf) are not entry points: downshift.adapters.registry
+# imports them directly, gated on sys.modules, so discovering adapters never imports
+# transformers or torch_geometric on their behalf. Third-party adapters still register here.
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/downshift"]

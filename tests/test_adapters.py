@@ -24,6 +24,14 @@ from tests.models import (
 # --- registry ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _clear_adapter_discovery_cache():
+    """available() caches per process; each test needs to see its own entry_points patch."""
+    registry._cache.clear()
+    yield
+    registry._cache.clear()
+
+
 def test_available_lists_builtins_with_generic_last():
     names = list(registry.available())
     assert {"generic", "pyg", "hf"} <= set(names)
@@ -51,8 +59,10 @@ class _FakeAdapter:
 
 
 class _FakeEntryPoint:
-    def __init__(self, loader):
+    def __init__(self, loader, name="fake", value="fake.module:ADAPTER"):
         self._loader = loader
+        self.name = name
+        self.value = value
 
     def load(self):
         return self._loader()

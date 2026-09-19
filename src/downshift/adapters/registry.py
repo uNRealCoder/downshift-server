@@ -1,9 +1,11 @@
 """Adapter lookup: built-ins, anything registered under the `downshift.adapters` entry-point
 group, and one-off adapters loaded straight from a user's .py file. Adapters whose optional
-dependency is missing are skipped silently.
+dependency is missing, or whose family hasn't been imported by anything yet, are skipped
+silently.
 """
 
 import importlib.util
+import sys
 from importlib import import_module
 from importlib.metadata import entry_points
 from pathlib import Path
@@ -15,12 +17,24 @@ from downshift.loading import LoadError
 
 ENTRY_POINT_GROUP = "downshift.adapters"
 
-# Most specific first; generic last so it only wins when nothing else matches.
+# Most specific first; generic last so it only wins when nothing else matches. The third
+# element is the module whose presence in sys.modules means the family is actually in play
+# (so discovery never imports transformers/torch_geometric on their behalf); None for generic,
+# which has no optional dependency to gate on.
 _BUILTIN_SPECS = (
-    "downshift.adapters.hf:ADAPTER",
-    "downshift.adapters.pyg:ADAPTER",
-    "downshift.adapters.generic:ADAPTER",
+    ("hf", "downshift.adapters.hf:ADAPTER", "transformers"),
+    ("pyg", "downshift.adapters.pyg:ADAPTER", "torch_geometric"),
+    ("generic", "downshift.adapters.generic:ADAPTER", None),
 )
+_BUILTIN_VALUES = frozenset(spec for _, spec, _ in _BUILTIN_SPECS)
+
+# available() keyed by which optional families are in play; a plugin's own imports (or a
+# custom adapter's) can only add entries, never remove one already cached for this process.
+_cache: dict[frozenset[str], dict[str, Adapter]] = {}
+
+
+def _in_play(requires: str | None) -> bool:
+    return requires is None or requires in sys.modules
 
 
 def _load_spec(spec: str) -> Adapter | None:
@@ -81,14 +95,23 @@ def load_from_file(path_str: str, attr: str = "ADAPTER") -> Adapter:
 
 
 def available() -> dict[str, Adapter]:
+    key = frozenset(mod for _, _, mod in _BUILTIN_SPECS if mod is not None and mod in sys.modules)
+    cached = _cache.get(key)
+    if cached is not None:
+        return cached
+
     adapters: dict[str, Adapter] = {}
     for ep in entry_points(group=ENTRY_POINT_GROUP):
+        if ep.value in _BUILTIN_VALUES:
+            continue  # a stale install's metadata may still list these; pyproject no longer does
         try:
             adapter = ep.load()
         except ImportError:
             continue
         adapters[adapter.name] = adapter
-    for spec in _BUILTIN_SPECS:
+    for _, spec, requires in _BUILTIN_SPECS:
+        if not _in_play(requires):
+            continue
         adapter = _load_spec(spec)
         if adapter is not None:
             adapters.setdefault(adapter.name, adapter)
@@ -96,17 +119,32 @@ def available() -> dict[str, Adapter]:
     generic = adapters.pop("generic", None)
     if generic is not None:
         adapters["generic"] = generic
+    _cache[key] = adapters
     return adapters
 
 
 def get(name: str) -> Adapter:
+    """Load exactly one adapter by name, without pulling in every other family's import."""
     file_spec = _split_file_spec(name)
     if file_spec is not None:
         return load_from_file(*file_spec)
-    adapters = available()
-    if name not in adapters:
-        raise KeyError(f"unknown adapter {name!r}; available: {', '.join(adapters)}")
-    return adapters[name]
+
+    for builtin_name, spec, _ in _BUILTIN_SPECS:
+        if builtin_name == name:
+            adapter = _load_spec(spec)
+            if adapter is not None:
+                return adapter
+            break  # the built-in is registered but its optional dependency isn't installed
+
+    for ep in entry_points(group=ENTRY_POINT_GROUP):
+        if ep.name == name and ep.value not in _BUILTIN_VALUES:
+            try:
+                loaded: Adapter = ep.load()
+            except ImportError:
+                break
+            return loaded
+
+    raise KeyError(f"unknown adapter {name!r}; available: {', '.join(available())}")
 
 
 def detect(model: nn.Module, example_inputs: tuple | None) -> Adapter:

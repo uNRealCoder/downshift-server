@@ -275,6 +275,8 @@ myfamily = "my_pkg.adapter:ADAPTER"
 
 Adapters are tried most-specific first; `generic` always goes last. An adapter whose optional dependency is missing is skipped silently.
 
+**The plugin contract:** keep the entry-point module cheap to import — downshift imports every registered entry point's module just to build the adapter list (an `ImportError` there is treated as "optional dependency not installed" and skipped silently). Do the heavy import (your model library, a large parser, ...) inside `prepare()`, which only runs once an adapter has actually matched, not inside the module `ADAPTER` is defined in. The built-in `hf` and `pyg` adapters aren't entry points at all precisely because they can't follow that rule (`transformers`/`torch_geometric` have to be imported to define `HFAdapter`/`PyGAdapter` in the first place); `downshift.adapters.registry` loads them directly instead, gated on the family's module already being in `sys.modules`, so discovering adapters for a plain PyTorch model never imports either.
+
 For a one-off adapter that isn't worth packaging, `--adapter` (and `check()`'s `adapter=`) also accepts a bare `.py` file directly, no install or entry point required:
 
 ```bash
