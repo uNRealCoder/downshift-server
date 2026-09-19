@@ -44,15 +44,15 @@ Python 3.11 to 3.14. CPU-only is what this release was tested on. CUDA execution
 downshift serve my_pkg.models:build --port 8000
 ```
 
-`serve` loads the model, runs the export-and-verify gate described in [The gate](#the-gate-export-and-verify-before-serving), picks a backend from the verdict, warms it up, prints the banner above, and starts uvicorn. The routes are the same whichever backend is behind them.
+`serve` binds the port first, then loads the model, runs the export-and-verify gate described in [The gate](#the-gate-export-and-verify-before-serving), picks a backend from the verdict, warms it up and prints the banner above, all on a background thread. `--workers N` is the exception: the parent still does that work before uvicorn binds, since every worker needs the export it produces. The routes are the same whichever backend is behind them.
 
 | Route | What it does |
 |---|---|
-| `POST /predict` | Named tensor inputs, any model |
-| `POST /predict/graph` | One graph: `x`, `edge_index`, optional `edge_attr` |
-| `GET /health` | Liveness |
-| `GET /ready` | `200` once warmup is done, `503` before |
-| `GET /metadata` | Family, backend, full verdict, input names, limits |
+| `POST /predict` | Named tensor inputs, any model; `503` (with `Retry-After`) until the model is ready |
+| `POST /predict/graph` | One graph: `x`, `edge_index`, optional `edge_attr`; same `503` until ready |
+| `GET /health` | Liveness: `200` as soon as the process is up, even mid-load |
+| `GET /ready` | `503` (`{"ready": false, "phase": "export"}`) until the model has loaded, exported, verified and warmed up; `200` after, and it never goes back to `503` without a restart |
+| `GET /metadata` | Family, backend, full verdict, input names, limits; `503` until ready |
 
 ```bash
 curl -s localhost:8000/predict -H 'content-type: application/json' \

@@ -553,26 +553,29 @@ def _build_from_torch_artifact(args: ServeArgs, opts: ServeOptions) -> ServingSt
     return state
 
 
-def _build_serving_app(args: ServeArgs) -> tuple[ServingState, FastAPI]:
-    from downshift.serve.app import build_app
+def _build_serving_state(args: ServeArgs) -> ServingState:
     from downshift.serve.engine import prepare_serving
 
     opts = _serve_options(args)
 
     if args.artifact_backend == "onnxruntime":
-        state = _build_from_onnx_artifact(args, opts)
-    elif args.artifact_backend == "torch":
-        state = _build_from_torch_artifact(args, opts)
-    else:
-        loaded = _load(args.model, args.inputs, args.model_class, args.unsafe_load)
-        ref = (
-            _load(args.reference, args.inputs, args.model_class, args.unsafe_load)
-            if args.reference
-            else None
-        )
-        state = prepare_serving(loaded, opts, ref)
+        return _build_from_onnx_artifact(args, opts)
+    if args.artifact_backend == "torch":
+        return _build_from_torch_artifact(args, opts)
+    loaded = _load(args.model, args.inputs, args.model_class, args.unsafe_load)
+    ref = (
+        _load(args.reference, args.inputs, args.model_class, args.unsafe_load)
+        if args.reference
+        else None
+    )
+    return prepare_serving(loaded, opts, ref)
 
-    api = build_app(state, tuple(args.middleware or ()))
+
+def _build_serving_app(args: ServeArgs) -> tuple[ServingState, FastAPI]:
+    from downshift.serve.app import build_app
+
+    state = _build_serving_state(args)
+    api = build_app(state, middleware=tuple(args.middleware or ()))
     return state, api
 
 
@@ -698,9 +701,39 @@ def serve_cmd(
             log_format=log_format.value,
         )
         if workers <= 1:
-            state, api = _build_serving_app(args)
-            render.print_banner(state, host, port)
-            uvicorn.run(api, host=host, port=port, log_level=log_level.value, access_log=access_log)
+            from downshift.serve.app import build_app
+
+            # Bind first, load in the background: a slow export/verify/warmup no longer
+            # holds the port closed. failure[] and server_holder{} let the loader (which
+            # runs on its own thread, started by build_app's lifespan once uvicorn actually
+            # serves) reach back into the main thread on a crash: it stashes the exception
+            # here and flips should_exit, so a failed load still exits the process instead
+            # of serving 503 forever.
+            failure: list[BaseException] = []
+            server_holder: dict[str, uvicorn.Server] = {}
+
+            def loader() -> ServingState:
+                try:
+                    state = _build_serving_state(args)
+                except Exception as exc:
+                    failure.append(exc)
+                    server = server_holder.get("server")
+                    if server is not None:
+                        server.should_exit = True
+                    raise
+                render.print_banner(state, host, port)
+                return state
+
+            api = build_app(loader=loader, middleware=tuple(args.middleware or ()))
+            render.print_booting(model, host, port)
+            config = uvicorn.Config(
+                api, host=host, port=port, log_level=log_level.value, access_log=access_log
+            )
+            server = uvicorn.Server(config)
+            server_holder["server"] = server
+            server.run()
+            if failure:
+                raise failure[0]
         else:
             # The one and only export: each worker loads this artifact instead of
             # capturing/verifying again. Skips warmup here; this throwaway copy never

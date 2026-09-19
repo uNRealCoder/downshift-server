@@ -442,11 +442,44 @@ def test_middleware_specs(mlp_state):
         build_app(mlp_state, middleware=["tests.test_serve:not_middleware"])
 
 
-def test_ready_503_when_not_ready(mlp_state):
-    not_ready = dataclasses.replace(mlp_state, ready=False)
-    resp = TestClient(build_app(not_ready)).get("/ready")
-    assert resp.status_code == 503
-    assert resp.json() == {"ready": False}
+def test_ready_and_predict_503_until_the_loader_lands(mlp_state):
+    """Plan 3.3 U3: bind first, load on a background thread, 503 until the verdict is in,
+    200 after, no restart in between."""
+    release = threading.Event()
+
+    def loader():
+        assert release.wait(timeout=5)
+        return mlp_state
+
+    app = build_app(loader=loader)
+    with TestClient(app) as client:
+        assert client.get("/health").status_code == 200
+
+        ready = client.get("/ready")
+        assert ready.status_code == 503
+        assert ready.json() == {"ready": False, "phase": "export"}
+
+        for resp in (
+            client.get("/metadata"),
+            client.post("/predict", json=MLP_INPUT),
+        ):
+            assert resp.status_code == 503, resp.text
+            assert resp.headers["retry-after"] == "2"
+            assert resp.json() == {"detail": "model is not ready"}
+
+        release.set()
+        app.state.loader_thread.join(timeout=5)
+
+        assert client.get("/ready").json() == {"ready": True}
+        assert client.get("/metadata").status_code == 200
+        assert client.post("/predict", json=MLP_INPUT).status_code == 200
+
+
+def test_build_app_needs_exactly_one_of_state_or_loader(mlp_state):
+    with pytest.raises(ValueError, match="exactly one"):
+        build_app()
+    with pytest.raises(ValueError, match="exactly one"):
+        build_app(mlp_state, loader=lambda: mlp_state)
 
 
 def test_predict_torch_backend_shape_error_is_400(serve_fixture):

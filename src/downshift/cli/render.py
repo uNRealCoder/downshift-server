@@ -242,6 +242,13 @@ def print_banner(state: ServingState, host: str, port: int, workers: int = 1) ->
     )
 
 
+def print_booting(model: str, host: str, port: int) -> None:
+    """Printed once, before uvicorn binds; the full banner (print_banner) follows once the
+    loader thread lands a verdict."""
+    console.print(f"[dim]loading[/] {escape(model)}")
+    console.print(f"[dim]will listen on[/] http://{host}:{port} [dim](not ready yet)[/]")
+
+
 def warn(msg: str) -> None:
     err_console.print(f"[bold yellow]warning:[/] {escape(msg)}")
 

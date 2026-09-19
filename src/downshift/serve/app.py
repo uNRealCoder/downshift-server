@@ -2,9 +2,11 @@
 
 import asyncio
 import logging
+import threading
 import time
 import uuid
-from collections.abc import Callable, Coroutine, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from functools import partial
 from typing import Any
 
@@ -31,8 +33,11 @@ from downshift.serve.schemas import (
     ReadyResponse,
     to_numpy,
 )
+from downshift.settings import DEFAULT_MAX_BODY_BYTES
 
 logger = logging.getLogger("downshift.serve")
+
+NOT_READY_RETRY_AFTER = 2  # seconds a client should wait before asking again
 
 # dtypes orjson's OPT_SERIALIZE_NUMPY writes straight from the array buffer (orjson >= 3.9).
 _ORJSON_DTYPES = frozenset(
@@ -82,8 +87,12 @@ class OrjsonRoute(APIRoute):
         handler = super().get_route_handler()
 
         async def route_handler(request: Request) -> Response:
-            state: ServingState = request.app.state.serving
-            limit = state.options.max_body_bytes
+            current: ServingState | None = request.app.state.serving
+            # Before the loader lands there is no ServingState to read a limit from yet;
+            # fall back to the default so a large body is still rejected before parsing.
+            limit = (
+                current.options.max_body_bytes if current is not None else DEFAULT_MAX_BODY_BYTES
+            )
             content_length = request.headers.get("content-length")
             wrapped = _OrjsonRequest(request.scope, request.receive)
             if content_length is not None and content_length.isdigit():
@@ -192,6 +201,14 @@ def _predict_body(
     return response
 
 
+def _not_ready_error() -> HTTPException:
+    """Raised by /metadata and the predict routes while a loader-built app has no
+    ServingState yet (see build_app's loader parameter)."""
+    return HTTPException(
+        503, "model is not ready", headers={"Retry-After": str(NOT_READY_RETRY_AFTER)}
+    )
+
+
 def _capacity_error(state: ServingState) -> HTTPException:
     running = min(state.in_flight, state.options.max_concurrency)
     queued = max(0, state.in_flight - state.options.max_concurrency)
@@ -249,8 +266,55 @@ class RequestIdMiddleware:
         await self.app(scope, receive, send_with_request_id)
 
 
-def build_app(state: ServingState, middleware: Sequence[str] = ()) -> FastAPI:
-    app = FastAPI(title="downshift", version=downshift.__version__)
+def _loader_lifespan(
+    loader: Callable[[], ServingState],
+) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
+    """Runs `loader` on a background thread, started when the app actually begins serving
+    (not when build_app is called), and lands the result on app.state.serving. A raising
+    loader leaves app.state.serving None forever from this function's point of view alone;
+    the caller (serve_cmd) arranges for that to end the process instead, by closing over
+    the uvicorn.Server and setting should_exit itself before re-raising.
+    """
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        def run() -> None:
+            try:
+                app.state.serving = loader()
+            except Exception:
+                # Not logged at error/exception level: a caller with a reporting path of its
+                # own (serve_cmd re-raises this on the main thread) would otherwise print the
+                # traceback twice, once here unconditionally and once gated by --log-level
+                # debug. --log-level debug still sees it here.
+                logger.debug("model failed to load; /ready will not turn 200", exc_info=True)
+
+        thread = threading.Thread(target=run, name="downshift-loader", daemon=True)
+        app.state.loader_thread = thread
+        thread.start()
+        yield
+
+    return lifespan
+
+
+def build_app(
+    state: ServingState | None = None,
+    *,
+    loader: Callable[[], ServingState] | None = None,
+    middleware: Sequence[str] = (),
+) -> FastAPI:
+    """With `state`, the app serves it immediately (library use, tests). With `loader`
+    instead, the app binds with no ServingState at all: /health is 200 right away, /ready
+    is 503, and /metadata and the predict routes are 503, until the loader (run on a
+    background thread started by the lifespan, once the app is actually served) lands one.
+    """
+    if (state is None) == (loader is None):
+        raise ValueError("build_app needs exactly one of state or loader")
+
+    app = FastAPI(
+        title="downshift",
+        version=downshift.__version__,
+        lifespan=_loader_lifespan(loader) if loader is not None else None,
+    )
     app.router.route_class = OrjsonRoute
     app.state.serving = state
     app.add_middleware(RequestIdMiddleware)
@@ -283,39 +347,51 @@ def build_app(state: ServingState, middleware: Sequence[str] = ()) -> FastAPI:
         return HealthResponse()
 
     @app.get("/ready", response_model=ReadyResponse)
-    async def ready() -> JSONResponse:
-        status = 200 if state.ready else 503
-        return JSONResponse({"ready": state.ready}, status_code=status)
+    async def ready(request: Request) -> JSONResponse:
+        current: ServingState | None = request.app.state.serving
+        if current is None:
+            return JSONResponse({"ready": False, "phase": "export"}, status_code=503)
+        status = 200 if current.ready else 503
+        return JSONResponse({"ready": current.ready}, status_code=status)
 
     @app.get("/metadata", response_model=MetadataResponse)
-    async def metadata() -> MetadataResponse:
+    async def metadata(request: Request) -> MetadataResponse:
+        current: ServingState | None = request.app.state.serving
+        if current is None:
+            raise _not_ready_error()
         return MetadataResponse(
-            model=state.source,
-            family=state.verdict.model_family,
-            verdict=state.verdict.to_dict(),
-            backend=state.backend.metadata().to_dict(),
-            input_names=list(state.input_names),
-            notes=list(state.notes),
+            model=current.source,
+            family=current.verdict.model_family,
+            verdict=current.verdict.to_dict(),
+            backend=current.backend.metadata().to_dict(),
+            input_names=list(current.input_names),
+            notes=list(current.notes),
             version=downshift.__version__,
             limits={
-                "max_body_bytes": state.options.max_body_bytes,
-                "max_input_bytes": state.options.max_input_bytes,
-                "max_concurrency": state.options.max_concurrency,
-                "max_queue": state.options.max_queue,
-                "request_timeout": state.options.request_timeout,
+                "max_body_bytes": current.options.max_body_bytes,
+                "max_input_bytes": current.options.max_input_bytes,
+                "max_concurrency": current.options.max_concurrency,
+                "max_queue": current.options.max_queue,
+                "request_timeout": current.options.request_timeout,
             },
         )
 
     @app.post("/predict", **_PREDICT_ROUTE)
-    async def predict(req: PredictRequest) -> NumpyJSONResponse:
-        return await run_predict(state, req.inputs, req.output_encoding)
+    async def predict(req: PredictRequest, request: Request) -> NumpyJSONResponse:
+        current: ServingState | None = request.app.state.serving
+        if current is None:
+            raise _not_ready_error()
+        return await run_predict(current, req.inputs, req.output_encoding)
 
     @app.post("/predict/graph", **_PREDICT_ROUTE)
-    async def predict_graph(req: GraphPredictRequest) -> NumpyJSONResponse:
-        if not {"x", "edge_index"} <= set(state.input_names):
+    async def predict_graph(req: GraphPredictRequest, request: Request) -> NumpyJSONResponse:
+        current: ServingState | None = request.app.state.serving
+        if current is None:
+            raise _not_ready_error()
+        if not {"x", "edge_index"} <= set(current.input_names):
             raise HTTPException(
                 400,
-                f"model is not graph-shaped: inputs are {list(state.input_names)}, "
+                f"model is not graph-shaped: inputs are {list(current.input_names)}, "
                 "expected at least 'x' and 'edge_index'",
             )
         # No dtype hints needed: to_numpy takes the backend's declared dtype (int64 for
@@ -323,6 +399,6 @@ def build_app(state: ServingState, middleware: Sequence[str] = ()) -> FastAPI:
         inputs: dict[str, Any] = {"x": req.x, "edge_index": req.edge_index}
         if req.edge_attr is not None:
             inputs["edge_attr"] = req.edge_attr
-        return await run_predict(state, inputs, req.output_encoding)
+        return await run_predict(current, inputs, req.output_encoding)
 
     return app

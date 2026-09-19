@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 import torch
 import uvicorn
+from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
 import downshift
@@ -223,14 +224,44 @@ def test_slug(spec: str, expected: str):
     assert main.slug(spec) == expected
 
 
-def _serve_captured(monkeypatch, *extra_args: str) -> tuple:
-    """Run `serve CLEAN --warmup 1 <extra_args>` with uvicorn.run stubbed out.
+def _fake_uvicorn_server(monkeypatch, captured: dict) -> None:
+    """Single-worker `serve` now binds via uvicorn.Server directly (not uvicorn.run), so
+    should_exit is reachable from the loader thread. Stand in for it: capture the config,
+    and drive the app's lifespan the way a real server would (so the loader thread the
+    plan describes actually runs and lands app.state.serving), without opening a socket.
+    """
 
-    Returns (CliRunner result, the kwargs uvicorn.run received plus its `app`).
+    def fake_init(self, config) -> None:
+        self.config = config
+        self.should_exit = False
+        captured.update(
+            app=config.app,
+            host=config.host,
+            port=config.port,
+            log_level=config.log_level,
+            access_log=config.access_log,
+        )
+
+    def fake_run(self) -> None:
+        with TestClient(self.config.app):
+            thread = getattr(self.config.app.state, "loader_thread", None)
+            if thread is not None:
+                thread.join(timeout=30)
+
+    monkeypatch.setattr(uvicorn.Server, "__init__", fake_init)
+    monkeypatch.setattr(uvicorn.Server, "run", fake_run)
+
+
+def _serve_captured(monkeypatch, *extra_args: str) -> tuple:
+    """Run `serve CLEAN --warmup 1 <extra_args>` with uvicorn stubbed out: uvicorn.run for
+    `--workers` > 1 (unchanged), uvicorn.Server for the single-worker bind-first path.
+
+    Returns (CliRunner result, the captured config values plus the app).
     """
     pytest.importorskip("downshift.serve.app")
     captured: dict = {}
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: captured.update(app=app, **kw))
+    _fake_uvicorn_server(monkeypatch, captured)
     result = run("serve", CLEAN, "--warmup", "1", *extra_args)
     assert result.exit_code == 0, result.output
     return result, captured
@@ -294,6 +325,19 @@ def test_serve_no_access_log_disables_it(monkeypatch):
 def test_serve_rejects_unknown_output_encoding():
     result = run("serve", CLEAN, "--output-encoding", "hex")
     assert result.exit_code == 2, result.output  # typer usage error: not a choice
+
+
+def test_serve_load_failure_on_the_loader_thread_exits_with_the_usual_code(monkeypatch):
+    """A model that fails to load in the background thread must still end the process with
+    the exit code _exit_on_error would give it synchronously, not serve 503 forever."""
+    captured: dict = {}
+    _fake_uvicorn_server(monkeypatch, captured)
+
+    result = run("serve", CLEAN, "--adapter", "doesnotexist")
+
+    assert result.exit_code == main.EXIT_USAGE, result.output
+    assert "LoadError" not in result.output
+    assert "doesnotexist" in result.output
 
 
 def test_serve_workers_uses_an_import_string_factory(monkeypatch):

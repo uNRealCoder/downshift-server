@@ -26,6 +26,14 @@ All notable changes to this project are documented here. Format follows
 - Overload used to mean a growing, unbounded queue of predicts until clients timed out; a
   predict past `--max-concurrency + --max-queue` admitted requests now gets an immediate
   `503` instead.
+- `/ready` now means something: `serve` (single worker) binds the port first and loads,
+  exports, verifies and warms up on a background thread; `/ready` is `503` with
+  `{"ready": false, "phase": "export"}` until that lands, then `200`, with no restart in
+  between. `/metadata` and both predict routes are `503` with `Retry-After` in the same
+  window. Before, `/ready` was already `200` by the time uvicorn started serving, so it
+  never carried information a client could act on. A failed load still exits the process
+  with the same code `check`/`export` would use for the same error, instead of leaving the
+  server up and permanently unready.
 
 ### Changed
 
@@ -93,6 +101,9 @@ All notable changes to this project are documented here. Format follows
   `.executor` and an `.in_flight` counter.
 - A `500`'s body now carries `"request_id"` alongside `"detail"`, and the server log line
   for it carries the same id, so "see the server log" has a key to search for.
+- `build_app(state, ...)` becomes `build_app(state=None, *, loader=None, middleware=())`:
+  pass `state` for the old synchronous behaviour, or `loader` for the bind-first behaviour
+  above. `run_predict`/`_predict_body` are unchanged.
 
 ### Added
 
