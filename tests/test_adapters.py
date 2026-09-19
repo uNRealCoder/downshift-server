@@ -39,7 +39,7 @@ def test_available_lists_builtins_with_generic_last():
 
 
 def test_get_unknown_adapter_lists_available_names():
-    with pytest.raises(KeyError, match="nope") as excinfo:
+    with pytest.raises(LoadError, match="nope") as excinfo:
         registry.get("nope")
     assert "generic" in str(excinfo.value)
 

@@ -18,6 +18,7 @@ from tests.models import clean_mlp
 CLEAN = "tests.models.clean_mlp:make_model"
 DEGRADED = "tests.models.scatter_include_self_false:make_model"
 FAILED = "tests.models.data_dependent_branch:make_model"
+BROKEN = "tests.models.broken_factory:make_model"
 
 runner = CliRunner()
 
@@ -87,14 +88,15 @@ def test_json_formatter_serialises_exc_info():
     assert "ValueError" in payload["exc_info"]
 
 
-def test_check_unknown_adapter_is_an_unexpected_crash():
+def test_check_unknown_adapter_is_a_usage_error():
     result = run("check", CLEAN, "--adapter", "doesnotexist", "--json")
-    assert result.exit_code == main.EXIT_CRASH, result.output
-    assert "KeyError" in result.output
+    assert result.exit_code == main.EXIT_USAGE, result.output
+    assert "LoadError" not in result.output
+    assert "doesnotexist" in result.output
 
 
 def test_check_crash_with_debug_prints_traceback():
-    result = run("check", CLEAN, "--adapter", "doesnotexist", "--log-level", "debug", "--json")
+    result = run("check", BROKEN, "--log-level", "debug", "--json")
     assert result.exit_code == main.EXIT_CRASH, result.output
 
 
@@ -277,12 +279,6 @@ def test_serve_app_factory_rebuilds_the_app_from_env(monkeypatch):
     assert api.state.serving.options.max_input_bytes == 1024
     assert api.state.serving.options.max_body_bytes == 2048
     assert api.state.serving.options.max_concurrency == 2
-
-
-def test_version():
-    result = run("version")
-    assert result.exit_code == 0
-    assert main.__version__ in result.stdout
 
 
 def test_version_eager_flag():

@@ -509,11 +509,5 @@ def serve_cmd(
             )
 
 
-@app.command()
-def version() -> None:
-    """Print the version."""
-    typer.echo(f"downshift v{__version__}")
-
-
 if __name__ == "__main__":  # pragma: no cover
     app()

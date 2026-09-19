@@ -5,13 +5,23 @@ All notable changes to this project are documented here. Format follows
 
 ## 0.4.0 - Unreleased
 
+### Fixed
+
+- `--adapter <typo>` on `check`/`export`/`serve` is now a usage error (exit code 4), not an
+  unhandled `KeyError` reported as exit code 5.
+
 ### Changed
 
 - `downshift.export` (the subpackage) is `downshift.core` now; `downshift.export` still
   works for one release as a deprecated alias that warns `DeprecationWarning` on import.
 
+### Added
+
+- `python -m downshift` works as an alternative to the `downshift` script.
+
 ### Removed
 
+- The `downshift version` subcommand. `downshift --version` still works.
 - The built-in `generic`/`pyg`/`hf` adapters are no longer registered as `downshift.adapters`
   entry points. `downshift.adapters.registry` loads them directly, gated on
   `transformers`/`torch_geometric` already being imported, so discovering adapters for a

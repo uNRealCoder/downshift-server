@@ -144,7 +144,7 @@ def get(name: str) -> Adapter:
                 break
             return loaded
 
-    raise KeyError(f"unknown adapter {name!r}; available: {', '.join(available())}")
+    raise LoadError(f"unknown adapter {name!r}; available: {', '.join(available())}")
 
 
 def detect(model: nn.Module, example_inputs: tuple | None) -> Adapter:
