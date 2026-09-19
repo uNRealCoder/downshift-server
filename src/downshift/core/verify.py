@@ -5,7 +5,6 @@ least some samples have shapes the exporter never saw. That's what catches a gra
 traced fine but froze a shape or specialised a data-dependent branch.
 """
 
-import random
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -14,7 +13,7 @@ import onnxruntime as ort
 import torch
 
 from downshift.adapters.base import VaryFn
-from downshift.core.shapes import alternative_sizes
+from downshift.core.shapes import alternative_sizes, dim_bounds
 from downshift.settings import TOLERANCES
 
 
@@ -36,6 +35,10 @@ class NumericsReport:
     shape_generalization: bool  # did every non-baseline-shape sample also pass?
     tolerance_abs: float
     tolerance_rel: float
+    tolerance_dtype: str = (
+        "float32"  # the dtype whose default (tolerance_abs, tolerance_rel) applied
+    )
+    seed: int = 0
     notes: list[str] = field(default_factory=list)
 
     @property
@@ -51,40 +54,64 @@ _TOLERANCES_BY_DTYPE: dict[torch.dtype, tuple[float, float]] = {
 }
 
 
-def default_tolerances(model: torch.nn.Module) -> tuple[float, float]:
+def default_tolerances(model: torch.nn.Module) -> tuple[str, float, float]:
+    """(dtype name, atol, rtol) picked by the narrowest floating dtype present.
+
+    bfloat16 or float16 anywhere in the parameters wins first, since their tolerances are
+    the loosest and a model that mixes them with float32 is only as precise as its worst
+    dtype. float64 wins only when it's the *only* floating dtype - a model that mixes
+    float32 and float64 is still bound by float32's precision. float32 is the fallback.
+    """
     dtypes = {p.dtype for p in model.parameters() if p.is_floating_point()}
     for dtype in (torch.bfloat16, torch.float16):
         if dtype in dtypes:
-            return _TOLERANCES_BY_DTYPE[dtype]
-    return _TOLERANCES_BY_DTYPE[torch.float32]
+            name = "bfloat16" if dtype is torch.bfloat16 else "float16"
+            atol, rtol = _TOLERANCES_BY_DTYPE[dtype]
+            return name, atol, rtol
+    if dtypes == {torch.float64}:
+        atol, rtol = _TOLERANCES_BY_DTYPE[torch.float64]
+        return "float64", atol, rtol
+    atol, rtol = _TOLERANCES_BY_DTYPE[torch.float32]
+    return "float32", atol, rtol
 
 
 def _resize_dim0(tensor: torch.Tensor, new_size: int) -> torch.Tensor:
+    """Resize axis 0 to new_size, staying close to the example rather than pure noise.
+
+    Floating tensors tile or slice the example's own rows and add small noise scaled to
+    the example's own spread, so a varied sample looks like a plausible input rather than
+    unrelated white noise. Integer tensors (usually indices) stay inside the observed range.
+    """
     if tensor.ndim == 0 or tensor.shape[0] == new_size:
         return tensor
+    if tensor.is_floating_point():
+        base_size = tensor.shape[0]
+        reps = -(-new_size // base_size)  # ceil division
+        tiled = tensor.repeat(reps, *([1] * (tensor.ndim - 1)))[:new_size]
+        noise_std = 0.1 * tensor.std(unbiased=False)  # unbiased is undefined for one row
+        return tiled + noise_std * torch.randn(tiled.shape, dtype=tensor.dtype)
     shape = list(tensor.shape)
     shape[0] = new_size
-    if tensor.is_floating_point():
-        return torch.randn(*shape, dtype=tensor.dtype)
-    # Integer inputs are usually indices; stay inside the observed range.
     lo = int(tensor.min().item())
     hi = max(int(tensor.max().item()) + 1, lo + 1)
     return torch.randint(lo, hi, shape, dtype=tensor.dtype)
 
 
-def make_shared_axis0_vary_fn(base_inputs: tuple, dynamic_shapes: tuple, seed: int = 0) -> VaryFn:
+def make_shared_axis0_vary_fn(base_inputs: tuple, dynamic_shapes: tuple) -> VaryFn:
     """Default sampler: every dynamic tensor shares one axis-0 size (the batch case)."""
-    base_size = next(
-        (t.shape[0] for t, spec in zip(base_inputs, dynamic_shapes, strict=True) if spec),
-        None,
-    )
-    rng = random.Random(seed)
-    candidates = alternative_sizes(base_size) if base_size is not None else []
+    base_size = None
+    axis0_spec = None
+    for t, spec in zip(base_inputs, dynamic_shapes, strict=True):
+        if spec:
+            base_size, axis0_spec = t.shape[0], spec
+            break
+    lo, hi = dim_bounds(axis0_spec, 0)
+    candidates = alternative_sizes(base_size, lo, hi) if base_size is not None else []
 
     def vary(i: int) -> tuple:
         if i == 0 or not candidates:
             return base_inputs
-        size = rng.choice(candidates)
+        size = candidates[torch.randint(len(candidates), ())]
         return tuple(
             _resize_dim0(t, size) if isinstance(t, torch.Tensor) and spec else t
             for t, spec in zip(base_inputs, dynamic_shapes, strict=True)
@@ -114,6 +141,18 @@ def _as_tensor_list(output) -> list[torch.Tensor]:
 def _first_line(exc: Exception) -> str:
     text = str(exc)
     return text.splitlines()[0] if text else type(exc).__name__
+
+
+def _bounds_text(dynamic_shapes: tuple | None) -> str | None:
+    if not dynamic_shapes:
+        return None
+    parts = [
+        f"axis {axis} in {dim_bounds(spec, axis)}"
+        for spec in dynamic_shapes
+        if spec
+        for axis in spec
+    ]
+    return ", ".join(parts) if parts else None
 
 
 def _to_numpy(tensor: torch.Tensor) -> np.ndarray:
@@ -189,9 +228,9 @@ def verify(
     if vary_fn is None:
         if dynamic_shapes is None:
             raise ValueError("verify() needs either dynamic_shapes or an explicit vary_fn")
-        vary_fn = make_shared_axis0_vary_fn(base_inputs, dynamic_shapes, seed=seed)
+        vary_fn = make_shared_axis0_vary_fn(base_inputs, dynamic_shapes)
 
-    default_atol, default_rtol = default_tolerances(model)
+    tolerance_dtype, default_atol, default_rtol = default_tolerances(model)
     atol = default_atol if atol is None else atol
     rtol = default_rtol if rtol is None else rtol
 
@@ -223,9 +262,19 @@ def verify(
                     tuple(t.shape) if isinstance(t, torch.Tensor) else type(t).__name__
                     for t in sample
                 ]
+                if i == 0:
+                    raise ValueError(
+                        f"model raised on sample {i} (input shapes {shapes}): "
+                        f"{_first_line(exc)}. Try --dynamic or --inputs if this shape isn't "
+                        "one the model supports."
+                    ) from exc
+                bounds = _bounds_text(dynamic_shapes)
+                drawn_from = f", drawn from bounds {bounds}" if bounds else ""
                 raise ValueError(
-                    f"model raised on sample {i} (input shapes {shapes}): {_first_line(exc)}. "
-                    "Try --dynamic or --inputs if this shape isn't one the model supports."
+                    f"model raised on sample {i} (input shapes {shapes}{drawn_from}), "
+                    f"generated by downshift's sampler: {_first_line(exc)}. If the model "
+                    "doesn't support this shape, pass --vary or a custom adapter to control "
+                    "how verification samples are generated."
                 ) from exc
             torch_outs = _as_tensor_list(raw_output)
 
@@ -262,5 +311,7 @@ def verify(
         shape_generalization=non_baseline_failures == 0,
         tolerance_abs=atol,
         tolerance_rel=rtol,
+        tolerance_dtype=tolerance_dtype,
+        seed=seed,
         notes=notes,
     )

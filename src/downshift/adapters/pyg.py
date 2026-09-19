@@ -7,8 +7,6 @@ INVALID_ARGUMENT on the next one.
 Only imported when a PyG Data input actually shows up, so torch_geometric stays optional.
 """
 
-import random
-
 import torch
 from torch import nn
 from torch_geometric.data import Data
@@ -16,7 +14,7 @@ from torch_geometric.nn import MessagePassing
 
 from downshift.adapters._flatten import build_shim_class
 from downshift.adapters.base import Prepared, VaryFn
-from downshift.core.shapes import alternative_sizes
+from downshift.core.shapes import alternative_sizes, dim_bounds
 
 BASE_FIELD_NAMES = ("x", "edge_index")  # edge_attr appended when present on the input Data
 _GUESS_NODES = 8
@@ -71,18 +69,21 @@ class PyGAdapter:
         n_dim = torch.export.Dim("num_nodes", min=1, max=1 << 16)
         e_dim = torch.export.Dim("num_edges", min=1, max=1 << 16)
         axis_by_field = {"x": {0: n_dim}, "edge_index": {1: e_dim}, "edge_attr": {0: e_dim}}
+        dynamic_shapes = tuple(axis_by_field[n] for n in names)
 
         return Prepared(
             model=shim,
             inputs=inputs,
             input_names=names,
-            dynamic_shapes=tuple(axis_by_field[n] for n in names),
-            vary_fn=make_vary_fn(inputs, names),
+            dynamic_shapes=dynamic_shapes,
+            vary_fn=make_vary_fn(inputs, names, dynamic_shapes),
             family=self.family,
         )
 
 
-def make_vary_fn(base_inputs: tuple, field_names: tuple[str, ...], seed: int = 0) -> VaryFn:
+def make_vary_fn(
+    base_inputs: tuple, field_names: tuple[str, ...], dynamic_shapes: tuple | None = None
+) -> VaryFn:
     """Regenerate (x, edge_index[, edge_attr]) with independently varied N and E.
 
     edge_index is redrawn against the sample's own node count, not the original tensor's
@@ -96,15 +97,18 @@ def make_vary_fn(base_inputs: tuple, field_names: tuple[str, ...], seed: int = 0
     base_n, in_channels = base_x.shape
     base_e = base_ei.shape[1]
 
-    rng = random.Random(seed)
-    n_candidates = alternative_sizes(base_n)
-    e_candidates = alternative_sizes(base_e)
+    n_spec = dynamic_shapes[x_idx] if dynamic_shapes else None
+    e_spec = dynamic_shapes[ei_idx] if dynamic_shapes else None
+    n_lo, n_hi = dim_bounds(n_spec, 0)
+    e_lo, e_hi = dim_bounds(e_spec, 1)
+    n_candidates = alternative_sizes(base_n, n_lo, n_hi)
+    e_candidates = alternative_sizes(base_e, e_lo, e_hi)
 
     def vary(i: int) -> tuple:
         if i == 0:
             return base_inputs
-        n = rng.choice(n_candidates) if n_candidates else base_n
-        e = rng.choice(e_candidates) if e_candidates else base_e
+        n = n_candidates[torch.randint(len(n_candidates), ())] if n_candidates else base_n
+        e = e_candidates[torch.randint(len(e_candidates), ())] if e_candidates else base_e
 
         sample: list = [None] * len(field_names)
         sample[x_idx] = torch.randn(n, in_channels, dtype=base_x.dtype)

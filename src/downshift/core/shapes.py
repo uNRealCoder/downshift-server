@@ -9,9 +9,34 @@ from typing import Any
 import torch
 
 
-def alternative_sizes(base_size: int) -> list[int]:
-    """Sizes to exercise a dynamic axis with, excluding the export-time size."""
-    return sorted({1, 2, 3, base_size + 1, base_size * 2} - {base_size})
+def alternative_sizes(base_size: int, lo: int = 1, hi: int | None = None) -> list[int]:
+    """Sizes to exercise a dynamic axis with, excluding the export-time size.
+
+    Candidates outside [lo, hi] are dropped, so a Dim's bounds (from dim_bounds) are never
+    violated; hi=None means no upper bound.
+    """
+    candidates = {1, 2, 3, base_size + 1, base_size * 2} - {base_size}
+    candidates = {c for c in candidates if c >= lo}
+    if hi is not None:
+        candidates = {c for c in candidates if c <= hi}
+    return sorted(candidates)
+
+
+def dim_bounds(spec: dict[int, Any] | None, axis: int) -> tuple[int, int]:
+    """(min, max) for one axis of a dynamic_shapes entry, e.g. {0: Dim("n", min=1, max=64)}.
+
+    Falls back to (1, 1 << 16) when the axis isn't dynamic or the Dim doesn't expose the
+    attributes on this torch version - the one place that can happen, per the risk it guards.
+    """
+    fallback = (1, 1 << 16)
+    if not spec or axis not in spec:
+        return fallback
+    dim = spec[axis]
+    lo = getattr(dim, "min", None)
+    hi = getattr(dim, "max", None)
+    if lo is None or hi is None:
+        return fallback
+    return lo, hi
 
 
 def infer_dynamic_shapes(inputs: tuple) -> tuple:

@@ -9,7 +9,7 @@ from pathlib import Path
 import onnx
 import torch
 
-from downshift.adapters.base import Adapter
+from downshift.adapters.base import Adapter, VaryFn
 from downshift.core.verdict import BackendName, ExportVerdict, numerics_outcome, prepare_model
 from downshift.core.verify import OnnxRuntimeError, verify
 
@@ -29,6 +29,10 @@ def intake(
     adapter: Adapter | str | None = None,
     k: int = 8,
     dynamic: dict[str, list[int]] | None = None,
+    atol: float | None = None,
+    rtol: float | None = None,
+    seed: int = 0,
+    vary: VaryFn | str | None = None,
 ) -> ExportVerdict:
     onnx_path = Path(onnx_path)
     opset, op_types, input_names = _graph_summary(onnx_path)
@@ -47,7 +51,7 @@ def intake(
             onnx_path=onnx_path,
         )
 
-    prepared = prepare_model(reference, example_inputs, adapter, dynamic)
+    prepared = prepare_model(reference, example_inputs, adapter, dynamic, vary=vary)
     try:
         numerics = verify(
             prepared.model,
@@ -56,6 +60,9 @@ def intake(
             prepared.dynamic_shapes,
             prepared.vary_fn,
             k=k,
+            atol=atol,
+            rtol=rtol,
+            seed=seed,
         )
     except OnnxRuntimeError as exc:
         message = str(exc).splitlines()[0]

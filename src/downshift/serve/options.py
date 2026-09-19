@@ -32,3 +32,7 @@ class ServeOptions:
     max_input_bytes: int = DEFAULT_MAX_INPUT_BYTES  # cap on one decoded base64 tensor input
     max_body_bytes: int = DEFAULT_MAX_BODY_BYTES  # cap on the whole request body
     max_concurrency: int = 1  # inferences allowed to run at once per worker process
+    atol: float | None = None  # None means "by the model's floating dtype"
+    rtol: float | None = None
+    seed: int = 0  # makes verification samples reproducible
+    vary: str | None = None  # pkg.module:fn overriding the adapter's own vary_fn

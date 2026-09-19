@@ -56,6 +56,18 @@ def test_print_verdict_clean_with_dynamic_dims():
     render.print_verdict(verdict, "model")
 
 
+def test_print_verdict_shows_the_tolerance_row(capsys):
+    render.print_verdict(_verdict(), "model")
+    out = capsys.readouterr().out
+    assert "Tolerance" in out
+    assert "float32" in out
+
+
+def test_print_verdict_omits_the_tolerance_row_without_numerics():
+    verdict = _verdict(status="UNVERIFIED", numerics=None, recommended_backend="onnxruntime")
+    render.print_verdict(verdict, "model")
+
+
 def test_print_verdict_unverified_has_no_numerics():
     verdict = _verdict(status="UNVERIFIED", numerics=None, recommended_backend="onnxruntime")
     render.print_verdict(verdict, "model")

@@ -175,6 +175,24 @@ MaxConcurrencyOpt = Annotated[
         "(ONNX Runtime's own intra-op threads still parallelise inside that one inference)",
     ),
 ]
+AtolOpt = Annotated[
+    float | None,
+    typer.Option("--atol", help="Absolute tolerance override; default: by output dtype"),
+]
+RtolOpt = Annotated[
+    float | None,
+    typer.Option("--rtol", help="Relative tolerance override; default: by output dtype"),
+]
+SeedOpt = Annotated[int, typer.Option("--seed", help="Seed for verification sample generation")]
+VaryOpt = Annotated[
+    str | None,
+    typer.Option(
+        "--vary",
+        metavar="pkg.module:fn",
+        help="fn(i) -> inputs for verification samples, overriding the adapter's own; "
+        "fn(0) must return the example inputs",
+    ),
+]
 JsonOpt = Annotated[bool, typer.Option("--json", help="Print the verdict as JSON and nothing else")]
 LogLevelOpt = Annotated[LogLevel, typer.Option("--log-level")]
 LogFormatOpt = Annotated[LogFormat, typer.Option("--log-format")]
@@ -262,6 +280,10 @@ def check_cmd(
     adapter: AdapterOpt = None,
     k: SamplesOpt = settings.SAMPLES,
     dynamic: DynamicOpt = None,
+    atol: AtolOpt = None,
+    rtol: RtolOpt = None,
+    seed: SeedOpt = 0,
+    vary: VaryOpt = None,
     log_level: LogLevelOpt = LogLevel.warning,
     log_format: LogFormatOpt = LogFormat.text,
 ) -> None:
@@ -281,6 +303,10 @@ def check_cmd(
                 adapter or (ref.adapter_hint if ref else None),
                 k=k,
                 dynamic=dynamic_spec,
+                atol=atol,
+                rtol=rtol,
+                seed=seed,
+                vary=vary,
             )
         else:
             assert loaded.model is not None
@@ -290,6 +316,10 @@ def check_cmd(
                 k=k,
                 adapter=adapter or loaded.adapter_hint,
                 dynamic=dynamic_spec,
+                atol=atol,
+                rtol=rtol,
+                seed=seed,
+                vary=vary,
             )
         _emit(verdict, model, json_out)
         raise typer.Exit(verdict.exit_code)
@@ -315,6 +345,10 @@ def export_cmd(
     adapter: AdapterOpt = None,
     k: SamplesOpt = settings.SAMPLES,
     dynamic: DynamicOpt = None,
+    atol: AtolOpt = None,
+    rtol: RtolOpt = None,
+    seed: SeedOpt = 0,
+    vary: VaryOpt = None,
     log_level: LogLevelOpt = LogLevel.warning,
     log_format: LogFormatOpt = LogFormat.text,
 ) -> None:
@@ -341,6 +375,10 @@ def export_cmd(
             fp16=fp16,
             source_path=loaded.source_path,
             verify_numerics=not no_verify,
+            atol=atol,
+            rtol=rtol,
+            seed=seed,
+            vary=vary,
         )
         manifest = manifest_path_for(onnx_path) if verdict.onnx_path else None
         _emit(verdict, model, json_out, {"manifest_path": str(manifest) if manifest else None})
@@ -373,6 +411,10 @@ class ServeArgs:
     max_input_bytes: int
     max_body_bytes: int
     max_concurrency: int
+    atol: float | None
+    rtol: float | None
+    seed: int
+    vary: str | None
     log_level: str
     log_format: str
 
@@ -405,6 +447,10 @@ def _build_serving_app(args: ServeArgs) -> tuple[ServingState, FastAPI]:
         max_input_bytes=args.max_input_bytes,
         max_body_bytes=args.max_body_bytes,
         max_concurrency=args.max_concurrency,
+        atol=args.atol,
+        rtol=args.rtol,
+        seed=args.seed,
+        vary=args.vary,
     )
     state = prepare_serving(loaded, opts, ref)
     api = build_app(state, tuple(args.middleware or ()))
@@ -454,6 +500,10 @@ def serve_cmd(
     max_body_bytes: MaxBodyBytesOpt = settings.MAX_BODY_BYTES,
     max_concurrency: MaxConcurrencyOpt = settings.MAX_CONCURRENCY,
     workers: WorkersOpt = settings.WORKERS,
+    atol: AtolOpt = None,
+    rtol: RtolOpt = None,
+    seed: SeedOpt = 0,
+    vary: VaryOpt = None,
     log_level: LogLevelOpt = LogLevel.info,
     log_format: LogFormatOpt = LogFormat.text,
 ) -> None:
@@ -482,6 +532,10 @@ def serve_cmd(
             max_input_bytes=max_input_bytes,
             max_body_bytes=max_body_bytes,
             max_concurrency=max_concurrency,
+            atol=atol,
+            rtol=rtol,
+            seed=seed,
+            vary=vary,
             log_level=log_level.value,
             log_format=log_format.value,
         )

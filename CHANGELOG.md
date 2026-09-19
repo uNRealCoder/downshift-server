@@ -13,6 +13,12 @@ All notable changes to this project are documented here. Format follows
   actually install or export together: `onnxscript>=0.1` requires `onnx>=1.16`, and
   `onnxscript` below `0.5` fails to translate ops torch 2.5's exporter emits for a
   plain dynamic-batch `Conv2d`. Raised the floors; a new `floor` CI job pins and tests them.
+- A model whose parameters are `.double()` (float64) now gets float64 tolerances
+  (`1e-6, 1e-5`) instead of silently checking against float32's looser default.
+- A Hugging Face model whose example sits at `max_position_embeddings` (the model's own
+  sequence-length ceiling) used to crash `check`/`export`/`serve` with a torch export error
+  once the sampler tried a longer sequence; the sampler now clamps varied sequence lengths
+  to that ceiling.
 
 ### Changed
 
@@ -21,12 +27,43 @@ All notable changes to this project are documented here. Format follows
 - `torch` floor raised to `2.5` (the dynamo exporter accepting an `ExportedProgram` with
   `report=` is a 2.5 feature); `onnx` floor raised to `1.16`; `onnxscript` floor raised to
   `0.5`. See Fixed above.
+- The default tolerance policy now checks bfloat16, then float16, then float64 (only when
+  it's the sole floating dtype present), then falls back to float32 - the narrowest
+  floating dtype present picks the tolerance, not the widest as the README used to say.
+- Verification samples after the first now vary a floating input by tiling or slicing the
+  example's own rows and adding noise scaled to the example's own spread, instead of
+  drawing pure `torch.randn`. Samples look like plausible inputs instead of unrelated
+  noise. Checked this against the fixture corpus: every fixture's verdict, shape
+  generalization, and backend stayed the same; only the reported `max_abs_err` moved
+  (still comfortably inside tolerance everywhere it was CLEAN before).
+- The built-in `hf` and `pyg` adapters' verification samples now draw their sizes from
+  torch's global RNG (already seeded and forked per sample by `verify()`) instead of a
+  `random.Random(0)` fixed at `prepare()` time, so `--seed` actually reproduces them.
+- Verification samples after the first Hugging Face one now vary per-row sequence length
+  and zero `attention_mask` beyond it (every row keeps at least one attended position), so
+  padding is actually exercised instead of every sample using a full mask.
+- When a downshift-generated verification sample (not the caller's own example) makes the
+  model raise, the error now says the sample came from downshift's sampler, gives the
+  shapes and bounds it was drawn from, and points at `--vary` or a custom adapter, instead
+  of suggesting `--dynamic`/`--inputs` as if it were the user's own input.
 
 ### Added
 
 - `python -m downshift` works as an alternative to the `downshift` script.
 - CI: a `floor` job (Python 3.11, the oldest torch/onnx/onnxruntime/onnxscript the pins
   allow), a `windows` job, and an `examples` job that runs every tutorial script.
+- `--atol`/`--rtol` on `check`, `export` and `serve` override the tolerance `verify()`
+  would otherwise pick from the model's floating dtype. The `check` table gets a
+  `Tolerance` row, and `NumericsReport.tolerance_dtype` records which dtype chose it.
+- `--seed` (default 0) on `check`, `export` and `serve` makes verification samples
+  reproducible; recorded on `NumericsReport.seed` and so in `--json`/the manifest.
+- `--vary pkg.module:fn` on `check`, `export` and `serve` (and `vary=` on the library
+  `check()`/`prepare_model()`) supplies your own `fn(i) -> inputs` for verification samples
+  in place of the adapter's own; `fn(0)` must return the example inputs.
+- `downshift.core.shapes.dim_bounds(spec, axis)` reads a dynamic axis's `(min, max)` off
+  its `torch.export.Dim`, falling back to `(1, 1 << 16)` if the attributes aren't there.
+  The default sampler and the `pyg`/`hf` adapters now clamp their varied sizes to it, so a
+  generated sample never exceeds what the model was actually declared to support.
 
 ### Removed
 

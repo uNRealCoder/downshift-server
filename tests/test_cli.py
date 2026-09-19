@@ -70,6 +70,34 @@ def test_check_table_output():
     assert result.exit_code == 0, result.output
 
 
+def test_check_atol_rtol_override():
+    result = run("check", CLEAN, "--atol", "1", "--rtol", "1", "--json")
+    assert result.exit_code == 0, result.output
+    numerics = parse(result)["numerics"]
+    assert numerics["tolerance_abs"] == 1.0
+    assert numerics["tolerance_rel"] == 1.0
+
+
+def test_check_records_seed_and_tolerance_dtype_in_json():
+    result = run("check", CLEAN, "--seed", "3", "--json")
+    assert result.exit_code == 0, result.output
+    numerics = parse(result)["numerics"]
+    assert numerics["seed"] == 3
+    assert numerics["tolerance_dtype"] == "float32"
+
+
+def test_check_vary_accepts_an_import_spec():
+    result = run("check", CLEAN, "--vary", "tests.test_cli:_custom_vary", "--json")
+    assert result.exit_code == 0, result.output
+    assert parse(result)["status"] == "CLEAN"
+
+
+def _custom_vary(i: int) -> tuple:
+    from tests.models import clean_mlp
+
+    return clean_mlp.make_inputs()
+
+
 def test_check_log_format_json_is_accepted():
     result = run("check", CLEAN, "--log-format", "json", "--json")
     assert result.exit_code == 0, result.output
@@ -268,6 +296,10 @@ def test_serve_app_factory_rebuilds_the_app_from_env(monkeypatch):
         max_input_bytes=1024,
         max_body_bytes=2048,
         max_concurrency=2,
+        atol=None,
+        rtol=None,
+        seed=0,
+        vary=None,
         log_level="warning",
         log_format="text",
     )

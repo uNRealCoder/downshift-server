@@ -57,6 +57,13 @@ def _numerics_text(verdict: ExportVerdict) -> Text:
     return text
 
 
+def _tolerance_text(verdict: ExportVerdict) -> str | None:
+    n = verdict.numerics
+    if n is None:
+        return None
+    return f"atol {n.tolerance_abs:.0e}, rtol {n.tolerance_rel:.0e} ({n.tolerance_dtype})"
+
+
 def _dynamic_text(verdict: ExportVerdict) -> str:
     if not verdict.dynamic_dims:
         return _sym("—", "-")
@@ -79,6 +86,9 @@ def print_verdict(verdict: ExportVerdict, model_name: str) -> None:
     table.add_row("Family", verdict.model_family)
     table.add_row("Export", _status_text(verdict))
     table.add_row("Numerics", _numerics_text(verdict))
+    tolerance = _tolerance_text(verdict)
+    if tolerance is not None:
+        table.add_row("Tolerance", tolerance)
     table.add_row("Shape-general", _shape_text(verdict))
     table.add_row("Dynamic dims", _dynamic_text(verdict))
     if verdict.unsupported_ops:

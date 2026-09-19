@@ -138,7 +138,7 @@ Options that change what gets served:
 - `--device auto|cpu|cuda`, `--warmup N` (inferences before `/ready` flips), `--intra-op-threads N` and `--inter-op-threads N` (ONNX Runtime thread counts; 0 lets it choose), `--host`, `--port`, `--log-level`, `--log-format json`.
 - `--version` prints the installed version and exits.
 
-`serve` runs the same gate as `check`, so it also accepts `-k/--samples`, `--dynamic`, `--adapter`, `--inputs`, `--model-class` and `--unsafe-load`, described below.
+`serve` runs the same gate as `check`, so it also accepts `-k/--samples`, `--dynamic`, `--adapter`, `--inputs`, `--model-class`, `--unsafe-load`, `--atol`/`--rtol`, `--seed` and `--vary`, described below.
 
 ### Errors
 
@@ -158,7 +158,7 @@ Options that change what gets served:
 - **FAILED**: does not export, or exports but ONNX Runtime cannot load or run the graph. Served via eager PyTorch. Not an error, a supported path.
 - **UNVERIFIED**: a `.onnx` with no reference model, or `--no-verify`. Served via ONNX Runtime and labelled as never checked.
 
-A sample passes when every output element satisfies `numpy.allclose`: `abs_err <= atol + rtol * |expected|`, the same rule numpy uses. Defaults are chosen by the widest floating dtype in the model's parameters and are overridable, e.g. `DOWNSHIFT_TOL_FLOAT32_ATOL=1e-3` or `DOWNSHIFT_TOL_FLOAT16_RTOL=0.05`.
+A sample passes when every output element satisfies `numpy.allclose`: `abs_err <= atol + rtol * |expected|`, the same rule numpy uses. Defaults are chosen by the narrowest floating dtype present in the model's parameters: bfloat16 or float16 win first if either appears (their tolerances are the loosest), float64 wins only when it's the *only* floating dtype present (a model mixing float32 and float64 is still bound by float32's precision), and float32 is the fallback. Overridable per dtype via `DOWNSHIFT_TOL_FLOAT32_ATOL=1e-3` / `DOWNSHIFT_TOL_FLOAT16_RTOL=0.05`, or outright with `--atol`/`--rtol` on `check`, `export` and `serve`. The `check` table's `Tolerance` row shows which dtype picked the default.
 
 The gate also runs on its own, to gate CI and to write artifacts.
 
@@ -186,7 +186,7 @@ The exit code is the verdict, so it can gate CI: `0` CLEAN, `1` FAILED, `2` DEGR
 downshift check my_pkg.models:build --json -k 16 > verdict.json
 ```
 
-Useful options: `-k/--samples`, `--dynamic "x:0,edge_index:1"` to override which axes are dynamic (default: axis 0 of every input), `--adapter generic|pyg|hf` to skip detection, `--inputs pkg.module:fn` to supply example inputs.
+Useful options: `-k/--samples`, `--dynamic "x:0,edge_index:1"` to override which axes are dynamic (default: axis 0 of every input), `--adapter generic|pyg|hf` to skip detection, `--inputs pkg.module:fn` to supply example inputs, `--atol`/`--rtol` to override the tolerance, `--seed N` (default 0) to make the verification samples reproducible, `--vary pkg.module:fn` to supply your own `fn(i) -> inputs` instead of downshift's sampler (`fn(0)` must return the example inputs).
 
 ### `export`: write the artifact
 
@@ -266,7 +266,7 @@ class MyAdapter:
 ADAPTER = MyAdapter()
 ```
 
-`Prepared` carries the export-ready module, the flat example inputs, their names, the per-input `dynamic_shapes` spec, an optional `vary_fn(i) -> inputs` that generates verification samples, and the family string. Register it under the `downshift.adapters` entry-point group in your own package:
+`Prepared` carries the export-ready module, the flat example inputs, their names, the per-input `dynamic_shapes` spec, an optional `vary_fn(i) -> inputs` that generates verification samples, and the family string. `--seed` reproduces those samples for free if `vary_fn` draws its randomness from torch's global RNG (as the built-in `hf` and `pyg` adapters do, inside the `torch.random.fork_rng()` `verify()` already runs every sample in); an adapter that keeps its own `random.Random` won't pick up the seed. Register it under the `downshift.adapters` entry-point group in your own package:
 
 ```toml
 [project.entry-points."downshift.adapters"]

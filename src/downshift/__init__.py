@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 from downshift._version import __version__
 
 if TYPE_CHECKING:
-    from downshift.adapters.base import Adapter, Prepared
+    from downshift.adapters.base import Adapter, Prepared, VaryFn
     from downshift.core.prevalidated import intake
     from downshift.core.verdict import ExportVerdict, build_verdict, check, prepare_model
     from downshift.core.verify import NumericsReport, OnnxRuntimeError
@@ -69,6 +69,10 @@ def export(
     fp16: bool = False,
     source_path: Path | None = None,
     verify_numerics: bool = True,
+    atol: float | None = None,
+    rtol: float | None = None,
+    seed: int = 0,
+    vary: VaryFn | str | None = None,
 ) -> ExportVerdict:
     """check() plus writing the .onnx and its manifest. `output` is the .onnx path.
 
@@ -86,6 +90,10 @@ def export(
         dynamic=dynamic,
         fp16=fp16,
         verify_numerics=verify_numerics,
+        atol=atol,
+        rtol=rtol,
+        seed=seed,
+        vary=vary,
     )
     if verdict.onnx_program is None:
         return verdict

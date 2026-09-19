@@ -16,11 +16,12 @@ from typing import Literal
 import torch
 
 from downshift.adapters import registry
-from downshift.adapters.base import Adapter, Prepared
+from downshift.adapters.base import Adapter, Prepared, VaryFn
 from downshift.core.capture import capture
 from downshift.core.inputs import synthesize
 from downshift.core.shapes import apply_dynamic_override, safe_capture_inputs
 from downshift.core.verify import NumericsReport, OnnxRuntimeError, verify
+from downshift.loading import import_object
 
 Status = Literal["CLEAN", "DEGRADED", "FAILED", "UNVERIFIED"]
 
@@ -113,8 +114,13 @@ def prepare_model(
     example_inputs: tuple | None = None,
     adapter: Adapter | str | None = None,
     dynamic: dict[str, list[int]] | None = None,
+    vary: VaryFn | str | None = None,
 ) -> Prepared:
-    """Pick an adapter, synthesise inputs if needed, and flatten into export form."""
+    """Pick an adapter, synthesise inputs if needed, and flatten into export form.
+
+    vary overrides the adapter's own vary_fn: a spec string is imported like --adapter's
+    custom-file form (fn(i) -> inputs; fn(0) should return the example).
+    """
     if isinstance(adapter, str):
         adapter = registry.get(adapter)
     if adapter is None:
@@ -125,10 +131,19 @@ def prepare_model(
         prepared.dynamic_shapes = apply_dynamic_override(
             prepared.input_names, prepared.inputs, dynamic
         )
+    if vary is not None:
+        prepared.vary_fn = import_object(vary) if isinstance(vary, str) else vary
     return prepared
 
 
-def build_verdict(prepared: Prepared, k: int = 8, verify_numerics: bool = True) -> ExportVerdict:
+def build_verdict(
+    prepared: Prepared,
+    k: int = 8,
+    verify_numerics: bool = True,
+    atol: float | None = None,
+    rtol: float | None = None,
+    seed: int = 0,
+) -> ExportVerdict:
     """Capture, then verify. verify_numerics=False is the --no-verify escape hatch: the
     graph is still produced but the verdict is UNVERIFIED, never CLEAN."""
     warnings = _tied_weight_warnings(prepared.model)
@@ -177,6 +192,9 @@ def build_verdict(prepared: Prepared, k: int = 8, verify_numerics: bool = True) 
             prepared.dynamic_shapes,
             vary_fn=prepared.vary_fn,
             k=k,
+            atol=atol,
+            rtol=rtol,
+            seed=seed,
         )
     except OnnxRuntimeError as exc:
         message = str(exc).splitlines()[0]
@@ -204,6 +222,10 @@ def check(
     dynamic: dict[str, list[int]] | None = None,
     fp16: bool = False,
     verify_numerics: bool = True,
+    atol: float | None = None,
+    rtol: float | None = None,
+    seed: int = 0,
+    vary: VaryFn | str | None = None,
 ) -> ExportVerdict:
     """Export in memory, verify, and return the verdict. Writes nothing to disk.
 
@@ -213,6 +235,10 @@ def check(
     in place if it was in training mode (see the "training mode" warning on the returned
     verdict) - with fp16=True that happens to the copy, so the caller's model keeps
     whichever mode it was already in.
+
+    atol/rtol default to None, meaning "pick by the model's floating dtype" (see
+    verify.default_tolerances). seed makes the verification samples reproducible. vary
+    overrides the adapter's own vary_fn; see prepare_model.
     """
     if fp16:
         model = copy.deepcopy(model).half()
@@ -221,5 +247,7 @@ def check(
                 t.half() if isinstance(t, torch.Tensor) and t.is_floating_point() else t
                 for t in example_inputs
             )
-    prepared = prepare_model(model, example_inputs, adapter, dynamic)
-    return build_verdict(prepared, k=k, verify_numerics=verify_numerics)
+    prepared = prepare_model(model, example_inputs, adapter, dynamic, vary=vary)
+    return build_verdict(
+        prepared, k=k, verify_numerics=verify_numerics, atol=atol, rtol=rtol, seed=seed
+    )

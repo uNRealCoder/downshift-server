@@ -9,6 +9,7 @@ import torch
 from torch_geometric.data import Data as PyGData
 from torch_geometric.nn import SAGEConv
 
+import downshift
 from downshift.adapters import _flatten, generic, hf, pyg, registry
 from downshift.core.verdict import prepare_model
 from downshift.loading import LoadError
@@ -194,6 +195,29 @@ def test_detect_raises_when_no_adapter_matches(monkeypatch):
 def test_prepare_model_accepts_adapter_name_as_string():
     prepared = prepare_model(clean_mlp.make_model(), clean_mlp.make_inputs(), adapter="generic")
     assert prepared.family == "generic-torch"
+
+
+def test_prepare_model_vary_overrides_the_adapters_own_vary_fn():
+    def custom_vary(i):
+        return clean_mlp.make_inputs()
+
+    prepared = prepare_model(clean_mlp.make_model(), clean_mlp.make_inputs(), vary=custom_vary)
+
+    assert prepared.vary_fn is custom_vary
+
+
+def test_check_vary_is_used_for_verification_samples():
+    calls: list[int] = []
+    base = clean_mlp.make_inputs()
+
+    def custom_vary(i):
+        calls.append(i)
+        return base
+
+    verdict = downshift.check(clean_mlp.make_model(), base, vary=custom_vary, k=3)
+
+    assert verdict.status == "CLEAN", verdict.reason
+    assert calls == [0, 1, 2]
 
 
 @pytest.mark.parametrize(
@@ -403,14 +427,42 @@ def test_pyg_vary_fn_never_references_missing_nodes():
         assert int(edge_index.max()) < x.shape[0]
 
 
+def test_pyg_vary_fn_clamps_node_count_to_the_dims_bounds():
+    x = torch.randn(4, 3)
+    edge_index = torch.randint(0, 4, (2, 6))
+    base = (x, edge_index)
+    n_dim = torch.export.Dim("num_nodes", min=1, max=5)
+    e_dim = torch.export.Dim("num_edges", min=1, max=1 << 16)
+    dynamic_shapes = ({0: n_dim}, {1: e_dim})
+
+    vary = pyg.make_vary_fn(base, ("x", "edge_index"), dynamic_shapes)
+
+    for i in range(1, 21):
+        sample_x, _ = vary(i)
+        assert sample_x.shape[0] <= 5
+
+
 def test_hf_vary_fn_keeps_ids_in_vocab_and_mask_aligned():
-    base = tiny_bert.make_inputs()
-    vary = hf.make_vary_fn(base, vocab_size=100)
+    base = tiny_bert.make_inputs(seq=16)
+    vary = hf.make_vary_fn(base, vocab_size=100, max_seq=64)
 
     assert vary(0) is base
+    saw_padding = False
     for i in range(1, 21):
         ids, mask = vary(i)
         assert ids.dtype == base[0].dtype
         assert 0 <= int(ids.min()) and int(ids.max()) < 100
         assert mask.shape == ids.shape
-        assert bool((mask == 1).all())
+        assert bool((mask[:, 0] == 1).all())  # every row keeps at least one attended position
+        if bool((mask == 0).any()):
+            saw_padding = True
+    assert saw_padding  # at least one of the varied samples is padded
+
+
+def test_hf_vary_fn_clamps_sequence_length_to_max_seq():
+    base = tiny_bert.make_inputs(seq=4)
+    vary = hf.make_vary_fn(base, vocab_size=100, max_seq=6)
+
+    for i in range(1, 21):
+        _, mask = vary(i)
+        assert mask.shape[1] <= 6

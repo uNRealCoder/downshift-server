@@ -7,8 +7,6 @@ optimum. The export shim unwraps the ModelOutput so torch.export sees a plain te
 Only imported when transformers is installed.
 """
 
-import random
-
 import torch
 from torch import nn
 from transformers import AutoModel, PreTrainedModel
@@ -71,25 +69,36 @@ class HFAdapter:
             inputs=inputs,
             input_names=INPUT_NAMES,
             dynamic_shapes=(spec, spec),
-            vary_fn=make_vary_fn(inputs, vocab),
+            vary_fn=make_vary_fn(inputs, vocab, max_seq),
             family=self.family,
         )
 
 
-def make_vary_fn(base_inputs: tuple, vocab_size: int, seed: int = 0) -> VaryFn:
+def make_vary_fn(base_inputs: tuple, vocab_size: int, max_seq: int = 1 << 12) -> VaryFn:
+    """Verification samples after the first vary batch and sequence length, and pad: each
+    row gets its own random length in [1, s] with the mask zeroed beyond it (and at least
+    one attended position), so padding is actually exercised rather than always-full masks.
+    """
     input_ids, _ = base_inputs
     base_batch, base_seq = input_ids.shape
-    rng = random.Random(seed)
     batch_candidates = alternative_sizes(base_batch)
-    seq_candidates = alternative_sizes(base_seq)
+    seq_candidates = alternative_sizes(base_seq, 1, max_seq)
 
     def vary(i: int) -> tuple:
         if i == 0:
             return base_inputs
-        b = rng.choice(batch_candidates) if batch_candidates else base_batch
-        s = rng.choice(seq_candidates) if seq_candidates else base_seq
+        if batch_candidates:
+            b = batch_candidates[torch.randint(len(batch_candidates), ())]
+        else:
+            b = base_batch
+        if seq_candidates:
+            s = seq_candidates[torch.randint(len(seq_candidates), ())]
+        else:
+            s = base_seq
         ids = torch.randint(0, vocab_size, (b, s), dtype=input_ids.dtype)
-        return ids, torch.ones_like(ids)
+        lengths = torch.randint(1, s + 1, (b,))
+        mask = (torch.arange(s).unsqueeze(0) < lengths.unsqueeze(1)).to(input_ids.dtype)
+        return ids, mask
 
     return vary
 

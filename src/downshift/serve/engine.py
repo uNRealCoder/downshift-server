@@ -54,10 +54,21 @@ def _verdict_for(
         ref_model = reference.model if reference else None
         ref_inputs = reference.example_inputs if reference else None
         return intake(
-            loaded.onnx_path, ref_model, ref_inputs, adapter, k=opts.k, dynamic=opts.dynamic
+            loaded.onnx_path,
+            ref_model,
+            ref_inputs,
+            adapter,
+            k=opts.k,
+            dynamic=opts.dynamic,
+            atol=opts.atol,
+            rtol=opts.rtol,
+            seed=opts.seed,
+            vary=opts.vary,
         )
     assert loaded.model is not None
-    prepared = prepare_model(loaded.model, loaded.example_inputs, adapter, opts.dynamic)
+    prepared = prepare_model(
+        loaded.model, loaded.example_inputs, adapter, opts.dynamic, vary=opts.vary
+    )
     if opts.backend == BackendChoice.torch:
         # Skip the export entirely; the user asked for eager.
         return ExportVerdict(
@@ -73,7 +84,7 @@ def _verdict_for(
             dynamic_dims=prepared.dynamic_dims,
             prepared=prepared,
         )
-    return build_verdict(prepared, k=opts.k)
+    return build_verdict(prepared, k=opts.k, atol=opts.atol, rtol=opts.rtol, seed=opts.seed)
 
 
 def choose_backend(verdict: ExportVerdict, opts: ServeOptions) -> tuple[BackendName, list[str]]:

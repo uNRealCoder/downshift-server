@@ -7,6 +7,7 @@ import downshift
 from downshift.core.shapes import (
     alternative_sizes,
     apply_dynamic_override,
+    dim_bounds,
     parse_dynamic_spec,
     safe_capture_inputs,
 )
@@ -56,6 +57,20 @@ def test_alternative_sizes_excludes_base_and_covers_edges():
     assert 6 not in sizes
     assert {1, 2, 3, 7, 12} <= set(sizes)
     assert sizes == sorted(sizes)
+
+
+def test_alternative_sizes_clamps_to_bounds():
+    assert alternative_sizes(2, lo=1, hi=3) == [1, 3]
+
+
+def test_dim_bounds_reads_min_and_max_off_the_dim():
+    dim = torch.export.Dim("n", min=1, max=64)
+    assert dim_bounds({0: dim}, 0) == (1, 64)
+
+
+def test_dim_bounds_falls_back_when_axis_isnt_dynamic():
+    assert dim_bounds(None, 0) == (1, 1 << 16)
+    assert dim_bounds({}, 0) == (1, 1 << 16)
 
 
 def test_safe_capture_inputs_doubles_only_size_one_dynamic_axes():
