@@ -171,6 +171,31 @@ def prepare_serving(
     return state
 
 
+def serving_state_from_artifact(
+    source: str,
+    onnx_path: Path,
+    verdict: ExportVerdict,
+    opts: ServeOptions,
+    input_names: tuple[str, ...],
+    notes: list[str] | None = None,
+    example_inputs: tuple | None = None,
+) -> ServingState:
+    """Rebuild a ServingState in a `serve --workers N` worker from the ONNX graph and
+    verdict a parent process already exported and verified: no capture, no verify, just a
+    session over the artifact. `input_names` and `notes` are the parent's own (the verdict
+    it shipped has no `prepared` to derive them from); `example_inputs` are real feeds the
+    parent saved alongside the graph when it had any, loaded by the caller from the .npz
+    sidecar - otherwise warmup() synthesizes them (see synthesize_feeds).
+    """
+    verdict.onnx_path = onnx_path
+    backend = _build_backend(BackendName.onnxruntime, verdict, opts)
+    state = ServingState(
+        source, verdict, backend, input_names, opts, example_inputs, notes=list(notes or [])
+    )
+    warmup(state, opts.warmup)
+    return state
+
+
 def synthesize_feeds(backend: Backend) -> dict[str, np.ndarray]:
     """One dummy array per input the backend declares, for warming up a backend with no
     example inputs (a bare .onnx served without --reference). Dynamic or unknown axes

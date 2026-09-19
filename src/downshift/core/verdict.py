@@ -95,6 +95,33 @@ class ExportVerdict:
             "onnx_path": str(self.onnx_path) if self.onnx_path else None,
         }
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "ExportVerdict":
+        """Rebuild from to_dict()'s output, e.g. in a `serve --workers N` worker that takes
+        its verdict from the parent's export instead of running one itself. `prepared` and
+        `onnx_program` weren't serialized, so they come back None; the caller sets
+        `onnx_path` afterwards if the ONNX graph now lives at a worker-local temp path.
+        `shape_generalization`/`_reason` are derived properties, so they're ignored here.
+        """
+        numerics_data = data.get("numerics")
+        numerics = NumericsReport.from_dict(numerics_data) if numerics_data is not None else None
+        onnx_path = data.get("onnx_path")
+        return cls(
+            status=data["status"],
+            model_family=data["model_family"],
+            capture_strategy=data.get("capture_strategy"),
+            opset=data.get("opset"),
+            op_types=dict(data.get("op_types", {})),
+            numerics=numerics,
+            recommended_backend=BackendName(data["recommended_backend"]),
+            reason=data.get("reason", ""),
+            input_names=tuple(data.get("input_names", ())),
+            dynamic_dims=dict(data.get("dynamic_dims", {})),
+            unsupported_ops=list(data.get("unsupported_ops", [])),
+            warnings=list(data.get("warnings", [])),
+            onnx_path=Path(onnx_path) if onnx_path else None,
+        )
+
 
 def numerics_outcome(
     numerics: NumericsReport, passed_prefix: str, failed_prefix: str

@@ -73,6 +73,42 @@ class NumericsReport:
         del data["session"]
         return data | {"passed": self.passed}
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "NumericsReport":
+        """Rebuild from to_dict()'s output. `passed` is derived, and `session` was never
+        serialized in the first place - both are ignored on the way in."""
+        worst_data = data.get("worst")
+        worst = (
+            WorstMismatch(
+                sample=worst_data["sample"],
+                output=worst_data["output"],
+                index=tuple(worst_data["index"]),
+                expected=worst_data["expected"],
+                got=worst_data["got"],
+                input_shapes=[tuple(shape) for shape in worst_data["input_shapes"]],
+            )
+            if worst_data is not None
+            else None
+        )
+        return cls(
+            samples_tested=data["samples_tested"],
+            max_abs_err=data["max_abs_err"],
+            max_rel_err=data["max_rel_err"],
+            failures=data["failures"],
+            shape_generalization=data["shape_generalization"],
+            tolerance_abs=data["tolerance_abs"],
+            tolerance_rel=data["tolerance_rel"],
+            tolerance_dtype=data.get("tolerance_dtype", "float32"),
+            tolerance_overridden=data.get("tolerance_overridden", False),
+            baseline_failed=data.get("baseline_failed", False),
+            worst=worst,
+            sample_shapes=[
+                [tuple(shape) for shape in sample] for sample in data.get("sample_shapes", [])
+            ],
+            seed=data.get("seed", 0),
+            notes=list(data.get("notes", [])),
+        )
+
 
 _TOLERANCES_BY_DTYPE: dict[torch.dtype, tuple[float, float]] = {
     getattr(torch, name): value for name, value in TOLERANCES.items()

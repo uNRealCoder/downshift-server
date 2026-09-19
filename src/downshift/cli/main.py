@@ -9,10 +9,13 @@ hints below name those modules' types without importing them at module load time
 
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import os
+import shutil
 import sys
+import tempfile
 import traceback
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -433,23 +436,25 @@ class ServeArgs:
     vary: str | None
     log_level: str
     log_format: str
+    # Set only for `--workers N`: the parent already ran capture/verify once and ships the
+    # result here so workers don't repeat it. artifact_backend is "onnxruntime" (workers
+    # load the exported graph, no torch model needed) or "torch" (workers still load the
+    # model and run prepare_model, but take the verdict as given rather than re-exporting).
+    artifact_backend: str | None = None
+    artifact_verdict: dict | None = None
+    artifact_input_names: list[str] | None = None
+    artifact_notes: list[str] | None = None
+    artifact_onnx_path: str | None = None  # onnxruntime only: the temp .onnx to load
+    artifact_feeds_path: str | None = None  # onnxruntime only: real example inputs, if any
 
 
 _SERVE_ARGS_ENV = "_DOWNSHIFT_SERVE_ARGS"
 
 
-def _build_serving_app(args: ServeArgs) -> tuple[ServingState, FastAPI]:
+def _serve_options(args: ServeArgs) -> ServeOptions:
     from downshift.core.shapes import parse_dynamic_spec
-    from downshift.serve.app import build_app
-    from downshift.serve.engine import prepare_serving
 
-    loaded = _load(args.model, args.inputs, args.model_class, args.unsafe_load)
-    ref = (
-        _load(args.reference, args.inputs, args.model_class, args.unsafe_load)
-        if args.reference
-        else None
-    )
-    opts = ServeOptions(
+    return ServeOptions(
         backend=BackendChoice(args.backend),
         force_onnx=args.force_onnx,
         device=args.device,
@@ -468,19 +473,121 @@ def _build_serving_app(args: ServeArgs) -> tuple[ServingState, FastAPI]:
         seed=args.seed,
         vary=args.vary,
     )
-    state = prepare_serving(loaded, opts, ref)
+
+
+def _build_from_onnx_artifact(args: ServeArgs, opts: ServeOptions) -> ServingState:
+    import numpy as np
+
+    from downshift.core.verdict import ExportVerdict
+    from downshift.serve.engine import serving_state_from_artifact
+
+    assert args.artifact_verdict is not None and args.artifact_onnx_path is not None
+    verdict = ExportVerdict.from_dict(args.artifact_verdict)
+    input_names = tuple(args.artifact_input_names or verdict.input_names)
+    example_inputs = None
+    if args.artifact_feeds_path:
+        with np.load(args.artifact_feeds_path) as feeds:
+            example_inputs = tuple(feeds[name] for name in input_names)
+    return serving_state_from_artifact(
+        args.model,
+        Path(args.artifact_onnx_path),
+        verdict,
+        opts,
+        input_names,
+        args.artifact_notes,
+        example_inputs,
+    )
+
+
+def _build_from_torch_artifact(args: ServeArgs, opts: ServeOptions) -> ServingState:
+    from downshift.core.verdict import ExportVerdict, prepare_model
+    from downshift.serve.backends import TorchBackend
+    from downshift.serve.engine import ServingState, warmup
+
+    assert args.artifact_verdict is not None
+    verdict = ExportVerdict.from_dict(args.artifact_verdict)
+    loaded = _load(args.model, args.inputs, args.model_class, args.unsafe_load)
+    assert loaded.model is not None
+    adapter = args.adapter or loaded.adapter_hint
+    prepared = prepare_model(
+        loaded.model, loaded.example_inputs, adapter, opts.dynamic, vary=args.vary
+    )
+    verdict.prepared = prepared
+    backend = TorchBackend(prepared.model, prepared.input_names, opts.device, prepared.inputs)
+    state = ServingState(
+        args.model,
+        verdict,
+        backend,
+        prepared.input_names,
+        opts,
+        prepared.inputs,
+        notes=list(args.artifact_notes or []),
+    )
+    warmup(state, opts.warmup)
+    return state
+
+
+def _build_serving_app(args: ServeArgs) -> tuple[ServingState, FastAPI]:
+    from downshift.serve.app import build_app
+    from downshift.serve.engine import prepare_serving
+
+    opts = _serve_options(args)
+
+    if args.artifact_backend == "onnxruntime":
+        state = _build_from_onnx_artifact(args, opts)
+    elif args.artifact_backend == "torch":
+        state = _build_from_torch_artifact(args, opts)
+    else:
+        loaded = _load(args.model, args.inputs, args.model_class, args.unsafe_load)
+        ref = (
+            _load(args.reference, args.inputs, args.model_class, args.unsafe_load)
+            if args.reference
+            else None
+        )
+        state = prepare_serving(loaded, opts, ref)
+
     api = build_app(state, tuple(args.middleware or ()))
     return state, api
 
 
 def _serve_app_factory() -> FastAPI:
     """Import-string target for uvicorn's multi-worker mode (`downshift.cli.main:_serve_app_factory`).
-    Each worker process calls this on its own, independently reloading/re-exporting/re-warming
-    the model from the args the parent process serialized into _SERVE_ARGS_ENV."""
+    Each worker process calls this on its own. With no artifact fields set, it independently
+    reloads/re-exports/re-warms the model, exactly like the single-worker path; with them
+    set, it loads the parent's already-verified export instead (see ServeArgs)."""
     args = ServeArgs(**json.loads(os.environ[_SERVE_ARGS_ENV]))
     _setup_logging(LogLevel(args.log_level), LogFormat(args.log_format))
     _, api = _build_serving_app(args)
     return api
+
+
+def _write_onnx_artifact(state: ServingState) -> tuple[Path, Path | None, Path | None]:
+    """(onnx_path, feeds_path, temp_dir) for a `--workers N` parent to hand its already-
+    verified export to the workers. temp_dir is what to clean up afterwards, or None when
+    nothing was written (an already-on-disk .onnx with no example inputs to save)."""
+    import numpy as np
+
+    verdict = state.verdict
+    needs_copy = verdict.onnx_path is None
+    needs_feeds = state.example_inputs is not None
+    if not needs_copy and not needs_feeds:
+        assert verdict.onnx_path is not None
+        return verdict.onnx_path, None, None
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="downshift-"))
+    onnx_path = verdict.onnx_path if verdict.onnx_path is not None else temp_dir / "model.onnx"
+    if needs_copy:
+        onnx_path.write_bytes(verdict.onnx_bytes)
+    feeds_path = None
+    if needs_feeds:
+        assert state.example_inputs is not None
+        feeds_path = temp_dir / "feeds.npz"
+        feeds = {
+            name: t.numpy() if hasattr(t, "numpy") else np.asarray(t)
+            for name, t in zip(state.input_names, state.example_inputs, strict=True)
+        }
+        np.savez(feeds_path, **feeds)  # type: ignore[arg-type]  # numpy's stub misreads **kwds
+    return onnx_path, feeds_path, temp_dir
 
 
 @app.command("serve")
@@ -560,23 +667,50 @@ def serve_cmd(
             render.print_banner(state, host, port)
             uvicorn.run(api, host=host, port=port, log_level=log_level.value)
         else:
-            # Only for the banner/fail-fast check: each of the N workers rebuilds its own
-            # backend anyway, so this throwaway copy skips warmup, it'll never serve traffic.
+            # The one and only export: each worker loads this artifact instead of
+            # capturing/verifying again. Skips warmup here; this throwaway copy never
+            # serves traffic, only prints the banner and decides which backend to ship.
             state, _ = _build_serving_app(replace(args, warmup=0))
             render.print_banner(state, host, port)
-            render.warn(
-                f"--workers {workers}: each worker independently reloads, re-exports, and "
-                "re-warms the model (memory and startup time scale with this number)"
-            )
+            temp_dir: Path | None = None
+            if state.backend.name == "onnxruntime":
+                onnx_path, feeds_path, temp_dir = _write_onnx_artifact(state)
+                if temp_dir is not None:
+                    atexit.register(shutil.rmtree, temp_dir, ignore_errors=True)
+                args = replace(
+                    args,
+                    artifact_backend="onnxruntime",
+                    artifact_verdict=state.verdict.to_dict(),
+                    artifact_input_names=list(state.input_names),
+                    artifact_notes=state.notes,
+                    artifact_onnx_path=str(onnx_path),
+                    artifact_feeds_path=str(feeds_path) if feeds_path else None,
+                )
+            else:
+                render.warn(
+                    f"--workers {workers}: each worker independently reloads and re-warms "
+                    "the model (memory and startup time scale with this number)"
+                )
+                args = replace(
+                    args,
+                    artifact_backend="torch",
+                    artifact_verdict=state.verdict.to_dict(),
+                    artifact_input_names=list(state.input_names),
+                    artifact_notes=state.notes,
+                )
             os.environ[_SERVE_ARGS_ENV] = json.dumps(asdict(args))
-            uvicorn.run(
-                "downshift.cli.main:_serve_app_factory",
-                host=host,
-                port=port,
-                workers=workers,
-                log_level=log_level.value,
-                factory=True,
-            )
+            try:
+                uvicorn.run(
+                    "downshift.cli.main:_serve_app_factory",
+                    host=host,
+                    port=port,
+                    workers=workers,
+                    log_level=log_level.value,
+                    factory=True,
+                )
+            finally:
+                if temp_dir is not None:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":  # pragma: no cover

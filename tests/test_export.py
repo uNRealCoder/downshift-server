@@ -139,3 +139,23 @@ def test_scatter_fixture_numerics_actually_diverge() -> None:
     assert verdict.numerics.failures > 0
     assert verdict.numerics.max_abs_err > verdict.numerics.tolerance_abs
     assert verdict.recommended_backend == "torch"
+
+
+@pytest.mark.parametrize(
+    ("module", "status"),
+    [
+        (clean_mlp, "CLEAN"),
+        (scatter_include_self_false, "DEGRADED"),
+        (data_dependent_branch, "FAILED"),
+    ],
+    ids=["clean", "degraded", "failed"],
+)
+def test_verdict_round_trips_through_dict(module, status: str) -> None:
+    """from_dict(v.to_dict()) must reproduce to_dict() exactly, since this is how a
+    `serve --workers N` worker gets its verdict without redoing capture/verify itself."""
+    verdict = downshift.check(module.make_model(), module.make_inputs(), k=4)
+    assert verdict.status == status, verdict.reason
+
+    rebuilt = verdict_mod.ExportVerdict.from_dict(verdict.to_dict())
+
+    assert rebuilt.to_dict() == verdict.to_dict()

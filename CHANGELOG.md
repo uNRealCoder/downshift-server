@@ -62,6 +62,16 @@ All notable changes to this project are documented here. Format follows
   and `serve` reuses `verify()`'s own `InferenceSession` when the serving options mean the
   same thing (CPU, default thread counts), instead of building a second session from a
   second serialisation. One `InferenceSession` per default boot instead of two.
+- `serve --workers N` now captures and verifies the model exactly once, in the parent
+  process, instead of once per worker. When the chosen backend is ONNX Runtime, the parent
+  writes the exported graph (and, if it had real example inputs, a `.npz` of them) to a
+  temp file and ships them plus the verdict to every worker (`ExportVerdict.from_dict()`,
+  `NumericsReport.from_dict()`, `engine.serving_state_from_artifact()`); workers just load
+  the graph and warm up. When the backend is torch (DEGRADED, FAILED, `--backend torch`),
+  workers still load the model (there is no way around N eager copies) but skip
+  capture/verify and take the verdict as given. The startup warning about
+  per-worker cost is now printed only in that torch case, since the ONNX Runtime path no
+  longer pays it.
 
 ### Added
 

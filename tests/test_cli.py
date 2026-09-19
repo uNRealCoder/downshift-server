@@ -11,6 +11,7 @@ import torch
 import uvicorn
 from typer.testing import CliRunner
 
+import downshift
 from downshift.cli import main
 from downshift.cli.main import app
 from tests.models import clean_mlp
@@ -324,6 +325,104 @@ def test_serve_app_factory_rebuilds_the_app_from_env(monkeypatch):
     assert api.state.serving.options.max_input_bytes == 1024
     assert api.state.serving.options.max_body_bytes == 2048
     assert api.state.serving.options.max_concurrency == 2
+
+
+def test_serve_workers_writes_and_ships_the_onnx_artifact(monkeypatch):
+    """Parent-side: the .onnx the parent exported exists on disk, and its bytes plus the
+    verdict are what the workers get, before the (stubbed) uvicorn.run's `finally` cleans
+    the temp file up."""
+    seen: dict = {}
+
+    def fake_run(app, **kw):
+        seen["app"] = app
+        seen.update(kw)
+        args = main.ServeArgs(**json.loads(os.environ[main._SERVE_ARGS_ENV]))
+        seen["args"] = args
+        assert args.artifact_onnx_path is not None
+        seen["onnx_bytes"] = Path(args.artifact_onnx_path).read_bytes()
+
+    monkeypatch.setattr(uvicorn, "run", fake_run)
+    result = run("serve", CLEAN, "--warmup", "1", "--workers", "2")
+    assert result.exit_code == 0, result.output
+
+    assert seen["workers"] == 2
+    args = seen["args"]
+    assert args.artifact_backend == "onnxruntime"
+    assert args.artifact_verdict is not None
+    assert args.artifact_verdict["status"] == "CLEAN"
+    assert args.artifact_input_names == ["x"]
+    assert len(seen["onnx_bytes"]) > 0
+
+
+def test_serve_workers_degraded_ships_a_torch_artifact_and_warns(monkeypatch):
+    seen: dict = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: seen.update(app=app, **kw))
+
+    result = run("serve", DEGRADED, "--warmup", "0", "--workers", "2")
+
+    assert result.exit_code == 0, result.output
+    assert "each worker independently reloads and re-warms" in result.output
+    args = main.ServeArgs(**json.loads(os.environ[main._SERVE_ARGS_ENV]))
+    assert args.artifact_backend == "torch"
+    assert args.artifact_verdict is not None
+    assert args.artifact_verdict["status"] == "DEGRADED"
+    assert args.artifact_onnx_path is None
+
+
+def test_serve_app_factory_from_onnx_artifact_never_calls_capture(monkeypatch, tmp_path):
+    """Worker rebuild from an onnxruntime artifact must not re-run capture()/verify(): the
+    parent already did that once."""
+    pytest.importorskip("downshift.serve.app")
+    onnx_path = tmp_path / "clean_mlp.onnx"
+    verdict = downshift.export(clean_mlp.make_model(), onnx_path, clean_mlp.make_inputs())
+    assert verdict.status == "CLEAN", verdict.reason
+
+    from downshift.core import verdict as verdict_mod
+
+    def boom(*args, **kwargs):
+        raise AssertionError("capture() must not run when serving a parent's artifact")
+
+    monkeypatch.setattr(verdict_mod, "capture", boom)
+
+    args = main.ServeArgs(
+        model=CLEAN,
+        inputs=None,
+        model_class=None,
+        unsafe_load=False,
+        adapter=None,
+        k=1,
+        dynamic=None,
+        reference=None,
+        middleware=None,
+        backend="auto",
+        force_onnx=False,
+        device="cpu",
+        warmup=1,
+        intra_op_threads=0,
+        inter_op_threads=0,
+        output_encoding="json",
+        max_input_bytes=1024,
+        max_body_bytes=2048,
+        max_concurrency=1,
+        atol=None,
+        rtol=None,
+        seed=0,
+        vary=None,
+        log_level="warning",
+        log_format="text",
+        artifact_backend="onnxruntime",
+        artifact_verdict=verdict.to_dict(),
+        artifact_input_names=list(verdict.input_names),
+        artifact_notes=[],
+        artifact_onnx_path=str(onnx_path),
+        artifact_feeds_path=None,
+    )
+    monkeypatch.setenv(main._SERVE_ARGS_ENV, json.dumps(main.asdict(args)))
+
+    api = main._serve_app_factory()
+
+    assert api.state.serving.verdict.status == "CLEAN"
+    assert api.state.serving.backend.name == "onnxruntime"
 
 
 def test_version_eager_flag():
