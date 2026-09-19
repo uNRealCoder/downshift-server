@@ -8,6 +8,7 @@ UNVERIFIED a .onnx handed to us with no reference model         -> serve via ORT
 
 import copy
 import re
+import time
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -182,19 +183,28 @@ def build_verdict(
     atol: float | None = None,
     rtol: float | None = None,
     seed: int = 0,
+    timings: dict[str, float] | None = None,
 ) -> ExportVerdict:
     """Capture, then verify. verify_numerics=False is the --no-verify escape hatch: the
-    graph is still produced but the verdict is UNVERIFIED, never CLEAN."""
+    graph is still produced but the verdict is UNVERIFIED, never CLEAN.
+
+    `timings`, when given, gets "export" (the capture() call) and "verify" (the verify()
+    call) wall-clock seconds added to it - the CLI's Boot banner row and /metadata's
+    `boot` field read it back from ServingState.timings (see serve/engine.py).
+    """
     warnings = _tied_weight_warnings(prepared.model)
     if prepared.model.training:
         warnings.append("model was in training mode; switched to eval() for export")
         prepared.model.eval()
 
+    capture_start = time.perf_counter()
     result = capture(
         prepared.model,
         safe_capture_inputs(prepared.inputs, prepared.dynamic_shapes),
         prepared.dynamic_shapes,
     )
+    if timings is not None:
+        timings["export"] = time.perf_counter() - capture_start
     # exceptions is normally one entry per strategy tried; a translation failure (torch.export
     # itself succeeded) has none of those, so it falls back to the single exception it raised.
     capture_exceptions = result.exceptions or (
@@ -236,6 +246,7 @@ def build_verdict(
         verdict.reason = f"exported via {result.capture_strategy}; numerics never checked"
         return verdict
 
+    verify_start = time.perf_counter()
     try:
         numerics = verify(
             prepared.model,
@@ -249,6 +260,8 @@ def build_verdict(
             seed=seed,
         )
     except OnnxRuntimeError as exc:
+        if timings is not None:
+            timings["verify"] = time.perf_counter() - verify_start
         message = str(exc).splitlines()[0]
         verdict.reason = (
             f"exported via {result.capture_strategy} but ONNX Runtime cannot run the "
@@ -256,6 +269,8 @@ def build_verdict(
         )
         verdict.warnings.append(message)
         return verdict
+    if timings is not None:
+        timings["verify"] = time.perf_counter() - verify_start
 
     verdict.numerics = numerics
     verdict.status, verdict.recommended_backend, verdict.reason = numerics_outcome(

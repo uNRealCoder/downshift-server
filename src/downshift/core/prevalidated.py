@@ -4,6 +4,7 @@ No reference model -> UNVERIFIED. We serve it, we just say we never checked it.
 With --reference -> the normal verify path, exactly as for a fresh export.
 """
 
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -36,7 +37,10 @@ def intake(
     rtol: float | None = None,
     seed: int = 0,
     vary: VaryFn | str | None = None,
+    timings: dict[str, float] | None = None,
 ) -> ExportVerdict:
+    """`timings`, when given, gets "verify" added to it (there is no export phase for a
+    pre-built ONNX graph); see build_verdict's docstring."""
     onnx_path = Path(onnx_path)
     opset, op_types, input_names = _graph_summary(onnx_path)
 
@@ -55,6 +59,7 @@ def intake(
         )
 
     prepared = prepare_model(reference, example_inputs, adapter, dynamic, vary=vary)
+    verify_start = time.perf_counter()
     try:
         numerics = verify(
             prepared.model,
@@ -68,6 +73,8 @@ def intake(
             seed=seed,
         )
     except OnnxRuntimeError as exc:
+        if timings is not None:
+            timings["verify"] = time.perf_counter() - verify_start
         message = str(exc).splitlines()[0]
         return ExportVerdict(
             status="FAILED",
@@ -85,6 +92,8 @@ def intake(
             prepared=prepared,
         )
 
+    if timings is not None:
+        timings["verify"] = time.perf_counter() - verify_start
     status, backend, reason = numerics_outcome(
         numerics, "pre-built ONNX matches reference", "pre-built ONNX diverges from reference"
     )

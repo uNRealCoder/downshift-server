@@ -106,6 +106,8 @@ class MetadataResponse(BaseModel):
     notes: list[str] = Field(default_factory=list)
     version: str
     limits: dict = Field(default_factory=dict)
+    boot: dict[str, float] = Field(default_factory=dict)
+    warmup: dict | None = None
 
 
 class HealthResponse(BaseModel):

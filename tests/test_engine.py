@@ -139,6 +139,19 @@ def test_warmup_stats_are_not_synthesized_when_example_inputs_exist(mlp_state):
     assert mlp_state.warmup_stats.count == 1
 
 
+def test_prepare_serving_records_phase_timings(mlp_state):
+    assert set(mlp_state.timings) >= {"export", "verify", "session", "warmup"}
+    assert all(v >= 0 for v in mlp_state.timings.values())
+
+
+def test_prepare_serving_records_only_verify_for_a_bare_onnx_with_reference(exported_mlp):
+    path, model, _ = exported_mlp
+    reference = LoadedModel(source="ref", model=model, example_inputs=clean_mlp.make_inputs())
+    state = prepare_serving(load_model(str(path)), ServeOptions(warmup=1), reference=reference)
+    assert "export" not in state.timings
+    assert set(state.timings) >= {"verify", "session", "warmup"}
+
+
 def test_onnx_file_with_reference_is_verified(exported_mlp):
     path, model, _ = exported_mlp
     reference = LoadedModel(source="ref", model=model, example_inputs=clean_mlp.make_inputs())

@@ -39,6 +39,10 @@ class ServingState:
     ready: bool = False
     notes: list[str] = field(default_factory=list)  # things the banner should say
     warmup_stats: WarmupStats | None = None
+    # Phase wall-clock seconds: "load" (CLI-only, added after prepare_serving returns),
+    # "export", "verify", "session", "warmup" - whichever phases actually ran. Read by the
+    # CLI's Boot banner row and /metadata's `boot` field.
+    timings: dict[str, float] = field(default_factory=dict)
     # Not JSON-able and not part of a serving state's identity: rebuilt from options.max_concurrency.
     # `infer` (and, for the JSON path, request conversion) runs on these threads, never on the
     # event loop, so /health and /ready are never stuck behind a queue of slow predicts.
@@ -80,7 +84,10 @@ class ServingState:
 
 
 def _verdict_for(
-    loaded: LoadedModel, reference: LoadedModel | None, opts: ServeOptions
+    loaded: LoadedModel,
+    reference: LoadedModel | None,
+    opts: ServeOptions,
+    timings: dict[str, float] | None = None,
 ) -> ExportVerdict:
     adapter = opts.adapter or loaded.adapter_hint
     if loaded.onnx_path is not None:
@@ -97,6 +104,7 @@ def _verdict_for(
             rtol=opts.rtol,
             seed=opts.seed,
             vary=opts.vary,
+            timings=timings,
         )
     assert loaded.model is not None
     prepared = prepare_model(
@@ -117,7 +125,9 @@ def _verdict_for(
             dynamic_dims=prepared.dynamic_dims,
             prepared=prepared,
         )
-    return build_verdict(prepared, k=opts.k, atol=opts.atol, rtol=opts.rtol, seed=opts.seed)
+    return build_verdict(
+        prepared, k=opts.k, atol=opts.atol, rtol=opts.rtol, seed=opts.seed, timings=timings
+    )
 
 
 def choose_backend(verdict: ExportVerdict, opts: ServeOptions) -> tuple[BackendName, list[str]]:
@@ -182,9 +192,12 @@ def prepare_serving(
     loaded: LoadedModel, opts: ServeOptions | None = None, reference: LoadedModel | None = None
 ) -> ServingState:
     opts = opts or ServeOptions()
-    verdict = _verdict_for(loaded, reference, opts)
+    timings: dict[str, float] = {}
+    verdict = _verdict_for(loaded, reference, opts, timings)
     name, notes = choose_backend(verdict, opts)
+    session_start = time.perf_counter()
     backend = _build_backend(name, verdict, opts)
+    timings["session"] = time.perf_counter() - session_start
 
     if verdict.prepared is not None:
         input_names = verdict.prepared.input_names
@@ -196,7 +209,10 @@ def prepare_serving(
     state = ServingState(
         loaded.source, verdict, backend, input_names, opts, example_inputs, notes=notes
     )
+    state.timings = timings
+    warmup_start = time.perf_counter()
     warmup(state, opts.warmup)
+    timings["warmup"] = time.perf_counter() - warmup_start
     return state
 
 
@@ -217,11 +233,17 @@ def serving_state_from_artifact(
     sidecar - otherwise warmup() synthesizes them (see synthesize_feeds).
     """
     verdict.onnx_path = onnx_path
+    timings: dict[str, float] = {}
+    session_start = time.perf_counter()
     backend = _build_backend(BackendName.onnxruntime, verdict, opts)
+    timings["session"] = time.perf_counter() - session_start
     state = ServingState(
         source, verdict, backend, input_names, opts, example_inputs, notes=list(notes or [])
     )
+    state.timings = timings
+    warmup_start = time.perf_counter()
     warmup(state, opts.warmup)
+    timings["warmup"] = time.perf_counter() - warmup_start
     return state
 
 

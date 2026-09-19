@@ -88,6 +88,12 @@ def test_health_ready_metadata(mlp_client, mlp_state):
         "max_queue": mlp_state.options.max_queue,
         "request_timeout": mlp_state.options.request_timeout,
     }
+    assert set(meta["boot"]) >= {"export", "verify", "session", "warmup"}
+    assert meta["warmup"] == {
+        "count": mlp_state.warmup_stats.count,
+        "mean_ms": mlp_state.warmup_stats.mean_ms,
+        "synthesized": mlp_state.warmup_stats.synthesized,
+    }
 
 
 def test_predict_batch(mlp_client):

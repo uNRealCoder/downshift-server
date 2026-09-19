@@ -153,6 +153,13 @@ All notable changes to this project are documented here. Format follows
 - `/predict` and `/predict/graph` responses carry `Server-Timing: codec;dur=<ms>,
   infer;dur=<ms>`, splitting request/response conversion time from the backend call.
 - `--access-log`/`--no-access-log` (default on) passes through to `uvicorn.run(access_log=)`.
+- The `serve` banner explains its own verdict: `Tolerance`, `Worst` (DEGRADED only) and
+  `Samples` rows (from V4/V5's `NumericsReport` fields), a `Warmup` row (from `WarmupStats`),
+  a `Queue` row (`--max-queue`/`--request-timeout`), and a `Boot` row breaking the time to
+  ready down into `load`, `export`, `verify`, `session` and `warmup` seconds
+  (`ServingState.timings`).
+- `/metadata` gains `boot` (the same per-phase timings as the banner's `Boot` row) and
+  `warmup` (`count`, `mean_ms`, `synthesized`).
 
 ### Removed
 

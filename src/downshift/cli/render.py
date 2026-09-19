@@ -106,6 +106,35 @@ def _dynamic_text(verdict: ExportVerdict) -> str:
     )
 
 
+def _warmup_text(state: ServingState) -> str | None:
+    w = state.warmup_stats
+    if w is None or w.count == 0:
+        return None
+    if w.synthesized:
+        return f"{w.count} inferences on synthesized inputs"
+    return f"{w.count} inferences, {w.mean_ms:.2f} ms each"
+
+
+def _queue_text(state: ServingState) -> Text:
+    limit = state.options.request_timeout
+    timeout = "no timeout" if limit <= 0 else f"{limit:g}s timeout"
+    text = Text(f"{state.options.max_queue} waiting max, {timeout}")
+    text.append("  (--max-queue, --request-timeout)", style="dim")
+    return text
+
+
+_TIMING_ORDER = ("load", "export", "verify", "session", "warmup")
+
+
+def _boot_text(state: ServingState) -> str | None:
+    timings = state.timings
+    if not timings:
+        return None
+    total = sum(timings.values())
+    parts = ", ".join(f"{name} {timings[name]:.1f}" for name in _TIMING_ORDER if name in timings)
+    return f"{total:.1f} s: {parts}"
+
+
 def _shape_text(verdict: ExportVerdict) -> str:
     n = verdict.numerics
     if n is None:
@@ -204,6 +233,29 @@ def print_banner(state: ServingState, host: str, port: int, workers: int = 1) ->
         if state.backend.name != "onnxruntime":
             grid.add_row("Override", "--force-onnx to serve the ONNX graph anyway")
 
+    tolerance = _tolerance_text(verdict)
+    if tolerance is not None:
+        grid.add_row("Tolerance", tolerance)
+    if verdict.status == "DEGRADED":
+        worst = _worst_text(verdict)
+        if worst is not None:
+            grid.add_row("Worst", worst)
+    samples = _samples_text(verdict)
+    if samples is not None:
+        grid.add_row("Samples", samples)
+    warmup_text = _warmup_text(state)
+    if warmup_text is not None:
+        grid.add_row("Warmup", warmup_text)
+    if workers > 1:
+        logical = os.cpu_count() or workers
+        threads = Text(f"{state.options.intra_op_threads} intra-op per worker")
+        threads.append(f"  ({logical} logical / {workers} workers)", style="dim")
+        grid.add_row("Threads", threads)
+    grid.add_row("Queue", _queue_text(state))
+    boot = _boot_text(state)
+    if boot is not None:
+        grid.add_row("Boot", boot)
+
     grid.add_row("Backend", _backend_text(state))
     for note in state.notes:  # backend-selection notes from the engine
         style = "bold red" if "outputs may be wrong" in note else "yellow"
@@ -211,11 +263,6 @@ def print_banner(state: ServingState, host: str, port: int, workers: int = 1) ->
     grid.add_row("Dynamic dims", _dynamic_text(verdict))
     for warning in verdict.warnings:
         grid.add_row("", Text(f"{_sym('⚠', '!')} {warning}", style="yellow"))
-    if workers > 1:
-        logical = os.cpu_count() or workers
-        threads = Text(f"{state.options.intra_op_threads} intra-op per worker")
-        threads.append(f"  ({logical} logical / {workers} workers)", style="dim")
-        grid.add_row("Threads", threads)
     encoding = Text(state.options.output_encoding.value)
     encoding.append("  (clients override with output_encoding)", style="dim")
     grid.add_row("Encoding", encoding)

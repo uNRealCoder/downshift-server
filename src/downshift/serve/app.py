@@ -374,6 +374,16 @@ def build_app(
                 "max_queue": current.options.max_queue,
                 "request_timeout": current.options.request_timeout,
             },
+            boot=dict(current.timings),
+            warmup=(
+                {
+                    "count": current.warmup_stats.count,
+                    "mean_ms": current.warmup_stats.mean_ms,
+                    "synthesized": current.warmup_stats.synthesized,
+                }
+                if current.warmup_stats is not None
+                else None
+            ),
         )
 
     @app.post("/predict", **_PREDICT_ROUTE)

@@ -16,6 +16,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import traceback
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -530,16 +531,20 @@ def _build_from_torch_artifact(args: ServeArgs, opts: ServeOptions) -> ServingSt
 
     assert args.artifact_verdict is not None
     verdict = ExportVerdict.from_dict(args.artifact_verdict)
+    load_start = time.perf_counter()
     loaded = _load(args.model, args.inputs, args.model_class, args.unsafe_load)
+    load_s = time.perf_counter() - load_start
     assert loaded.model is not None
     adapter = args.adapter or loaded.adapter_hint
     prepared = prepare_model(
         loaded.model, loaded.example_inputs, adapter, opts.dynamic, vary=args.vary
     )
     verdict.prepared = prepared
+    session_start = time.perf_counter()
     backend = TorchBackend(
         prepared.model, prepared.input_names, opts.device, prepared.inputs, opts.intra_op_threads
     )
+    session_s = time.perf_counter() - session_start
     state = ServingState(
         args.model,
         verdict,
@@ -549,7 +554,10 @@ def _build_from_torch_artifact(args: ServeArgs, opts: ServeOptions) -> ServingSt
         prepared.inputs,
         notes=list(args.artifact_notes or []),
     )
+    state.timings = {"load": load_s, "session": session_s}
+    warmup_start = time.perf_counter()
     warmup(state, opts.warmup)
+    state.timings["warmup"] = time.perf_counter() - warmup_start
     return state
 
 
@@ -562,13 +570,17 @@ def _build_serving_state(args: ServeArgs) -> ServingState:
         return _build_from_onnx_artifact(args, opts)
     if args.artifact_backend == "torch":
         return _build_from_torch_artifact(args, opts)
+    load_start = time.perf_counter()
     loaded = _load(args.model, args.inputs, args.model_class, args.unsafe_load)
     ref = (
         _load(args.reference, args.inputs, args.model_class, args.unsafe_load)
         if args.reference
         else None
     )
-    return prepare_serving(loaded, opts, ref)
+    load_s = time.perf_counter() - load_start
+    state = prepare_serving(loaded, opts, ref)
+    state.timings["load"] = load_s
+    return state
 
 
 def _build_serving_app(args: ServeArgs) -> tuple[ServingState, FastAPI]:

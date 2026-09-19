@@ -8,7 +8,7 @@ from downshift.cli import render
 from downshift.core.verdict import ExportVerdict
 from downshift.core.verify import NumericsReport, WorstMismatch
 from downshift.serve.backends import BackendMeta
-from downshift.serve.engine import ServeOptions, ServingState
+from downshift.serve.engine import ServeOptions, ServingState, WarmupStats
 from downshift.serve.schemas import OutputEncoding
 
 
@@ -234,6 +234,98 @@ def test_print_banner_tips_pybase64_when_missing(capsys, monkeypatch):
     monkeypatch.setattr(render, "BASE64_CODEC", "stdlib")
     render.print_banner(_serving_state(_verdict()), "127.0.0.1", 8000)
     assert "downshift-server[fast]" in capsys.readouterr().out
+
+
+def test_print_banner_shows_tolerance_row(capsys):
+    render.print_banner(_serving_state(_verdict()), "127.0.0.1", 8000)
+    out = capsys.readouterr().out
+    assert "Tolerance" in out
+    assert "float32" in out
+
+
+def test_print_banner_shows_worst_and_samples_rows_when_degraded(capsys):
+    worst = WorstMismatch(
+        sample=3, output=0, index=(2, 5), expected=0.4113, got=-0.8327, input_shapes=[(12, 8)]
+    )
+    verdict = _verdict(
+        status="DEGRADED",
+        numerics=_numerics(
+            False,
+            shape_generalization=False,
+            worst=worst,
+            sample_shapes=[[(1, 16)], [(2, 16)]],
+        ),
+        recommended_backend="torch",
+        input_names=("x",),
+    )
+    render.print_banner(_serving_state(verdict, backend=_StubBackend("torch")), "127.0.0.1", 8000)
+    out = capsys.readouterr().out
+    assert "Worst" in out
+    assert "output_0[2, 5]" in out
+    assert "Samples" in out
+    assert "(1,16)" in out and "(2,16)" in out
+
+
+def test_print_banner_omits_worst_row_when_clean(capsys):
+    render.print_banner(_serving_state(_verdict()), "127.0.0.1", 8000)
+    assert "Worst" not in capsys.readouterr().out
+
+
+def test_print_banner_shows_warmup_row(capsys):
+    state = _serving_state(
+        _verdict(), warmup_stats=WarmupStats(count=3, mean_ms=0.02, synthesized=False)
+    )
+    render.print_banner(state, "127.0.0.1", 8000)
+    out = capsys.readouterr().out
+    assert "Warmup" in out
+    assert "3 inferences, 0.02 ms each" in out
+
+
+def test_print_banner_shows_warmup_row_when_synthesized(capsys):
+    state = _serving_state(
+        _verdict(), warmup_stats=WarmupStats(count=3, mean_ms=0.0, synthesized=True)
+    )
+    render.print_banner(state, "127.0.0.1", 8000)
+    out = capsys.readouterr().out
+    assert "3 inferences on synthesized inputs" in out
+
+
+def test_print_banner_omits_warmup_row_without_warmup_stats(capsys):
+    render.print_banner(_serving_state(_verdict()), "127.0.0.1", 8000)
+    assert "Warmup" not in capsys.readouterr().out
+
+
+def test_print_banner_shows_queue_row(capsys):
+    state = _serving_state(_verdict(), options=ServeOptions(max_queue=64, request_timeout=0))
+    render.print_banner(state, "127.0.0.1", 8000)
+    out = capsys.readouterr().out
+    assert "Queue" in out
+    assert "64 waiting max, no timeout" in out
+    assert "--request-timeout" in out
+
+
+def test_print_banner_shows_queue_row_with_a_timeout(capsys):
+    state = _serving_state(_verdict(), options=ServeOptions(request_timeout=5))
+    render.print_banner(state, "127.0.0.1", 8000)
+    assert "5s timeout" in capsys.readouterr().out
+
+
+def test_print_banner_shows_boot_row(capsys):
+    state = _serving_state(_verdict())
+    state.timings = {"load": 0.3, "export": 2.8, "verify": 0.2, "session": 0.1, "warmup": 0.1}
+    render.print_banner(state, "127.0.0.1", 8000)
+    out = capsys.readouterr().out
+    assert "Boot" in out
+    assert "load 0.3" in out
+    assert "export 2.8" in out
+    assert "verify 0.2" in out
+    assert "session 0.1" in out
+    assert "warmup 0.1" in out
+
+
+def test_print_banner_omits_boot_row_without_timings(capsys):
+    render.print_banner(_serving_state(_verdict()), "127.0.0.1", 8000)
+    assert "Boot" not in capsys.readouterr().out
 
 
 def test_print_banner_unverified_with_prepared_backend_torch_skip():
