@@ -1,25 +1,47 @@
 # Running downshift in production
 
 `downshift serve` is a FastAPI app behind uvicorn. It does the export-and-verify gate,
-picks a backend, warms it up, and answers `/predict`. It does not do auth, TLS, rate
-limiting, or process supervision - those are what a real deployment wraps around it, and
-this page is about that wrapping.
+picks a backend, warms it up, and answers `/predict`. It has one fixed API key for
+authentication, and no TLS, rate limiting, or process supervision - those are what a real
+deployment wraps around it, and this page is about that wrapping.
 
-## No auth, no TLS, no rate limiting
+## Authentication: one API key, no TLS, no rate limiting
 
-None of those are in scope, on purpose: they are solved problems at the proxy layer and
-downshift would only do a worse version of them. Put a reverse proxy in front
-(nginx, Envoy, your cloud load balancer, or a service mesh sidecar) and configure there:
+Set `DOWNSHIFT_SERVER_API_KEY` and every route except `/health` and `/ready` requires
+`Authorization: Bearer <key>`. The comparison is constant-time. Anything else gets a `401`
+with `WWW-Authenticate: Bearer` and the body
+`{"detail": "Authorization header is not set or incorrect"}`. The two probes stay open so
+that Kubernetes never needs the key.
+
+```bash
+export DOWNSHIFT_SERVER_API_KEY="$(openssl rand -hex 32)"
+downshift serve my_pkg.models:build
+curl -s localhost:8000/predict -H "Authorization: Bearer $DOWNSHIFT_SERVER_API_KEY" \
+  -H 'content-type: application/json' -d '{"inputs": {"x": [[0.0, 0.1]]}}'
+```
+
+With the variable unset, or set to an empty string, the server logs one `WARNING` at
+startup that its endpoints are unauthenticated - set the key, or add your own
+authentication middleware - and serves everything without a check. An empty string does
+not make `Bearer ` a valid credential. `app_for()` and `build_app(..., api_key=...)` read
+the same variable by default; pass `api_key=` to override it for one app, or `api_key=None`
+to force it off.
+
+One key is not a user system. It is a shared secret, and it travels in a header, so it
+belongs behind TLS. The rest is solved at the proxy layer and downshift would only do a
+worse version of it. Put a reverse proxy in front (nginx, Envoy, your cloud load balancer,
+or a service mesh sidecar) and configure there:
 
 - TLS termination.
-- Authentication (mTLS, an API key header, OAuth) - downshift trusts whatever reaches it.
+- Anything richer than one shared key (mTLS, per-client keys, OAuth).
 - Rate limiting and IP allow-lists.
 - Request size limits ahead of `--max-body-bytes`, if you want to reject oversized bodies
   before they reach this process at all.
 
 `--middleware pkg.module:Attr` (repeatable) is the escape hatch if you need something
 in-process instead - a `BaseHTTPMiddleware` subclass or an `async (request, call_next)`
-function, attached in the order given.
+function, attached in the order given. Middleware you attach runs outside the key check,
+so it also sees requests that are about to be refused with a `401`.
 
 ## `/health` vs `/ready`
 
@@ -30,13 +52,15 @@ function, attached in the order given.
   predicts). Use it to decide "restart this container", not "send it traffic".
 - **`/ready`** is `{"ready": false, "phase": "export"}` with a `503` until the model has
   loaded, exported, verified and warmed up, then `{"ready": true}` with a `200` - and it
-  never goes back to `503` on its own. Use it to decide "send this pod traffic".
+  never goes back to `503` on its own. `phase` is the step the loader is in right now: one
+  of `load`, `export`, `verify`, `session` or `warmup`. Use `/ready` to decide "send this
+  pod traffic".
 
 Boot behaves differently depending on `--workers`:
 
 - **Single worker (default).** `serve` binds the port *before* it loads anything: `/health`
-  answers `200` immediately, and `/ready`, `/metadata` and both predict routes answer
-  `503` (predicts and `/metadata` with `Retry-After: 2`) while a background thread runs the
+  answers `200` immediately, and `/ready`, `/metadata`, `/schema` and both predict routes
+  answer `503` (predicts, `/metadata` and `/schema` with `Retry-After: 2`) while a background thread runs the
   gate. `/ready` flips to `200` in place, with no restart, once that thread lands a
   verdict. If loading fails, the process exits with the same code `check`/`export` would
   use for the same error - your process supervisor sees a crash, not a server stuck
@@ -73,6 +97,27 @@ With a single worker, `--intra-op-threads 0` leaves ONNX Runtime's own default i
 (usually the full core count), which is what you want unless you're also running other
 CPU-bound work in the same container.
 
+That split has a measured cost. On a 16-logical-core machine (`bench/REPORT_0.4.md`,
+`--intra-op-threads` left at its default), going from 1 worker to 4 raises throughput at
+concurrency 32 but lowers it at concurrency 1:
+
+| model         | workers | rps c=1 | rps c=32 |
+|---------------|---------|---------|----------|
+| `clean_mlp`   | 1       | 1377.8  | 1693.4   |
+| `clean_mlp`   | 4       | 1257.8  | 6366.4   |
+| `mlp_large`   | 1       | 546.6   | 1311.3   |
+| `mlp_large`   | 4       | 503.2   | 2766.2   |
+| `bert_small`  | 1       | 84.3    | 97.9     |
+| `bert_small`  | 4       | 67.5    | 244.0    |
+
+At concurrency 32, `clean_mlp` gains about 3.8x, `bert_small` about 2.5x, `mlp_large`
+about 2.1x - the 4 workers are running 4 requests at once instead of 1, each with its own
+4-thread budget instead of contending for it. At concurrency 1, every model is slightly
+*worse* with 4 workers: a single request now gets 4 intra-op threads (16 logical / 4
+workers) instead of 16, so the one thing running has fewer cores. `--workers` buys
+concurrency, not single-request speed - size it against how many predicts you expect in
+flight at once, not how fast you want any one of them to return.
+
 ## Concurrency, queueing, and what a `503` means
 
 - **`--max-concurrency N`** (default 1) is inferences allowed to run at once *per worker
@@ -85,21 +130,30 @@ CPU-bound work in the same container.
   `max-concurrency + max-queue` requests are admitted, the next one gets an immediate
   `503` with `Retry-After: 1` and a body naming how many are running and queued, instead
   of joining an unbounded queue that would eventually time out on the client side anyway.
-- **`--request-timeout SECONDS`** (default `0`, off) bounds how long an admitted predict
-  may sit in the queue before its turn comes. Once it has waited that long, it gets a
-  `503` instead of starting - a request that has *already started* running is never
+- **`--request-timeout SECONDS`** (default `30`; `0` turns it off) bounds how long an
+  admitted predict may sit in the queue before its turn comes. The clock starts when the
+  request is admitted, so it counts time spent queued. Once it has waited that long, it
+  gets a `503` instead of starting - a request that has *already started* running is never
   interrupted by this.
 
-The banner's `Queue` row shows both:
+The banner's `Capacity` row shows all three:
 
 ```
-Queue       64 waiting max, no timeout  (--max-queue, --request-timeout)
+Capacity    1 inference at a time, 64 queued, 30 s timeout  (--max-concurrency, --max-queue, --request-timeout)
 ```
 
-A `503` from `/predict` or `/predict/graph` always means one of "server is at capacity"
-or "waited too long in the queue", never a model error (those are `400` or `500`). Both
-carry `Retry-After`, so a well-behaved client backs off instead of retrying immediately
-into the same queue.
+A `503` from `/predict` or `/predict/graph` always means one of "server is at capacity",
+"waited too long in the queue" or "still loading", never a model error (those are `400` or
+`500`). A predict is admitted, or refused, before its body is read, so an overloaded server
+answers `503` without buffering or parsing what it is turning away. The capacity and
+loading cases carry `Retry-After`, so a well-behaved client backs off instead of retrying
+immediately into the same queue.
+
+Two other limits guard the body itself. `--max-body-bytes` (default 64 MiB) is a `413`
+once a body passes it: a `Content-Length` over the cap is refused without reading a byte,
+and a chunked body is refused as soon as its running total crosses the cap. There is no
+separate limit on text length, so for a `{"text": ...}` request this cap is the limit.
+`--max-input-bytes` (default 256 MiB) caps one decoded base64 tensor and is a `400`.
 
 ## Sizing
 
@@ -120,24 +174,70 @@ ONNX translation; `verify` is running the numerics gate's samples through both b
 `session` is building the `InferenceSession` (or nothing extra for eager torch); `warmup`
 is the `--warmup N` inferences before `/ready` flips. `/metadata`'s `boot` field carries
 the same numbers as JSON. With `--workers N`, the parent pays `export`+`verify` once and
-every worker pays its own `load`+`session`+`warmup`.
+every worker pays its own `load`+`session`+`warmup`. The parent frees its own copy of the
+model before the workers start, so it is not held in memory `N+1` times.
 
 ## Logs, request ids, and `Server-Timing`
 
-- `--log-format json` writes one JSON object per line to stderr (`time`, `level`,
-  `logger`, `message`, and `exc_info` on an exception) instead of the default plain-text
-  formatter; point your log shipper at stderr either way.
-- Every response carries an `X-Request-Id` header: echoed back if the client sent one,
-  otherwise a generated one. A `500`'s JSON body includes the same id under
-  `"request_id"`, and the server log line for that failure names it too - "see the server
-  log" now has something to search for instead of a bare timestamp to correlate by hand.
+Everything goes through Python `logging` into one plain-text handler on stdout: the boot
+banner, the `check` and `export` reports, uvicorn's own startup and error lines, `warnings`,
+and downshift's request log line. There is no JSON format, no colour and no box drawing;
+point your log shipper at stdout and parse `time LEVEL logger: message`.
+
+- **`--log-level`** defaults to `warning`. The banner, the reports and the `loading` /
+  `will listen on` / `ready in X s` lines are logged on `downshift.report`, which always
+  prints, so a default `serve` still shows its banner. At `warning` you also get warnings,
+  errors and one line for every `4xx` and `5xx` request (a `401`, `413` or `503` is
+  visible without turning anything on). `info` adds uvicorn's own lines and one line for
+  every request; `debug` adds tracebacks.
+- **The request line** is logged on `downshift.access`:
+  `POST /predict 200 12.3 ms request_id=3f9c1a7b2e4d5c60`. Probes (`/health`, `/ready`)
+  are logged at `DEBUG` only, so a kubelet polling them never fills the log, and a
+  `/ready` that answers `503` while the model loads is not a warning.
+  `--access-log`/`--no-access-log` (default on) toggles this line; turn it off if your
+  proxy already logs every request and you only want downshift's own warnings and errors.
+- Every request has an `X-Request-Id`: echoed back if the client sent one, otherwise a
+  generated one. It appears on the response, on the request line, and on every other log
+  line written while that request was being served. A `500`'s JSON body includes the same
+  id under `"request_id"` - "see the server log" has something to search for instead of a
+  bare timestamp to correlate by hand.
 - `/predict` and `/predict/graph` responses carry
-  `Server-Timing: codec;dur=<ms>, infer;dur=<ms>`, splitting request/response conversion
-  time from the backend call itself - visible in any browser's network tab or with
-  `curl -sD - -o /dev/null`, no extra client code needed.
-- `--access-log`/`--no-access-log` (default on) toggles uvicorn's own per-request access
-  log line; turn it off if your proxy already logs every request and you only want
-  downshift's own warnings and errors.
+  `Server-Timing: parse;dur=<ms>, codec;dur=<ms>, infer;dur=<ms>`, splitting JSON parsing,
+  request/response conversion and the backend call itself - visible in any browser's
+  network tab or with `curl -sD - -o /dev/null`, no extra client code needed. Large tensors
+  sent as base64 instead of nested lists cut `parse` about 4x, and a JSON float list holds
+  the GIL while it is parsed, so it can delay other requests in that process as well.
+- With `check --json` or `export --json`, the verdict JSON is the only thing on stdout and
+  the log lines go to stderr.
+
+## Configuration through the environment
+
+Every `DOWNSHIFT_*` variable (`DOWNSHIFT_HOST`, `DOWNSHIFT_PORT`, `DOWNSHIFT_DEVICE`,
+`DOWNSHIFT_BACKEND`, `DOWNSHIFT_WARMUP`, `DOWNSHIFT_SAMPLES`, `DOWNSHIFT_INTRA_OP_THREADS`,
+`DOWNSHIFT_INTER_OP_THREADS`, `DOWNSHIFT_OUTPUT_ENCODING`, `DOWNSHIFT_MAX_INPUT_BYTES`,
+`DOWNSHIFT_MAX_BODY_BYTES`, `DOWNSHIFT_MAX_CONCURRENCY`, `DOWNSHIFT_MAX_QUEUE`,
+`DOWNSHIFT_REQUEST_TIMEOUT`, `DOWNSHIFT_WORKERS`, `DOWNSHIFT_SERVER_API_KEY`, and the
+per-dtype `DOWNSHIFT_TOL_*`) is read once, when `downshift` is imported, and applies to
+library use (`app_for()`, `ServeOptions()`) as well as to the CLI. A flag or a keyword
+argument wins over the variable, and the variable wins over the default. Setting one means
+restarting the process that reads it.
+
+## No egress at startup
+
+`serve` only runs a model that is already downloaded onto this machine: a `.onnx` file, a
+`weights.pt` checkpoint, or a directory holding a Hugging Face repo (recognised by the
+`config.json` in it) - plus an import spec, which names a model already importable in the
+process. A Hugging Face hub id is rejected as a `MODEL` argument, and the `hf` adapter calls
+`AutoModel.from_pretrained(..., local_files_only=True)`, so a load never resolves a repo
+id or fetches a file.
+
+That matters for a deployment behind an egress policy or in an air-gapped cluster:
+startup cannot silently depend on the network, and a missing or half-copied file fails
+loudly during load rather than being papered over by a download that works on one node
+and not another. A single-worker `serve` whose load fails logs the error and exits with
+the same code `check` would use (`4` for a bad model spec or option, `5` for a crash), so
+a supervisor sees a failed start instead of a pod stuck at `503`. Bake the repo directory into
+the image, or mount it, and pass its path.
 
 ## Temporary files
 

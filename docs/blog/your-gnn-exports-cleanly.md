@@ -5,22 +5,19 @@ Status: draft
 Here is the output of `downshift check` on a PyTorch module small enough to quote in full. No error was raised during export. No warning was printed.
 
 ```
-┌───────────────┬─────────────────────────────────────────────────────────────┐
-│ Model         │ tests.models.scatter_include_self_false:make_model          │
-│ Family        │ generic-torch                                               │
-│ Export        │ DEGRADED  (strict=False, opset 20)                          │
-│ Numerics      │ max abs err 1.17e+00 over 8 samples  ✗ 6/8 failed           │
-│ Tolerance     │ atol 1e-04, rtol 1e-03 (float32)                            │
-│ Worst         │ output_0[0, 4]: torch -0.4008, onnxruntime 0.7733  (sample  │
-│               │ 1, x (12,8), segment_ids (12))                              │
-│ Samples       │ x: (6,8) (12,8) (7,8) (7,8) (1,8) (12,8) (1,8) (7,8)        │
-│               │ segment_ids: (6) (12) (7) (7) (1) (12) (1) (7)              │
-│ Shape-general │ n/a (baseline fails)                                        │
-│ Dynamic dims  │ x[0], segment_ids[0]                                        │
-│ Backend       │ torch                                                       │
-│ Reason        │ exported via strict=False but numerics diverge on 6/8       │
-│               │ samples (max abs err 1.17e+00)                              │
-└───────────────┴─────────────────────────────────────────────────────────────┘
+downshift v0.4.0
+  Model           tests.models.scatter_include_self_false:make_model
+  Family          generic-torch
+  Export          DEGRADED  (strict=False, opset 20)
+  Numerics        max abs err 1.22e+00 over 8 samples  6/8 failed
+  Tolerance       atol 1e-04, rtol 1e-03 (float32)
+  Worst           output_0[1, 4]: torch 0.6410, onnxruntime 1.8568  (sample 5, x (12,8), segment_ids (12))
+  Samples         x: (6,8) (12,8) (7,8) (7,8) (1,8) (12,8) (1,8) (7,8)
+                  segment_ids: (6) (12) (7) (7) (1) (12) (1) (7)
+  Shape-general   n/a (baseline fails)
+  Dynamic dims    x[0], segment_ids[0]
+  Backend         torch
+  Reason          exported via strict=False but numerics diverge on 6/8 samples (max abs err 1.22e+00)
 ```
 
 Six of eight random inputs come back with different numbers from ONNX Runtime than from PyTorch — including sample 0, the exact input this graph was traced on. The outputs are roughly unit scale, so a max absolute error above one means the answer is not slightly off. It is a different answer.
@@ -65,9 +62,9 @@ It is also the reason a compatibility matrix that gets regenerated weekly matter
 
 ## What the tool does with it
 
-When `downshift serve` gets a DEGRADED verdict, it serves the PyTorch model in eager mode behind the same `/predict` endpoint it would have used for ONNX Runtime. The banner says why, in yellow. Clients see the same request and response shape; they just get correct numbers at eager speed instead of wrong numbers at ONNX speed.
+When `downshift serve` gets a DEGRADED verdict, it serves the PyTorch model in eager mode behind the same `/predict` endpoint it would have used for ONNX Runtime. The banner says why: a warning with the failing-sample count and the max error, and an `Override` row naming `--force-onnx`. Clients see the same request and response shape; they just get correct numbers at eager speed instead of wrong numbers at ONNX speed.
 
-If you disagree with the call, `--force-onnx` serves the graph anyway. The banner then says "outputs may be wrong" in red, and `/metadata` carries the full numerics report. `downshift export` still writes the `.onnx` for a DEGRADED model, with a manifest sidecar recording the max error, the failing sample count, the torch and onnxruntime versions, and the SHA-256 of the source checkpoint when there was one. The artifact is not withheld. It is labelled.
+If you disagree with the call, `--force-onnx` serves the graph anyway. The banner then notes `--force-onnx: serving a DEGRADED graph; outputs may be wrong`, and `/metadata` carries the full numerics report. `downshift export` still writes the `.onnx` for a DEGRADED model, with a manifest sidecar recording the max error, the failing sample count, the torch and onnxruntime versions, and the SHA-256 of the source checkpoint when there was one. The artifact is not withheld. It is labelled.
 
 ## Try it
 
