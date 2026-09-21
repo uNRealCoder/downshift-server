@@ -13,8 +13,8 @@ import onnxruntime as ort
 import torch
 
 from downshift.adapters.base import VaryFn
-from downshift.core.shapes import alternative_sizes, dim_bounds
-from downshift.settings import TOLERANCES
+from downshift.core.shapes import alternative_sizes, dim_bounds, pick_size
+from downshift.settings import DEFAULT_SAMPLES, TOLERANCES
 
 
 class OnnxRuntimeError(RuntimeError):
@@ -110,11 +110,6 @@ class NumericsReport:
         )
 
 
-_TOLERANCES_BY_DTYPE: dict[torch.dtype, tuple[float, float]] = {
-    getattr(torch, name): value for name, value in TOLERANCES.items()
-}
-
-
 def default_tolerances(model: torch.nn.Module) -> tuple[str, float, float]:
     """(dtype name, atol, rtol) picked by the narrowest floating dtype present.
 
@@ -124,16 +119,16 @@ def default_tolerances(model: torch.nn.Module) -> tuple[str, float, float]:
     float32 and float64 is still bound by float32's precision. float32 is the fallback.
     """
     dtypes = {p.dtype for p in model.parameters() if p.is_floating_point()}
-    for dtype in (torch.bfloat16, torch.float16):
-        if dtype in dtypes:
-            name = "bfloat16" if dtype is torch.bfloat16 else "float16"
-            atol, rtol = _TOLERANCES_BY_DTYPE[dtype]
-            return name, atol, rtol
-    if dtypes == {torch.float64}:
-        atol, rtol = _TOLERANCES_BY_DTYPE[torch.float64]
-        return "float64", atol, rtol
-    atol, rtol = _TOLERANCES_BY_DTYPE[torch.float32]
-    return "float32", atol, rtol
+    if torch.bfloat16 in dtypes:
+        name = "bfloat16"
+    elif torch.float16 in dtypes:
+        name = "float16"
+    elif dtypes == {torch.float64}:
+        name = "float64"
+    else:
+        name = "float32"
+    atol, rtol = TOLERANCES[name]
+    return name, atol, rtol
 
 
 def _resize_dim0(tensor: torch.Tensor, new_size: int) -> torch.Tensor:
@@ -172,7 +167,7 @@ def make_shared_axis0_vary_fn(base_inputs: tuple, dynamic_shapes: tuple) -> Vary
     def vary(i: int) -> tuple:
         if i == 0 or not candidates:
             return base_inputs
-        size = candidates[torch.randint(len(candidates), ())]
+        size = pick_size(candidates)
         return tuple(
             _resize_dim0(t, size) if isinstance(t, torch.Tensor) and spec else t
             for t, spec in zip(base_inputs, dynamic_shapes, strict=True)
@@ -181,9 +176,26 @@ def make_shared_axis0_vary_fn(base_inputs: tuple, dynamic_shapes: tuple) -> Vary
     return vary
 
 
+_ort_logging_quieted = False
+
+
+def quiet_ort_logging() -> None:
+    """Silence ONNX Runtime's C++ logger (it otherwise prints every client-caused failure to
+    stderr, bypassing our own logging). Only takes effect before the first session in the
+    process is built (P6), so every session-creating call site calls this first; safe to call
+    more than once.
+    """
+    global _ort_logging_quieted
+    if _ort_logging_quieted:
+        return
+    ort.set_default_logger_severity(4)
+    _ort_logging_quieted = True
+
+
 def _to_session(onnx_model: bytes | str | Path | ort.InferenceSession) -> ort.InferenceSession:
     if isinstance(onnx_model, ort.InferenceSession):
         return onnx_model
+    quiet_ort_logging()  # must run before any session exists (P6)
     source: str | bytes = str(onnx_model) if isinstance(onnx_model, (str, Path)) else onnx_model
     return ort.InferenceSession(source, providers=["CPUExecutionProvider"])
 
@@ -272,10 +284,11 @@ def _compare_sample(
         got64 = got_np.astype(np.float64)
         abs_err = np.abs(expected64 - got64)
         rel_err = abs_err / (np.abs(expected64) + 1e-8)
-        sample_abs = max(sample_abs, float(abs_err.max(initial=0.0)))
+        output_abs = float(abs_err.max(initial=0.0))
+        sample_abs = max(sample_abs, output_abs)
         sample_rel = max(sample_rel, float(rel_err.max(initial=0.0)))
 
-        if abs_err.size and float(abs_err.max()) > worst_abs:
+        if abs_err.size and output_abs > worst_abs:
             flat_index = int(np.argmax(abs_err))
             unravelled = tuple(int(x) for x in np.unravel_index(flat_index, abs_err.shape))
             worst_abs = float(abs_err.flat[flat_index])
@@ -299,7 +312,7 @@ def verify(
     base_inputs: tuple,
     dynamic_shapes: tuple | None = None,
     vary_fn: VaryFn | None = None,
-    k: int = 8,
+    k: int = DEFAULT_SAMPLES,
     atol: float | None = None,
     rtol: float | None = None,
     seed: int = 0,
@@ -326,7 +339,6 @@ def verify(
     max_abs_err = 0.0
     max_rel_err = 0.0
     failures = 0
-    non_baseline_failures = 0
     baseline_failed = False
     notes: list[str] = []
     sample_shapes: list[list[tuple[int, ...]]] = []
@@ -402,10 +414,8 @@ def verify(
                 failures += 1
                 if i == 0:
                     baseline_failed = True
-                else:
-                    non_baseline_failures += 1
 
-    shape_generalization = None if baseline_failed else non_baseline_failures == 0
+    shape_generalization = None if baseline_failed else failures == 0
     return NumericsReport(
         samples_tested=k,
         max_abs_err=max_abs_err,

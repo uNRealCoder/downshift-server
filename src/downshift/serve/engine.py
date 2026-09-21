@@ -9,12 +9,24 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import torch
 
+from downshift.adapters.base import Prepared
+from downshift.adapters.embedding import EmbeddingRecipe
+from downshift.adapters.text import TextIO
+from downshift.core.phase import Phase, report
 from downshift.core.prevalidated import intake
+from downshift.core.shapes import dim_bounds
 from downshift.core.verdict import BackendName, ExportVerdict, build_verdict, prepare_model
-from downshift.loading import LoadedModel
-from downshift.serve.backends import Backend, OnnxRuntimeBackend, TorchBackend, resolve_device
+from downshift.loading import HF_REPO_DIR, UNKNOWN_SOURCE, LoadedModel
+from downshift.serve.backends import (
+    Backend,
+    OnnxRuntimeBackend,
+    TorchBackend,
+    concrete_dim,
+    example_feeds,
+    resolve_device,
+    verified_provider_for,
+)
 from downshift.serve.options import BackendChoice, ServeOptions
 from downshift.serve.schemas import normalize_dtype
 
@@ -28,6 +40,15 @@ class WarmupStats:
     synthesized: bool  # True when there was no example input, so warmup() made one up
 
 
+@dataclass(frozen=True)
+class DimBound:
+    """One dynamic axis's name and the (min, max) torch.export traced it for (U2)."""
+
+    name: str
+    min: int
+    max: int
+
+
 @dataclass
 class ServingState:
     source: str
@@ -38,11 +59,27 @@ class ServingState:
     example_inputs: tuple | None = None
     ready: bool = False
     notes: list[str] = field(default_factory=list)  # things the banner should say
+    # Which accepted form `source` named (downshift.loading's ONNX_FILE, TORCH_CHECKPOINT,
+    # HF_REPO_DIR, IMPORT_SPEC, IN_PROCESS_MODULE). Reported under /schema's `source`, and
+    # labelled on the boot banner, so it is visible that nothing was fetched to serve this.
+    source_kind: str = UNKNOWN_SOURCE
+    # Tokenizer and label metadata when the source is a Hugging Face repo directory that has
+    # them; what lets /predict take `text` and answer with class probabilities.
+    text: TextIO | None = None
+    # How token vectors become one embedding per text, when the repo declares (or --pooling
+    # gives) a recipe; already part of the graph, kept here so /schema can say what it is.
+    embedding: EmbeddingRecipe | None = None
+    # The model's vocabulary size, when the source is a Hugging Face repo directory (B3): lets
+    # the predict path range-check input_ids before infer instead of letting ORT wrap negatives.
+    vocab_size: int | None = None
     warmup_stats: WarmupStats | None = None
     # Phase wall-clock seconds: "load" (CLI-only, added after prepare_serving returns),
     # "export", "verify", "session", "warmup" - whichever phases actually ran. Read by the
     # CLI's Boot banner row and /metadata's `boot` field.
     timings: dict[str, float] = field(default_factory=dict)
+    # Per input, per dynamic axis: the (name, min, max) downshift's own export traced (U2).
+    # Empty for a bare .onnx with no reference model - there is no Prepared to read it from.
+    axis_bounds: dict[str, dict[int, DimBound]] = field(default_factory=dict, repr=False)
     # Not JSON-able and not part of a serving state's identity: rebuilt from options.max_concurrency.
     # `infer` (and, for the JSON path, request conversion) runs on these threads, never on the
     # event loop, so /health and /ready are never stuck behind a queue of slow predicts.
@@ -83,13 +120,25 @@ class ServingState:
         return {spec.name: spec.dtype for spec in self.backend.metadata().inputs}
 
 
+def _prepare(loaded: LoadedModel, opts: ServeOptions) -> Prepared:
+    """The one place a loaded torch model meets its adapter, --dynamic and --vary, so the
+    --workers torch path prepares it exactly as the single-process path does."""
+    assert loaded.model is not None
+    return prepare_model(
+        loaded.model,
+        loaded.example_inputs,
+        opts.adapter or loaded.adapter_hint,
+        opts.dynamic,
+        vary=opts.vary,
+    )
+
+
 def _verdict_for(
     loaded: LoadedModel,
     reference: LoadedModel | None,
     opts: ServeOptions,
     timings: dict[str, float] | None = None,
 ) -> ExportVerdict:
-    adapter = opts.adapter or loaded.adapter_hint
     if loaded.onnx_path is not None:
         ref_model = reference.model if reference else None
         ref_inputs = reference.example_inputs if reference else None
@@ -97,7 +146,7 @@ def _verdict_for(
             loaded.onnx_path,
             ref_model,
             ref_inputs,
-            adapter,
+            opts.adapter or loaded.adapter_hint,
             k=opts.k,
             dynamic=opts.dynamic,
             atol=opts.atol,
@@ -106,10 +155,7 @@ def _verdict_for(
             vary=opts.vary,
             timings=timings,
         )
-    assert loaded.model is not None
-    prepared = prepare_model(
-        loaded.model, loaded.example_inputs, adapter, opts.dynamic, vary=opts.vary
-    )
+    prepared = _prepare(loaded, opts)
     if opts.backend == BackendChoice.torch:
         # Skip the export entirely; the user asked for eager.
         return ExportVerdict(
@@ -158,6 +204,48 @@ def choose_backend(verdict: ExportVerdict, opts: ServeOptions) -> tuple[BackendN
     return wanted, notes
 
 
+_TEXT_UNAVAILABLE_PREFIX = "text input unavailable:"
+_NO_TOKENIZER_NOTE = "no tokenizer files in the repo directory; /predict takes tensors only"
+
+
+def attach_hf_metadata(state: ServingState) -> None:
+    """Fill in state.text and state.embedding for a Hugging Face repo directory.
+
+    Every place that builds a ServingState calls this, including the `--workers N` builders
+    that skip prepare_serving. The embedding recipe is read again from the repo with the same
+    overrides the load used, so it needs no hand-off from the loader. Text input is optional
+    by nature: a repo with no tokenizer, or a missing [hf] extra, only costs the `text`
+    input, so the reason goes on the banner rather than failing the boot.
+
+    A `--workers` worker starts with the parent's notes (shipped in ArtifactHandoff) already
+    on state.notes, then runs this again itself; the two notes below are replaced rather than
+    appended so a worker doesn't print its own note twice.
+    """
+    if state.source_kind != HF_REPO_DIR:
+        return
+    state.notes = [
+        note
+        for note in state.notes
+        if not note.startswith(_TEXT_UNAVAILABLE_PREFIX) and note != _NO_TOKENIZER_NOTE
+    ]
+    opts = state.options
+    try:
+        from downshift.adapters import hf
+
+        # Set before anything that needs a tokenizer or a recipe, so the token-id range check
+        # (B3) still works when those fail.
+        state.vocab_size = hf.vocab_size(state.source)
+        recipe = hf.embedding_recipe(state.source, opts.pooling, opts.normalize)
+        text = hf.load_text_io(state.source, recipe)
+    except Exception as exc:  # noqa: BLE001 - whatever transformers raises, this is optional
+        state.notes.append(f"{_TEXT_UNAVAILABLE_PREFIX} {type(exc).__name__}: {exc}")
+        return
+    state.embedding = recipe
+    state.text = text
+    if text is None:
+        state.notes.append(_NO_TOKENIZER_NOTE)
+
+
 def _reusable_verify_session(verdict: ExportVerdict, opts: ServeOptions) -> Any:
     """The session verify() already built, if the serving options mean the same thing:
     resolved device cpu and both thread counts 0, which is exactly what verify's own
@@ -172,20 +260,98 @@ def _reusable_verify_session(verdict: ExportVerdict, opts: ServeOptions) -> Any:
     return numerics.session
 
 
+def _axis_bounds(verdict: ExportVerdict) -> dict[str, dict[int, DimBound]]:
+    """Per input, per dynamic axis: the (name, min, max) an adapter's export traced it for
+    (U2). Empty when there is no Prepared to read it from (a bare .onnx with no --reference)."""
+    prepared = verdict.prepared
+    if prepared is None:
+        return {}
+    bounds: dict[str, dict[int, DimBound]] = {}
+    for name, spec in zip(prepared.input_names, prepared.dynamic_shapes, strict=True):
+        if not spec:
+            continue
+        axes = {
+            axis: DimBound(getattr(dim, "__name__", str(axis)), *dim_bounds(spec, axis))
+            for axis, dim in spec.items()
+        }
+        bounds[name] = axes
+    return bounds
+
+
+def axis_bounds_to_json(bounds: dict[str, dict[int, DimBound]]) -> dict[str, list[list]]:
+    """`_axis_bounds` as plain JSON ([[axis, name, min, max], ...] per input), for the
+    `serve --workers N` handoff: an ONNX worker has no Prepared to derive them from."""
+    return {
+        name: [[axis, b.name, b.min, b.max] for axis, b in axes.items()]
+        for name, axes in bounds.items()
+    }
+
+
+def axis_bounds_from_json(raw: dict[str, list[list]]) -> dict[str, dict[int, DimBound]]:
+    return {
+        name: {int(axis): DimBound(str(dim), int(lo), int(hi)) for axis, dim, lo, hi in rows}
+        for name, rows in raw.items()
+    }
+
+
 def _build_backend(name: BackendName, verdict: ExportVerdict, opts: ServeOptions) -> Backend:
+    """The one place a Backend is constructed, for every serving-state builder below: sets
+    verified_provider here too, so no caller can build a backend and forget it."""
+    report(Phase.session)
+    backend: Backend
     if name == BackendName.onnxruntime:
         session = _reusable_verify_session(verdict, opts)
         if session is not None:
-            return OnnxRuntimeBackend(session=session)
-        source: bytes | Path = (
-            verdict.onnx_path if verdict.onnx_path is not None else verdict.onnx_bytes
+            backend = OnnxRuntimeBackend(session=session)
+        else:
+            source: bytes | Path = (
+                verdict.onnx_path if verdict.onnx_path is not None else verdict.onnx_bytes
+            )
+            backend = OnnxRuntimeBackend(
+                source, opts.device, opts.intra_op_threads, opts.inter_op_threads
+            )
+    else:
+        prepared = verdict.prepared
+        assert prepared is not None
+        backend = TorchBackend(
+            prepared.model,
+            prepared.input_names,
+            opts.device,
+            prepared.inputs,
+            opts.intra_op_threads,
         )
-        return OnnxRuntimeBackend(source, opts.device, opts.intra_op_threads, opts.inter_op_threads)
-    prepared = verdict.prepared
-    assert prepared is not None
-    return TorchBackend(
-        prepared.model, prepared.input_names, opts.device, prepared.inputs, opts.intra_op_threads
+    backend.verified_provider = verified_provider_for(verdict)
+    return backend
+
+
+def _new_state(
+    source: str,
+    verdict: ExportVerdict,
+    backend: Backend,
+    input_names: tuple[str, ...],
+    opts: ServeOptions,
+    example_inputs: tuple | None,
+    timings: dict[str, float],
+    *,
+    notes: list[str] | None = None,
+    kind: str = UNKNOWN_SOURCE,
+    axis_bounds: dict[str, dict[int, DimBound]] | None = None,
+) -> ServingState:
+    """The single ServingState constructor every builder below funnels through, so
+    finish_state (and so attach_hf_metadata) never gets skipped by a builder that forgot.
+    `axis_bounds` overrides what the verdict's Prepared would give (a worker has none)."""
+    state = ServingState(
+        source,
+        verdict,
+        backend,
+        input_names,
+        opts,
+        example_inputs,
+        notes=list(notes or []),
+        source_kind=kind,
+        axis_bounds=_axis_bounds(verdict) if axis_bounds is None else axis_bounds,
     )
+    return finish_state(state, timings)
 
 
 def prepare_serving(
@@ -193,11 +359,13 @@ def prepare_serving(
 ) -> ServingState:
     opts = opts or ServeOptions()
     timings: dict[str, float] = {}
+    # core/verdict.py and core/prevalidated.py report export and verify from inside this call.
+    report(Phase.load)
     verdict = _verdict_for(loaded, reference, opts, timings)
     name, notes = choose_backend(verdict, opts)
     session_start = time.perf_counter()
     backend = _build_backend(name, verdict, opts)
-    timings["session"] = time.perf_counter() - session_start
+    timings[Phase.session] = time.perf_counter() - session_start
 
     if verdict.prepared is not None:
         input_names = verdict.prepared.input_names
@@ -206,14 +374,24 @@ def prepare_serving(
         input_names = tuple(backend.input_names)
         example_inputs = None
 
-    state = ServingState(
-        loaded.source, verdict, backend, input_names, opts, example_inputs, notes=notes
+    if verdict.numerics is not None and getattr(backend, "session", None) is not (
+        verdict.numerics.session
+    ):
+        # The backend built its own session (or is torch), so verify's is dead weight: a full
+        # second copy of the weights and optimized graph, held for the life of the process.
+        verdict.numerics.session = None
+
+    return _new_state(
+        loaded.source,
+        verdict,
+        backend,
+        input_names,
+        opts,
+        example_inputs,
+        timings,
+        notes=notes,
+        kind=loaded.kind,
     )
-    state.timings = timings
-    warmup_start = time.perf_counter()
-    warmup(state, opts.warmup)
-    timings["warmup"] = time.perf_counter() - warmup_start
-    return state
 
 
 def serving_state_from_artifact(
@@ -224,11 +402,14 @@ def serving_state_from_artifact(
     input_names: tuple[str, ...],
     notes: list[str] | None = None,
     example_inputs: tuple | None = None,
+    axis_bounds: dict[str, dict[int, DimBound]] | None = None,
+    kind: str = UNKNOWN_SOURCE,
 ) -> ServingState:
     """Rebuild a ServingState in a `serve --workers N` worker from the ONNX graph and
     verdict a parent process already exported and verified: no capture, no verify, just a
-    session over the artifact. `input_names` and `notes` are the parent's own (the verdict
-    it shipped has no `prepared` to derive them from); `example_inputs` are real feeds the
+    session over the artifact. `input_names`, `notes` and `kind` are the parent's own (the
+    verdict it shipped has no `prepared` to derive them from, and there is no LoadedModel to
+    read the kind from); `example_inputs` are real feeds the
     parent saved alongside the graph when it had any, loaded by the caller from the .npz
     sidecar - otherwise warmup() synthesizes them (see synthesize_feeds).
     """
@@ -236,14 +417,62 @@ def serving_state_from_artifact(
     timings: dict[str, float] = {}
     session_start = time.perf_counter()
     backend = _build_backend(BackendName.onnxruntime, verdict, opts)
-    timings["session"] = time.perf_counter() - session_start
-    state = ServingState(
-        source, verdict, backend, input_names, opts, example_inputs, notes=list(notes or [])
+    timings[Phase.session] = time.perf_counter() - session_start
+    return _new_state(
+        source,
+        verdict,
+        backend,
+        input_names,
+        opts,
+        example_inputs,
+        timings,
+        notes=notes,
+        kind=kind,
+        axis_bounds=axis_bounds,
     )
+
+
+def serving_state_from_torch_artifact(
+    loaded: LoadedModel,
+    verdict: ExportVerdict,
+    opts: ServeOptions,
+    notes: list[str] | None = None,
+) -> ServingState:
+    """Rebuild a ServingState in a `serve --workers N` worker when the parent's export chose
+    torch: the worker still loads and prepares the model itself (torch weights aren't shipped
+    between processes), but takes the parent's already-verified verdict as given rather than
+    re-exporting. `loaded` is the caller's own reload of the same model spec the parent used.
+    """
+    report(Phase.load)
+    prepared = _prepare(loaded, opts)
+    verdict.prepared = prepared
+    timings: dict[str, float] = {}
+    session_start = time.perf_counter()
+    backend = _build_backend(BackendName.torch, verdict, opts)
+    timings[Phase.session] = time.perf_counter() - session_start
+    return _new_state(
+        loaded.source,
+        verdict,
+        backend,
+        prepared.input_names,
+        opts,
+        prepared.inputs,
+        timings,
+        notes=notes,
+        kind=loaded.kind,
+    )
+
+
+def finish_state(state: ServingState, timings: dict[str, float]) -> ServingState:
+    """The tail every ServingState builder shares: attach the Hugging Face metadata, record
+    the phase timings so far, then warm up (timed) and flip ready. A builder that skipped
+    attach_hf_metadata would silently lose text input and the embedding metadata."""
+    attach_hf_metadata(state)
     state.timings = timings
+    report(Phase.warmup)
     warmup_start = time.perf_counter()
-    warmup(state, opts.warmup)
-    timings["warmup"] = time.perf_counter() - warmup_start
+    warmup(state, state.options.warmup)
+    timings[Phase.warmup] = time.perf_counter() - warmup_start
     return state
 
 
@@ -253,7 +482,7 @@ def synthesize_feeds(backend: Backend) -> dict[str, np.ndarray]:
     become 1; floats are randn, integers and bools are zero/false."""
     feeds: dict[str, np.ndarray] = {}
     for spec in backend.metadata().inputs:
-        shape = tuple(dim if isinstance(dim, int) and dim > 0 else 1 for dim in (spec.shape or [1]))
+        shape = tuple(concrete_dim(dim) for dim in (spec.shape or [1]))
         dtype = np.dtype(normalize_dtype(spec.dtype) or "float32")
         if dtype.kind == "f":
             feeds[spec.name] = np.random.randn(*shape).astype(dtype)
@@ -271,10 +500,7 @@ def warmup(state: ServingState, n: int) -> WarmupStats:
         feeds = (
             synthesize_feeds(state.backend)
             if example_inputs is None
-            else {
-                name: t.numpy() if isinstance(t, torch.Tensor) else np.asarray(t)
-                for name, t in zip(state.input_names, example_inputs, strict=True)
-            }
+            else example_feeds(state.input_names, example_inputs)
         )
         start = time.perf_counter()
         for _ in range(n):

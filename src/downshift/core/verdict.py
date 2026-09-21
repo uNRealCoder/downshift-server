@@ -16,13 +16,15 @@ from typing import Literal
 
 import torch
 
+from downshift._imports import import_object
 from downshift.adapters import registry
 from downshift.adapters.base import Adapter, Prepared, VaryFn
 from downshift.core.capture import capture
 from downshift.core.inputs import synthesize
+from downshift.core.phase import Phase, report
 from downshift.core.shapes import apply_dynamic_override, safe_capture_inputs
 from downshift.core.verify import NumericsReport, OnnxRuntimeError, verify
-from downshift.loading import import_object
+from downshift.settings import DEFAULT_SAMPLES
 
 Status = Literal["CLEAN", "DEGRADED", "FAILED", "UNVERIFIED"]
 
@@ -178,7 +180,7 @@ def prepare_model(
 
 def build_verdict(
     prepared: Prepared,
-    k: int = 8,
+    k: int = DEFAULT_SAMPLES,
     verify_numerics: bool = True,
     atol: float | None = None,
     rtol: float | None = None,
@@ -188,8 +190,9 @@ def build_verdict(
     """Capture, then verify. verify_numerics=False is the --no-verify escape hatch: the
     graph is still produced but the verdict is UNVERIFIED, never CLEAN.
 
-    `timings`, when given, gets "export" (the capture() call) and "verify" (the verify()
-    call) wall-clock seconds added to it - the CLI's Boot banner row and /metadata's
+    `timings`, when given, gets Phase.export (the capture() call) and Phase.verify (the
+    verify() call) wall-clock seconds added to it, and the serve loader's /ready is told
+    which of the two is running (see core/phase.py) - the CLI's Boot banner row and /metadata's
     `boot` field read it back from ServingState.timings (see serve/engine.py).
     """
     warnings = _tied_weight_warnings(prepared.model)
@@ -197,6 +200,7 @@ def build_verdict(
         warnings.append("model was in training mode; switched to eval() for export")
         prepared.model.eval()
 
+    report(Phase.export)
     capture_start = time.perf_counter()
     result = capture(
         prepared.model,
@@ -204,7 +208,7 @@ def build_verdict(
         prepared.dynamic_shapes,
     )
     if timings is not None:
-        timings["export"] = time.perf_counter() - capture_start
+        timings[Phase.export] = time.perf_counter() - capture_start
     # exceptions is normally one entry per strategy tried; a translation failure (torch.export
     # itself succeeded) has none of those, so it falls back to the single exception it raised.
     capture_exceptions = result.exceptions or (
@@ -246,6 +250,7 @@ def build_verdict(
         verdict.reason = f"exported via {result.capture_strategy}; numerics never checked"
         return verdict
 
+    report(Phase.verify)
     verify_start = time.perf_counter()
     try:
         numerics = verify(
@@ -260,8 +265,6 @@ def build_verdict(
             seed=seed,
         )
     except OnnxRuntimeError as exc:
-        if timings is not None:
-            timings["verify"] = time.perf_counter() - verify_start
         message = str(exc).splitlines()[0]
         verdict.reason = (
             f"exported via {result.capture_strategy} but ONNX Runtime cannot run the "
@@ -269,8 +272,9 @@ def build_verdict(
         )
         verdict.warnings.append(message)
         return verdict
-    if timings is not None:
-        timings["verify"] = time.perf_counter() - verify_start
+    finally:
+        if timings is not None:
+            timings[Phase.verify] = time.perf_counter() - verify_start
 
     verdict.numerics = numerics
     verdict.status, verdict.recommended_backend, verdict.reason = numerics_outcome(
@@ -284,7 +288,7 @@ def build_verdict(
 def check(
     model: torch.nn.Module,
     example_inputs: tuple | None = None,
-    k: int = 8,
+    k: int = DEFAULT_SAMPLES,
     adapter: Adapter | str | None = None,
     dynamic: dict[str, list[int]] | None = None,
     fp16: bool = False,

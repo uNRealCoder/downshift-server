@@ -11,9 +11,11 @@ draft_export step or TorchScript fallback any more.
 import contextlib
 import io
 import logging
+import threading
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
+from typing import Any
 
 import torch
 
@@ -38,6 +40,29 @@ def _quiet_registration_warnings() -> Iterator[None]:
         logger.setLevel(previous)
 
 
+@contextlib.contextmanager
+def _capture_torch_output(sink: io.StringIO) -> Iterator[None]:
+    """Collect what torch prints while it exports into `sink`.
+
+    torch prints whole FX graphs straight to stderr when a data-dependent guard fails; keep
+    that out of the user's terminal, the exception message is what matters. Swapping
+    sys.stderr is process-global, so it is only done on the main thread (the CLI's own
+    check/export). The serve loader runs on another thread beside a live server, whose
+    stderr writers must not be swallowed: there only torch's logging is collected.
+    """
+    if threading.current_thread() is threading.main_thread():
+        with contextlib.redirect_stderr(sink):
+            yield
+        return
+    handler = logging.StreamHandler(sink)
+    torch_logger = logging.getLogger("torch")
+    torch_logger.addHandler(handler)
+    try:
+        yield
+    finally:
+        torch_logger.removeHandler(handler)
+
+
 @dataclass
 class CaptureResult:
     success: bool
@@ -51,6 +76,14 @@ class CaptureResult:
     stderr: str = ""  # whatever torch printed while we tried; useful at debug level
 
 
+def op_type_histogram(nodes: Iterable[Any]) -> dict[str, int]:
+    """Op types by count, descending. Both paths that produce a verdict - a fresh export here
+    and intake()'s read of a pre-built .onnx - report this same shape on ExportVerdict.op_types,
+    so they share one definition of it."""
+    counts = Counter(node.op_type for node in nodes)
+    return dict(sorted(counts.items(), key=lambda kv: kv[1], reverse=True))
+
+
 def capture(
     model: torch.nn.Module,
     example_inputs: tuple,
@@ -59,11 +92,9 @@ def capture(
     exported_program = None
     strategy_used: str | None = None
     exceptions: list[tuple[str, Exception]] = []
-    # torch prints whole FX graphs straight to stderr when a data-dependent guard fails.
-    # Keep that out of the user's terminal; the exception message is what matters.
     captured = io.StringIO()
 
-    with contextlib.redirect_stderr(captured), _quiet_registration_warnings():
+    with _capture_torch_output(captured), _quiet_registration_warnings():
         for name, strict in _STRATEGIES:
             try:
                 exported_program = torch.export.export(
@@ -106,13 +137,12 @@ def capture(
         )
 
     proto = onnx_program.model_proto
-    counts = Counter(node.op_type for node in proto.graph.node)
     return CaptureResult(
         success=True,
         capture_strategy=strategy_used,
         onnx_program=onnx_program,
         onnx_bytes=proto.SerializeToString(),
         opset=proto.opset_import[0].version if proto.opset_import else None,
-        op_types=dict(sorted(counts.items(), key=lambda kv: kv[1], reverse=True)),
+        op_types=op_type_histogram(proto.graph.node),
         stderr=captured.getvalue(),
     )

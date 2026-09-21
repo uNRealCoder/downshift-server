@@ -5,17 +5,50 @@ needs is built once per session.
 """
 
 import base64
+import os
 from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
 import pytest
 import torch
+from fastapi.testclient import TestClient
 
 import downshift
-from downshift.loading import load_model
+from downshift.loading import LoadSpec, load_model
+from downshift.serve.app import build_app
 from downshift.serve.engine import ServeOptions, ServingState, prepare_serving
 from tests.models import clean_mlp
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+_TORCH_VERSION = tuple(int(p) for p in torch.__version__.split("+")[0].split(".")[:2])
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Skip `needs_torch_26` tests on the CI floor job, pinned to torch 2.5.1.
+
+    A marker beside the tests instead of an inline `--deselect` list in the CI YAML, so it
+    cannot go stale as tests are added, renamed or removed.
+    """
+    if _TORCH_VERSION >= (2, 6):
+        return
+    skip = pytest.mark.skip(reason=f"needs torch>=2.6, running {torch.__version__}")
+    for item in items:
+        if "needs_torch_26" in item.keywords:
+            item.add_marker(skip)
+
+
+def subprocess_env(*extra_paths: Path) -> dict[str, str]:
+    """The environment for a child interpreter that must import this checkout's `downshift`.
+
+    `src` goes first, unconditionally: the venv also holds a pip-installed copy, and without
+    this a child silently runs that instead of the working tree. `extra_paths` follow it.
+    """
+    env = dict(os.environ)
+    paths = [str(REPO_ROOT / "src"), *map(str, extra_paths), env.get("PYTHONPATH", "")]
+    env["PYTHONPATH"] = os.pathsep.join(paths)
+    return env
 
 
 def b64_input(arr: np.ndarray, **overrides) -> dict:
@@ -40,7 +73,7 @@ def serve_fixture() -> Callable[..., ServingState]:
     """Serve a tests/models fixture by name: serve_fixture("clean_mlp", force_onnx=True)."""
 
     def build(name: str, **opts) -> ServingState:
-        loaded = load_model(f"tests.models.{name}:make_model")
+        loaded = load_model(LoadSpec(f"tests.models.{name}:make_model"))
         return prepare_serving(loaded, ServeOptions(warmup=1, **opts))
 
     return build
@@ -54,6 +87,16 @@ def mlp_state(serve_fixture) -> ServingState:
 @pytest.fixture(scope="session")
 def branch_state(serve_fixture) -> ServingState:
     return serve_fixture("data_dependent_branch")
+
+
+@pytest.fixture(scope="module")
+def mlp_client(mlp_state) -> TestClient:
+    return TestClient(build_app(mlp_state))
+
+
+@pytest.fixture(scope="module")
+def gcn_client(serve_fixture) -> TestClient:
+    return TestClient(build_app(serve_fixture("gnn_gcn")))
 
 
 @pytest.fixture(scope="session")

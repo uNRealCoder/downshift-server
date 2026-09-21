@@ -1,65 +1,67 @@
 """FastAPI app over a ServingState. The same routes regardless of which backend is behind it."""
 
-import asyncio
+import contextvars
+import hmac
 import logging
 import threading
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from functools import partial
+from dataclasses import asdict
 from typing import Any
 
-import numpy as np
 import orjson
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 import downshift
-from downshift.serve.backends import InferenceInputError
-from downshift.serve.codec import b64encode
+from downshift.core.phase import CURRENT_PROGRESS, LoadProgress
+from downshift.logs import request_id_var
 from downshift.serve.engine import ServingState
 from downshift.serve.middleware import load_middleware
+from downshift.serve.predict import PREDICT_PATHS, NumpyJSONResponse, as_batch, run_predict
 from downshift.serve.schemas import (
+    GRAPH_INPUTS,
+    BackendInfo,
     GraphPredictRequest,
     HealthResponse,
     MetadataResponse,
-    OutputEncoding,
     PredictRequest,
     PredictResponse,
     ReadyResponse,
-    to_numpy,
+    SchemaResponse,
+    VerdictInfo,
 )
-from downshift.settings import DEFAULT_MAX_BODY_BYTES
+from downshift.settings import API_KEY, DEFAULT_MAX_BODY_BYTES
+from downshift.sources import LABEL_KINDS, display_source, hide_paths
 
 logger = logging.getLogger("downshift.serve")
+access_logger = logging.getLogger("downshift.access")
 
 NOT_READY_RETRY_AFTER = 2  # seconds a client should wait before asking again
 
-# dtypes orjson's OPT_SERIALIZE_NUMPY writes straight from the array buffer (orjson >= 3.9).
-_ORJSON_DTYPES = frozenset(
-    "float16 float32 float64 int8 int16 int32 int64 uint8 uint16 uint32 uint64 bool".split()
-)
+# Probes: exempt from the API key, and logged at DEBUG so they don't flood the default output.
+_PROBE_PATHS = frozenset({"/health", "/ready"})
 
 
-class NumpyJSONResponse(JSONResponse):
-    """orjson with OPT_SERIALIZE_NUMPY: arrays are written from their buffers; NaN/Inf become null.
-
-    Not built on fastapi's ORJSONResponse: older versions lack the numpy flag, newer ones
-    deprecate the class and warn at import.
-    """
-
-    def render(self, content: Any) -> bytes:
-        return orjson.dumps(content, option=orjson.OPT_SERIALIZE_NUMPY)
+def _route_path(scope: Scope) -> str:
+    """The path relative to where this app is mounted: from Starlette 0.33 on, scope["path"]
+    keeps the mount prefix (app_for(...) is meant to be mounted), so "/model/health" must
+    still count as the /health probe."""
+    path: str = scope["path"]
+    return path.removeprefix(scope.get("root_path", ""))
 
 
 class _OrjsonRequest(Request):
     async def json(self) -> Any:
         if not hasattr(self, "_json"):
+            parse_start = time.perf_counter()
             self._json = orjson.loads(await self.body())
+            self.state.parse_ms = (time.perf_counter() - parse_start) * 1000
         return self._json
 
 
@@ -75,134 +77,8 @@ def _body_too_large(observed: int, limit: int) -> JSONResponse:
     )
 
 
-class OrjsonRoute(APIRoute):
-    """Parse request bodies with orjson: several times faster than stdlib on MiB-scale bodies.
-
-    orjson's JSONDecodeError subclasses the stdlib one, so malformed JSON still maps to 422.
-    Also enforces --max-body-bytes: a Content-Length over the limit is rejected without
-    reading the body; without one (chunked), the body is read and checked as it lands.
-    """
-
-    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
-        handler = super().get_route_handler()
-
-        async def route_handler(request: Request) -> Response:
-            current: ServingState | None = request.app.state.serving
-            # Before the loader lands there is no ServingState to read a limit from yet;
-            # fall back to the default so a large body is still rejected before parsing.
-            limit = (
-                current.options.max_body_bytes if current is not None else DEFAULT_MAX_BODY_BYTES
-            )
-            content_length = request.headers.get("content-length")
-            wrapped = _OrjsonRequest(request.scope, request.receive)
-            if content_length is not None and content_length.isdigit():
-                if int(content_length) > limit:
-                    return _body_too_large(int(content_length), limit)
-            else:
-                body = await request.body()
-                if len(body) > limit:
-                    return _body_too_large(len(body), limit)
-                wrapped._body = body
-            return await handler(wrapped)
-
-        return route_handler
-
-
-# The predict routes: orjson response, and PredictResponse kept in the OpenAPI schema without
-# the response_model re-validation walk over every output.
-_PREDICT_ROUTE: dict[str, Any] = {
-    "response_class": NumpyJSONResponse,
-    "responses": {200: {"model": PredictResponse}},
-}
-
-
-def _json_ready(arr: np.ndarray) -> np.ndarray | list:
-    """The contiguous array itself when orjson can write it in one pass, else a list."""
-    return (
-        arr if arr.dtype.name in _ORJSON_DTYPES and arr.ndim else arr.tolist()
-    )  # 0-d: orjson rejects
-
-
-def _base64_ready(arr: np.ndarray) -> dict[str, Any]:
-    """{data, dtype, shape}: base64 straight off the contiguous buffer."""
-    return {
-        "data": b64encode(arr).decode("ascii"),
-        "dtype": arr.dtype.name,
-        "shape": list(arr.shape),
-    }
-
-
-class QueuedTooLong(HTTPException):
-    """Raised inside the executor when a request waited past --request-timeout before its
-    conversion/inference even started. Never raised once infer() has begun."""
-
-    def __init__(self, waited: float, limit: float) -> None:
-        super().__init__(
-            503, f"request waited {waited:.1f}s in queue, past the {limit:.1f}s --request-timeout"
-        )
-
-
-def _predict_body(
-    state: ServingState,
-    inputs: dict[str, Any],
-    encoding: OutputEncoding | None,
-    admitted_at: float,
-) -> NumpyJSONResponse:
-    """Runs in state.executor, never on the event loop: conversion of a large JSON body,
-    the inference itself, and response encoding. Admission and the cheap missing-input check
-    already happened on the loop by the time this is submitted.
-
-    Raises HTTPException(400) for anything the client got wrong (bad shape/dtype/JSON).
-    Anything else (a backend bug, OOM, ...) propagates so the app-level handler turns it into
-    a 500 without leaking the exception text to the client.
-    """
-    request_timeout = state.options.request_timeout
-    if request_timeout > 0:
-        waited = time.monotonic() - admitted_at
-        if waited > request_timeout:
-            raise QueuedTooLong(waited, request_timeout)
-
-    declared = state.declared_dtypes
-    max_bytes = state.options.max_input_bytes
-    codec_start = time.perf_counter()
-    try:
-        feeds = {
-            n: to_numpy(n, inputs[n], declared.get(n), max_bytes=max_bytes)
-            for n in state.input_names
-        }
-    except (ValueError, TypeError, KeyError) as exc:
-        raise HTTPException(400, str(exc)) from exc
-    codec_ms = (time.perf_counter() - codec_start) * 1000
-
-    infer_start = time.perf_counter()
-    try:
-        outputs = state.backend.infer(feeds)
-    except HTTPException:
-        raise
-    except (InferenceInputError, KeyError) as exc:
-        raise HTTPException(400, str(exc)) from exc
-    infer_ms = (time.perf_counter() - infer_start) * 1000
-
-    encoding = encoding or state.options.output_encoding
-    encode = _base64_ready if encoding == OutputEncoding.base64 else _json_ready
-    encode_start = time.perf_counter()
-    # C-contiguous once, up front (np.require keeps 0-d arrays 0-d; ascontiguousarray does not).
-    arrays = {name: np.require(arr, requirements="C") for name, arr in outputs.items()}
-    # Same keys as PredictResponse; built by hand so orjson serializes the buffers directly.
-    body = {
-        "outputs": {name: encode(arr) for name, arr in arrays.items()},
-        "shapes": {name: list(arr.shape) for name, arr in arrays.items()},
-        "dtypes": {name: arr.dtype.name for name, arr in arrays.items()},
-    }
-    codec_ms += (time.perf_counter() - encode_start) * 1000
-
-    response = NumpyJSONResponse(body)
-    response.headers["Server-Timing"] = f"codec;dur={codec_ms:.2f}, infer;dur={infer_ms:.2f}"
-    return response
-
-
 def _not_ready_error() -> HTTPException:
-    """Raised by /metadata and the predict routes while a loader-built app has no
+    """Raised by /metadata, /schema and the predict routes while a loader-built app has no
     ServingState yet (see build_app's loader parameter)."""
     return HTTPException(
         503, "model is not ready", headers={"Retry-After": str(NOT_READY_RETRY_AFTER)}
@@ -219,25 +95,106 @@ def _capacity_error(state: ServingState) -> HTTPException:
     )
 
 
-async def run_predict(
-    state: ServingState, inputs: dict[str, Any], encoding: OutputEncoding | None
-) -> NumpyJSONResponse:
-    """Missing-input check and admission happen here, on the loop; everything else runs in
-    state.executor (see _predict_body) so a slow body or a slow backend never blocks /health
-    or /ready, which share this process's single event loop.
-    """
-    missing = [n for n in state.input_names if n not in inputs]
-    if missing:
-        raise HTTPException(400, f"missing inputs: {missing}")
+async def _read_body_limited(request: Request, limit: int) -> bytes | JSONResponse:
+    """request.stream(), with a running total: a 413 the moment it passes `limit`, instead of
+    accumulating the whole body first (P2 - request.body() does exactly that)."""
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > limit:
+            return _body_too_large(total, limit)
+        chunks.append(chunk)
+    return b"".join(chunks)
 
-    if not state.try_admit():
-        raise _capacity_error(state)
-    try:
-        loop = asyncio.get_running_loop()
-        body = partial(_predict_body, state, inputs, encoding, time.monotonic())
-        return await loop.run_in_executor(state.executor, body)
-    finally:
-        state.release()
+
+class OrjsonRoute(APIRoute):
+    """Parse request bodies with orjson: several times faster than stdlib on MiB-scale bodies.
+
+    orjson's JSONDecodeError subclasses the stdlib one, so malformed JSON still maps to 422.
+    Also enforces --max-body-bytes: a Content-Length over the limit is rejected without
+    reading the body; without one (chunked), the body is read as it lands and the 413 fires
+    the moment the running total passes the limit (P2), not after the whole body arrived.
+
+    For /predict and /predict/graph, a slot is admitted *before* any of that (P1): an
+    overloaded server answers 503 without buffering or parsing a byte. The slot is released
+    in `finally`, so every exit (413, 400, a validation error, the client disconnecting)
+    releases it exactly once.
+    """
+
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        handler = super().get_route_handler()
+        is_predict = self.path in PREDICT_PATHS
+
+        async def route_handler(request: Request) -> Response:
+            current: ServingState | None = request.app.state.serving
+            # Before the loader lands there is no ServingState to read a limit from yet;
+            # fall back to the default so a large body is still rejected before parsing.
+            limit = (
+                current.options.max_body_bytes if current is not None else DEFAULT_MAX_BODY_BYTES
+            )
+            wrapped = _OrjsonRequest(request.scope, request.receive)
+
+            admitted = False
+            if is_predict:
+                if current is None:
+                    raise _not_ready_error()
+                if not current.try_admit():
+                    raise _capacity_error(current)
+                admitted = True
+                wrapped.state.admitted_at = time.monotonic()
+
+            try:
+                content_length = request.headers.get("content-length")
+                if content_length is not None and content_length.isdigit():
+                    if int(content_length) > limit:
+                        return _body_too_large(int(content_length), limit)
+                else:
+                    result = await _read_body_limited(request, limit)
+                    if isinstance(result, JSONResponse):
+                        return result
+                    wrapped._body = result
+                return await handler(wrapped)
+            finally:
+                if admitted:
+                    assert current is not None
+                    current.release()
+
+        return route_handler
+
+
+# The predict routes: orjson response, and PredictResponse kept in the OpenAPI schema without
+# the response_model re-validation walk over every output.
+_PREDICT_ROUTE: dict[str, Any] = {
+    "response_class": NumpyJSONResponse,
+    "responses": {200: {"model": PredictResponse}},
+}
+
+
+def require_serving(request: Request) -> ServingState:
+    """The loaded model, or a 503.
+
+    Every route that needs a ServingState depends on this, so a route added later cannot
+    forget the guard by omitting a copy of it. /ready is deliberately not a caller: being
+    unloaded is its answer, not an error.
+    """
+    current: ServingState | None = request.app.state.serving
+    if current is None:
+        raise _not_ready_error()
+    return current
+
+
+def _predict_context(request: Request) -> dict[str, Any]:
+    """run_predict's per-request keywords. The parse/codec/infer split dict it fills lives in
+    the scope's state, which is where RequestIdMiddleware reads it back for the request
+    line (U1)."""
+    timings: dict[str, float] = {}
+    request.state.timings_ms = timings
+    return {
+        "admitted_at": request.state.admitted_at,
+        "parse_ms": getattr(request.state, "parse_ms", 0.0),
+        "timings_ms": timings,
+    }
 
 
 class RequestIdMiddleware:
@@ -245,25 +202,109 @@ class RequestIdMiddleware:
     handler rewrite headers, extra copies this doesn't need): reads X-Request-Id or makes
     one, stores it on request.state, and echoes it on the response. "See the server log"
     then has something to search for.
+
+    It also binds the id to `request_id_var` for the request, so every log line emitted
+    while serving it carries it, and (with `access_log`) writes the one request line (U1):
+    method, path, status, duration and, for the predict routes, the parse/codec/infer split
+    they leave in the scope's state as "timings_ms". WARNING from status 400 up, DEBUG for
+    the /health and /ready probes (a 503 from /ready while loading is its normal answer),
+    INFO otherwise.
     """
 
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, access_log: bool = True) -> None:
         self.app = app
+        self.access_log = access_log
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
 
+        start = time.perf_counter()
         request_id = Headers(scope=scope).get("x-request-id") or uuid.uuid4().hex[:16]
-        scope.setdefault("state", {})["request_id"] = request_id
+        state = scope.setdefault("state", {})
+        state["request_id"] = request_id
+        status: int | None = None
 
         async def send_with_request_id(message: Message) -> None:
+            nonlocal status
             if message["type"] == "http.response.start":
+                status = message["status"]
                 MutableHeaders(scope=message).append("x-request-id", request_id)
             await send(message)
 
-        await self.app(scope, receive, send_with_request_id)
+        token = request_id_var.set(request_id)
+        try:
+            await self.app(scope, receive, send_with_request_id)
+        except Exception:
+            # ServerErrorMiddleware, outside this one, turns it into the 500 response.
+            if status is None:
+                status = 500
+            raise
+        finally:
+            try:
+                if self.access_log and status is not None:
+                    self._log(scope, status, (time.perf_counter() - start) * 1000, state)
+            finally:
+                request_id_var.reset(token)
+
+    @staticmethod
+    def _log(scope: Scope, status: int, duration_ms: float, state: dict[str, Any]) -> None:
+        path = scope["path"]
+        if _route_path(scope) in _PROBE_PATHS:
+            level = logging.DEBUG
+        elif status >= 400:
+            level = logging.WARNING
+        else:
+            level = logging.INFO
+        if not access_logger.isEnabledFor(level):
+            return
+        extra: dict[str, Any] = {
+            "method": scope["method"],
+            "path": path,
+            "status": status,
+            "duration_ms": round(duration_ms, 2),
+        }
+        timings = state.get("timings_ms")
+        if timings:
+            extra["timings_ms"] = timings
+        access_logger.log(
+            level, "%s %s %d %.1f ms", scope["method"], path, status, duration_ms, extra=extra
+        )
+
+
+class ApiKeyMiddleware:
+    """DOWNSHIFT_SERVER_API_KEY (U7), read via settings.py so it applies to app_for() too
+    (ruling 5). None (unset) means unauthenticated - the caller already warned about that at
+    build_app time. Pure ASGI, like RequestIdMiddleware; /health and /ready are exempt so a
+    probe never needs the key.
+    """
+
+    def __init__(self, app: ASGIApp, api_key: str | None) -> None:
+        self.app = app
+        self.api_key = api_key
+        self._key_bytes = api_key.encode("utf-8") if api_key is not None else b""
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or self.api_key is None or _route_path(scope) in _PROBE_PATHS:
+            await self.app(scope, receive, send)
+            return
+
+        header = Headers(scope=scope).get("authorization", "")
+        scheme, _, token = header.partition(" ")
+        # Starlette decodes header bytes as latin-1, so latin-1 gets the client's raw bytes
+        # back; compare_digest on a non-ASCII str would raise (a 500) instead of failing.
+        if scheme.lower() != "bearer" or not hmac.compare_digest(
+            token.encode("latin-1"), self._key_bytes
+        ):
+            response = JSONResponse(
+                {"detail": "Authorization header is not set or incorrect"},
+                status_code=401,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+            await response(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
 
 
 def _loader_lifespan(
@@ -278,7 +319,15 @@ def _loader_lifespan(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        progress = LoadProgress()
+        app.state.load_progress = progress
+
         def run() -> None:
+            # Runs in a fresh Context (see below), so this set() is only ever visible to this
+            # thread's call stack - the phase-reporting calls inside engine.py's builders
+            # (U4) read it back via CURRENT_PROGRESS.get() without a parameter threaded
+            # through every builder and the CLI's own loader closure.
+            CURRENT_PROGRESS.set(progress)
             try:
                 app.state.serving = loader()
             except Exception:
@@ -288,7 +337,9 @@ def _loader_lifespan(
                 # debug. --log-level debug still sees it here.
                 logger.debug("model failed to load; /ready will not turn 200", exc_info=True)
 
-        thread = threading.Thread(target=run, name="downshift-loader", daemon=True)
+        thread = threading.Thread(
+            target=lambda: contextvars.Context().run(run), name="downshift-loader", daemon=True
+        )
         app.state.loader_thread = thread
         thread.start()
         yield
@@ -301,14 +352,32 @@ def build_app(
     *,
     loader: Callable[[], ServingState] | None = None,
     middleware: Sequence[str] = (),
+    api_key: str | None = API_KEY,
+    access_log: bool = True,
 ) -> FastAPI:
     """With `state`, the app serves it immediately (library use, tests). With `loader`
     instead, the app binds with no ServingState at all: /health is 200 right away, /ready
-    is 503, and /metadata and the predict routes are 503, until the loader (run on a
-    background thread started by the lifespan, once the app is actually served) lands one.
+    is 503, and /metadata, /schema and the predict routes are 503, until the loader (run on
+    a background thread started by the lifespan, once the app is actually served) lands one.
+
+    `api_key`, when set, requires "Authorization: Bearer <api_key>" on every route but
+    /health and /ready (U7); it defaults to DOWNSHIFT_SERVER_API_KEY (settings.API_KEY) so
+    the env var reaches app_for() and this function equally (ruling 5). Pass a value (or
+    None to force it off) to override that default for a library caller. An empty string
+    counts as unset: DOWNSHIFT_SERVER_API_KEY="" must not make "Bearer " a valid credential.
+
+    `access_log` False drops the one request line RequestIdMiddleware writes on the
+    `downshift.access` logger (U1); the request id is still set and echoed.
     """
     if (state is None) == (loader is None):
         raise ValueError("build_app needs exactly one of state or loader")
+
+    api_key = api_key or None
+    if api_key is None:
+        logger.warning(
+            "DOWNSHIFT_SERVER_API_KEY is not set, so the endpoints are unauthenticated. Set "
+            "it to require a fixed API key, or add your own authentication middleware."
+        )
 
     app = FastAPI(
         title="downshift",
@@ -317,7 +386,8 @@ def build_app(
     )
     app.router.route_class = OrjsonRoute
     app.state.serving = state
-    app.add_middleware(RequestIdMiddleware)
+    app.add_middleware(ApiKeyMiddleware, api_key=api_key)
+    app.add_middleware(RequestIdMiddleware, access_log=access_log)
     load_middleware(app, middleware)
 
     @app.exception_handler(Exception)
@@ -327,12 +397,17 @@ def build_app(
         # response bypasses our send wrapper; set the header here too, directly on the
         # response, rather than relying on that wrapper for this one path.
         request_id = getattr(request.state, "request_id", None)
-        logger.exception(
-            "unhandled exception serving %s %s (request_id=%s)",
-            request.method,
-            request.url.path,
-            request_id,
-        )
+        # RequestIdMiddleware has already reset request_id_var by the time this runs.
+        token = request_id_var.set(request_id)
+        try:
+            logger.exception(
+                "unhandled exception serving %s %s (request_id=%s)",
+                request.method,
+                request.url.path,
+                request_id,
+            )
+        finally:
+            request_id_var.reset(token)
         return JSONResponse(
             {
                 "detail": "inference failed on the server; see the server log",
@@ -350,22 +425,28 @@ def build_app(
     async def ready(request: Request) -> JSONResponse:
         current: ServingState | None = request.app.state.serving
         if current is None:
-            return JSONResponse({"ready": False, "phase": "export"}, status_code=503)
+            progress: LoadProgress | None = getattr(request.app.state, "load_progress", None)
+            phase = progress.phase.value if progress is not None else None
+            return JSONResponse({"ready": False, "phase": phase}, status_code=503)
         status = 200 if current.ready else 503
         return JSONResponse({"ready": current.ready}, status_code=status)
 
     @app.get("/metadata", response_model=MetadataResponse)
-    async def metadata(request: Request) -> MetadataResponse:
-        current: ServingState | None = request.app.state.serving
-        if current is None:
-            raise _not_ready_error()
+    async def metadata(current: ServingState = Depends(require_serving)) -> MetadataResponse:
+        # Free-text fields quote the path an exception was handed (ORT's "Load model from
+        # ...", transformers' "Can't load tokenizer for ..."); a client gets the name only.
+        located = () if current.source_kind in LABEL_KINDS else (current.source,)
+        paths = (*located, current.verdict.onnx_path)
+        verdict = current.verdict.to_dict()
+        verdict["reason"] = hide_paths(verdict["reason"], paths)
+        verdict["warnings"] = [hide_paths(w, paths) for w in verdict["warnings"]]
         return MetadataResponse(
-            model=current.source,
+            model=display_source(current.source, current.source_kind),
             family=current.verdict.model_family,
-            verdict=current.verdict.to_dict(),
-            backend=current.backend.metadata().to_dict(),
+            verdict=VerdictInfo.model_validate(verdict),
+            backend=BackendInfo.model_validate(current.backend.metadata().to_dict()),
             input_names=list(current.input_names),
-            notes=list(current.notes),
+            notes=[hide_paths(note, paths) for note in current.notes],
             version=downshift.__version__,
             limits={
                 "max_body_bytes": current.options.max_body_bytes,
@@ -375,30 +456,38 @@ def build_app(
                 "request_timeout": current.options.request_timeout,
             },
             boot=dict(current.timings),
-            warmup=(
-                {
-                    "count": current.warmup_stats.count,
-                    "mean_ms": current.warmup_stats.mean_ms,
-                    "synthesized": current.warmup_stats.synthesized,
-                }
-                if current.warmup_stats is not None
-                else None
-            ),
+            warmup=asdict(current.warmup_stats) if current.warmup_stats is not None else None,
         )
 
+    @app.get("/schema", response_model=SchemaResponse)
+    async def schema(
+        request: Request, current: ServingState = Depends(require_serving)
+    ) -> SchemaResponse:
+        """What to POST: every input's name, dtype and shape, and an example body.
+
+        Cheap enough to build per request (it reads the backend's declared IO and fills a
+        small example), so nothing is cached and it always matches the running graph.
+        """
+        from downshift.serve.describe import describe
+
+        return describe(current, f"{str(request.base_url).rstrip('/')}/predict")
+
     @app.post("/predict", **_PREDICT_ROUTE)
-    async def predict(req: PredictRequest, request: Request) -> NumpyJSONResponse:
-        current: ServingState | None = request.app.state.serving
-        if current is None:
-            raise _not_ready_error()
-        return await run_predict(current, req.inputs, req.output_encoding)
+    async def predict(
+        req: PredictRequest, request: Request, current: ServingState = Depends(require_serving)
+    ) -> NumpyJSONResponse:
+        text = as_batch(req.text) if req.text is not None else None
+        return await run_predict(
+            current, req.inputs, req.output_encoding, text, **_predict_context(request)
+        )
 
     @app.post("/predict/graph", **_PREDICT_ROUTE)
-    async def predict_graph(req: GraphPredictRequest, request: Request) -> NumpyJSONResponse:
-        current: ServingState | None = request.app.state.serving
-        if current is None:
-            raise _not_ready_error()
-        if not {"x", "edge_index"} <= set(current.input_names):
+    async def predict_graph(
+        req: GraphPredictRequest,
+        request: Request,
+        current: ServingState = Depends(require_serving),
+    ) -> NumpyJSONResponse:
+        if not GRAPH_INPUTS <= set(current.input_names):
             raise HTTPException(
                 400,
                 f"model is not graph-shaped: inputs are {list(current.input_names)}, "
@@ -409,6 +498,6 @@ def build_app(
         inputs: dict[str, Any] = {"x": req.x, "edge_index": req.edge_index}
         if req.edge_attr is not None:
             inputs["edge_attr"] = req.edge_attr
-        return await run_predict(current, inputs, req.output_encoding)
+        return await run_predict(current, inputs, req.output_encoding, **_predict_context(request))
 
     return app

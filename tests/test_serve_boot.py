@@ -4,7 +4,6 @@ lifespan/signal handling on Windows (see PLAN_0.4.0.md's risk table), which the 
 TestClient tests in tests/test_serve.py cannot.
 """
 
-import os
 import socket
 import subprocess
 import sys
@@ -12,17 +11,11 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from pathlib import Path
 
-SRC = str(Path(__file__).resolve().parent.parent / "src")
+from tests.conftest import subprocess_env
+
 MODEL = "downshift.demo.clean_mlp:make_model"
 BOOT_TIMEOUT = 20
-
-
-def _env() -> dict:
-    env = dict(os.environ)
-    env["PYTHONPATH"] = SRC + os.pathsep + env.get("PYTHONPATH", "")
-    return env
 
 
 def _free_port() -> int:
@@ -62,7 +55,7 @@ def test_ready_is_503_then_200_with_no_restart() -> None:
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
-        env=_env(),
+        env=subprocess_env(),
     )
     # Drained continuously: left unread, a few hundred polls' worth of uvicorn log lines
     # would fill the pipe buffer and block the child on its next write, hanging this test.

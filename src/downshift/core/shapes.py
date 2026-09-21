@@ -22,6 +22,17 @@ def alternative_sizes(base_size: int, lo: int = 1, hi: int | None = None) -> lis
     return sorted(candidates)
 
 
+def pick_size(candidates: list[int]) -> int:
+    """Draw one candidate size from torch's global RNG.
+
+    verify() runs every sample inside torch.random.fork_rng() after torch.manual_seed(seed),
+    so drawing from the global RNG is what carries --seed into a sampler without widening the
+    Adapter protocol. Every sampler goes through here rather than through `random`, which
+    would be seeded once at prepare() time and never see the seed at all.
+    """
+    return int(candidates[torch.randint(len(candidates), ())])
+
+
 def dim_bounds(spec: dict[int, Any] | None, axis: int) -> tuple[int, int]:
     """(min, max) for one axis of a dynamic_shapes entry, e.g. {0: Dim("n", min=1, max=64)}.
 

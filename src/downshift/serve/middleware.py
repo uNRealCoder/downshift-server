@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from fastapi import FastAPI
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from downshift.loading import import_object
+from downshift._imports import import_object
 
 
 def load_middleware(app: FastAPI, specs: Sequence[str]) -> None:

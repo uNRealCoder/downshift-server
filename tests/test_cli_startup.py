@@ -2,20 +2,13 @@
 measures a cold interpreter, the way a user's shell actually invokes the CLI.
 """
 
-import os
 import subprocess
 import sys
 import time
-from pathlib import Path
+
+from tests.conftest import subprocess_env
 
 HELP_BUDGET_SECONDS = 1.5
-SRC = str(Path(__file__).resolve().parent.parent / "src")
-
-
-def _env() -> dict:
-    env = dict(os.environ)
-    env["PYTHONPATH"] = SRC + os.pathsep + env.get("PYTHONPATH", "")
-    return env
 
 
 def _run(*args: str) -> subprocess.CompletedProcess:
@@ -23,7 +16,7 @@ def _run(*args: str) -> subprocess.CompletedProcess:
         [sys.executable, "-c", "from downshift.cli.main import app; app()", *args],
         capture_output=True,
         text=True,
-        env=_env(),
+        env=subprocess_env(),
     )
 
 
@@ -32,7 +25,7 @@ def test_cli_main_import_leaves_torch_out_of_sys_modules() -> None:
         [sys.executable, "-c", "import downshift.cli.main, sys; assert 'torch' not in sys.modules"],
         capture_output=True,
         text=True,
-        env=_env(),
+        env=subprocess_env(),
     )
     assert result.returncode == 0, result.stderr
 

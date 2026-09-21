@@ -14,6 +14,7 @@ from torch import nn
 
 from downshift.adapters._flatten import build_shim_class
 from downshift.adapters.base import Prepared
+from downshift.adapters.registry import Family
 from downshift.core.shapes import infer_dynamic_shapes
 
 _GUESS_SPATIAL = 32
@@ -44,7 +45,7 @@ def _guess_single_tensor_input(model: nn.Module) -> torch.Tensor | None:
 
 
 class GenericAdapter:
-    name = "generic"
+    name = Family.generic
     family = "generic-torch"
 
     def matches(self, model: nn.Module, example_inputs: tuple | None) -> bool:

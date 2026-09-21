@@ -14,7 +14,8 @@ from torch_geometric.nn import MessagePassing
 
 from downshift.adapters._flatten import build_shim_class
 from downshift.adapters.base import Prepared, VaryFn
-from downshift.core.shapes import alternative_sizes, dim_bounds
+from downshift.adapters.registry import Family
+from downshift.core.shapes import alternative_sizes, dim_bounds, pick_size
 
 BASE_FIELD_NAMES = ("x", "edge_index")  # edge_attr appended when present on the input Data
 _GUESS_NODES = 8
@@ -39,8 +40,8 @@ def _first_in_channels(model: nn.Module) -> int | None:
 
 
 class PyGAdapter:
-    name = "pyg"
-    family = "pyg"
+    name = Family.pyg
+    family = Family.pyg
 
     def matches(self, model: nn.Module, example_inputs: tuple | None) -> bool:
         if is_pyg_data(example_inputs):
@@ -107,8 +108,8 @@ def make_vary_fn(
     def vary(i: int) -> tuple:
         if i == 0:
             return base_inputs
-        n = n_candidates[torch.randint(len(n_candidates), ())] if n_candidates else base_n
-        e = e_candidates[torch.randint(len(e_candidates), ())] if e_candidates else base_e
+        n = pick_size(n_candidates) if n_candidates else base_n
+        e = pick_size(e_candidates) if e_candidates else base_e
 
         sample: list = [None] * len(field_names)
         sample[x_idx] = torch.randn(n, in_channels, dtype=base_x.dtype)

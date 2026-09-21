@@ -16,6 +16,7 @@ from tests.models import gnn_gat, gnn_gcn, gnn_sage
 FIXTURES = [gnn_gcn, gnn_sage, gnn_gat]
 
 
+@pytest.mark.needs_torch_26
 @pytest.mark.parametrize("module", FIXTURES, ids=lambda m: m.__name__.rsplit(".", 1)[-1])
 def test_gnn_fixture_is_clean(module) -> None:
     model = module.make_model()
@@ -29,6 +30,7 @@ def test_gnn_fixture_is_clean(module) -> None:
     assert verdict.numerics.shape_generalization
 
 
+@pytest.mark.needs_torch_26
 def test_gnn_verdict_survives_node_edge_count_mismatch() -> None:
     """If N and E were tied to one Dim, varying the edge count while the node count stays
     put would blow up during verification."""

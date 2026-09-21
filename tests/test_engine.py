@@ -11,7 +11,7 @@ import torch
 
 import downshift
 from downshift.core.verdict import ExportVerdict, prepare_model
-from downshift.loading import LoadedModel, load_model
+from downshift.loading import LoadedModel, LoadSpec, load_model
 from downshift.serve import backends as backends_mod
 from downshift.serve.backends import InferenceInputError, OnnxRuntimeBackend, TorchBackend
 from downshift.serve.engine import (
@@ -73,7 +73,7 @@ def test_torch_backend_option_skips_export(serve_fixture):
 
 
 def test_backends_agree_on_the_same_model():
-    loaded = load_model("tests.models.clean_mlp:make_model")
+    loaded = load_model(LoadSpec("tests.models.clean_mlp:make_model"))
     same = LoadedModel(
         source=loaded.source, model=loaded.model, example_inputs=loaded.example_inputs
     )
@@ -92,7 +92,7 @@ def test_backends_agree_on_the_same_model():
 
 def test_onnx_file_without_reference_is_served_unverified(exported_mlp):
     path, _, _ = exported_mlp
-    state = prepare_serving(load_model(str(path)), ServeOptions(warmup=1))
+    state = prepare_serving(load_model(LoadSpec(str(path))), ServeOptions(warmup=1))
 
     assert state.verdict.status == "UNVERIFIED"
     assert state.backend.name == "onnxruntime"
@@ -124,7 +124,7 @@ def test_bare_onnx_warmup_runs_on_synthesized_inputs(exported_mlp, monkeypatch):
 
     monkeypatch.setattr(OnnxRuntimeBackend, "infer", counting_infer)
 
-    state = prepare_serving(load_model(str(path)), ServeOptions(warmup=3))
+    state = prepare_serving(load_model(LoadSpec(str(path))), ServeOptions(warmup=3))
 
     assert len(calls) == 3
     assert calls[0]["x"].shape == (1, 16)
@@ -147,7 +147,9 @@ def test_prepare_serving_records_phase_timings(mlp_state):
 def test_prepare_serving_records_only_verify_for_a_bare_onnx_with_reference(exported_mlp):
     path, model, _ = exported_mlp
     reference = LoadedModel(source="ref", model=model, example_inputs=clean_mlp.make_inputs())
-    state = prepare_serving(load_model(str(path)), ServeOptions(warmup=1), reference=reference)
+    state = prepare_serving(
+        load_model(LoadSpec(str(path))), ServeOptions(warmup=1), reference=reference
+    )
     assert "export" not in state.timings
     assert set(state.timings) >= {"verify", "session", "warmup"}
 
@@ -156,7 +158,9 @@ def test_onnx_file_with_reference_is_verified(exported_mlp):
     path, model, _ = exported_mlp
     reference = LoadedModel(source="ref", model=model, example_inputs=clean_mlp.make_inputs())
 
-    state = prepare_serving(load_model(str(path)), ServeOptions(warmup=1), reference=reference)
+    state = prepare_serving(
+        load_model(LoadSpec(str(path))), ServeOptions(warmup=1), reference=reference
+    )
 
     assert state.verdict.status == "CLEAN", state.verdict.reason
     assert state.backend.name == "onnxruntime"
@@ -165,7 +169,7 @@ def test_onnx_file_with_reference_is_verified(exported_mlp):
 
 def test_torch_backend_rejects_missing_input():
     backend = TorchBackend(clean_mlp.make_model(), ("x",), device="cpu")
-    with pytest.raises(KeyError, match="x"):
+    with pytest.raises(InferenceInputError, match="missing inputs"):
         backend.infer({"y": np.zeros((1, 16), dtype=np.float32)})
 
 
@@ -228,7 +232,7 @@ def test_onnxruntime_backend_applies_explicit_thread_counts(exported_mlp):
 def test_serve_options_thread_counts_reach_the_ort_session(exported_mlp):
     path, _, _ = exported_mlp
     state = prepare_serving(
-        load_model(str(path)),
+        load_model(LoadSpec(str(path))),
         ServeOptions(warmup=1, intra_op_threads=4, inter_op_threads=2),
     )
     opts = state.backend.session.get_session_options()
@@ -336,7 +340,7 @@ def _count_sessions(monkeypatch) -> list[int]:
 def test_clean_model_serves_from_exactly_one_inference_session(monkeypatch):
     calls = _count_sessions(monkeypatch)
 
-    loaded = load_model("tests.models.clean_mlp:make_model")
+    loaded = load_model(LoadSpec("tests.models.clean_mlp:make_model"))
     state = prepare_serving(loaded, ServeOptions(warmup=1))
 
     assert state.verdict.status == "CLEAN"
@@ -346,7 +350,7 @@ def test_clean_model_serves_from_exactly_one_inference_session(monkeypatch):
 def test_explicit_intra_op_threads_builds_a_second_session(monkeypatch):
     calls = _count_sessions(monkeypatch)
 
-    loaded = load_model("tests.models.clean_mlp:make_model")
+    loaded = load_model(LoadSpec("tests.models.clean_mlp:make_model"))
     state = prepare_serving(loaded, ServeOptions(warmup=1, intra_op_threads=2))
 
     assert state.verdict.status == "CLEAN"

@@ -28,6 +28,8 @@ def test_defaults_with_no_env_set(monkeypatch: pytest.MonkeyPatch) -> None:
         "MAX_INPUT_BYTES",
         "MAX_BODY_BYTES",
         "MAX_CONCURRENCY",
+        "MAX_QUEUE",
+        "REQUEST_TIMEOUT",
     )
     for name in names:
         monkeypatch.delenv(f"DOWNSHIFT_{name}", raising=False)
@@ -41,8 +43,10 @@ def test_defaults_with_no_env_set(monkeypatch: pytest.MonkeyPatch) -> None:
         8,
         "json",
         256 * 1024 * 1024,
-        256 * 1024 * 1024,
+        64 * 1024 * 1024,
         1,
+        64,
+        30.0,
     )
 
 

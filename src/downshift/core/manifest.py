@@ -11,6 +11,7 @@ import onnxruntime
 import torch
 
 from downshift.core.verdict import ExportVerdict
+from downshift.sources import hide_paths, path_basename
 
 
 class _DTYPE_NAMES(IntEnum):
@@ -56,12 +57,20 @@ def observed_dtype(onnx_path: Path) -> str | None:
 def build_manifest(
     onnx_path: Path, verdict: ExportVerdict, source_path: Path | None, package_version: str
 ) -> dict:
+    # The manifest travels with the exported file, so it names files and never records where
+    # they sat on this machine (which would carry the exporter's directory layout, and their
+    # username, to whoever receives the artifact). The hashes identify the files.
+    paths = (onnx_path, source_path)
+    verdict_dict = verdict.to_dict()
+    verdict_dict["onnx_path"] = onnx_path.name if verdict_dict["onnx_path"] else None
+    verdict_dict["reason"] = hide_paths(verdict_dict["reason"], paths)
+    verdict_dict["warnings"] = [hide_paths(w, paths) for w in verdict_dict["warnings"]]
     return {
         "downshift_version": package_version,
         "created_utc": datetime.now(UTC).isoformat(timespec="seconds"),
         "onnx_file": onnx_path.name,
         "onnx_sha256": _sha256(onnx_path),
-        "source_model": str(source_path) if source_path else None,
+        "source_model": path_basename(str(source_path)) if source_path else None,
         "source_sha256": _sha256(source_path) if source_path and source_path.is_file() else None,
         "versions": {
             "torch": torch.__version__,
@@ -71,7 +80,7 @@ def build_manifest(
         "opset": verdict.opset,
         "observed_dtype": observed_dtype(onnx_path),
         "execution_providers_available": onnxruntime.get_available_providers(),
-        "verdict": verdict.to_dict(),
+        "verdict": verdict_dict,
     }
 
 

@@ -13,9 +13,9 @@ from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from downshift.loading import LoadedModel, load_model
-from downshift.serve import app as serve_app
+from downshift.loading import LoadedModel, LoadSpec, load_model
 from downshift.serve import app_for
+from downshift.serve import predict as serve_predict
 from downshift.serve.app import build_app
 from downshift.serve.engine import ServeOptions, prepare_serving
 from downshift.serve.schemas import OutputEncoding
@@ -51,16 +51,6 @@ def _assert_same_outputs(client: TestClient, path: str, reference_body: dict, bo
 
 def _with_options(state, **overrides):
     return dataclasses.replace(state, options=dataclasses.replace(state.options, **overrides))
-
-
-@pytest.fixture(scope="module")
-def mlp_client(mlp_state) -> TestClient:
-    return TestClient(build_app(mlp_state))
-
-
-@pytest.fixture(scope="module")
-def gcn_client(serve_fixture) -> TestClient:
-    return TestClient(build_app(serve_fixture("gnn_gcn")))
 
 
 @pytest.fixture(scope="module")
@@ -398,7 +388,7 @@ def test_predict_output_serializes(mlp_state, monkeypatch, output):
 def test_predict_unsupported_dtype_falls_back_per_array(mlp_state, monkeypatch):
     # Simulate a dtype this orjson cannot write natively (e.g. float128 on Linux) without
     # depending on the platform: drop float32 from the supported set for this test only.
-    monkeypatch.setattr(serve_app, "_ORJSON_DTYPES", serve_app._ORJSON_DTYPES - {"float32"})
+    monkeypatch.setattr(serve_predict, "_ORJSON_DTYPES", serve_predict._ORJSON_DTYPES - {"float32"})
     fallback = np.array([[1.0, 2.0]], dtype=np.float32)
     native = np.array([[3, 4]], dtype=np.int64)
     client = _client_emitting(mlp_state, monkeypatch, {"a": fallback, "b": native})
@@ -410,7 +400,7 @@ def test_predict_unsupported_dtype_falls_back_per_array(mlp_state, monkeypatch):
 
 
 def test_backends_agree_on_same_contract():
-    loaded = load_model("tests.models.clean_mlp:make_model")
+    loaded = load_model(LoadSpec("tests.models.clean_mlp:make_model"))
     same_weights = LoadedModel(
         source=loaded.source, model=loaded.model, example_inputs=loaded.example_inputs
     )
@@ -491,10 +481,11 @@ def test_ready_and_predict_503_until_the_loader_lands(mlp_state):
 
         ready = client.get("/ready")
         assert ready.status_code == 503
-        assert ready.json() == {"ready": False, "phase": "export"}
+        assert ready.json() == {"ready": False, "phase": "load"}
 
         for resp in (
             client.get("/metadata"),
+            client.get("/schema"),
             client.post("/predict", json=MLP_INPUT),
         ):
             assert resp.status_code == 503, resp.text
@@ -506,6 +497,7 @@ def test_ready_and_predict_503_until_the_loader_lands(mlp_state):
 
         assert client.get("/ready").json() == {"ready": True}
         assert client.get("/metadata").status_code == 200
+        assert client.get("/schema").status_code == 200
         assert client.post("/predict", json=MLP_INPUT).status_code == 200
 
 

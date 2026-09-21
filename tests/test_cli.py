@@ -1,9 +1,7 @@
 """CLI contract: exit codes and JSON. Banner and table text are deliberately not asserted."""
 
 import json
-import logging
 import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -15,6 +13,9 @@ from typer.testing import CliRunner
 import downshift
 from downshift.cli import main
 from downshift.cli.main import app
+from downshift.loading import LoadSpec
+from downshift.serve.options import ServeOptions
+from downshift.serve.schemas import OutputEncoding
 from tests.models import clean_mlp
 
 CLEAN = "tests.models.clean_mlp:make_model"
@@ -98,24 +99,6 @@ def _custom_vary(i: int) -> tuple:
     from tests.models import clean_mlp
 
     return clean_mlp.make_inputs()
-
-
-def test_check_log_format_json_is_accepted():
-    result = run("check", CLEAN, "--log-format", "json", "--json")
-    assert result.exit_code == 0, result.output
-
-
-def test_json_formatter_serialises_exc_info():
-    try:
-        raise ValueError("boom")
-    except ValueError:
-        exc_info = sys.exc_info()
-    record = logging.LogRecord("test", logging.ERROR, __file__, 1, "failed", (), exc_info)
-
-    payload = json.loads(main._JsonFormatter().format(record))
-
-    assert payload["level"] == "ERROR"
-    assert "ValueError" in payload["exc_info"]
 
 
 def test_check_unknown_adapter_is_a_usage_error():
@@ -216,7 +199,7 @@ def test_export_custom_name(tmp_path: Path):
     [
         (CLEAN, "clean_mlp"),
         ("./gat_fraud_v3.pt", "gat_fraud_v3"),
-        ("org/repo", "repo"),
+        ("models/bert-base/", "bert-base"),
         ("model.onnx", "model"),
     ],
 )
@@ -301,7 +284,7 @@ def test_serve_passes_max_body_bytes_and_max_concurrency(monkeypatch):
     options = captured["app"].state.serving.options
     assert options.max_body_bytes == 8192
     assert options.max_concurrency == 4
-    assert "Concurrency" in result.output
+    assert "Capacity" in result.output
 
 
 def test_serve_passes_max_queue_and_request_timeout(monkeypatch):
@@ -309,17 +292,24 @@ def test_serve_passes_max_queue_and_request_timeout(monkeypatch):
     options = captured["app"].state.serving.options
     assert options.max_queue == 8
     assert options.request_timeout == 2.5
-    assert "Concurrency" in result.output
+    assert "Capacity" in result.output
+
+
+def _app_access_log(api) -> bool:
+    """uvicorn's own access log is always off; the app's RequestIdMiddleware writes the line."""
+    middleware = next(m for m in api.user_middleware if m.cls.__name__ == "RequestIdMiddleware")
+    return middleware.kwargs["access_log"]
 
 
 def test_serve_access_log_defaults_to_enabled(monkeypatch):
     _, captured = _serve_captured(monkeypatch)
-    assert captured["access_log"] is True
+    assert captured["access_log"] is False
+    assert _app_access_log(captured["app"]) is True
 
 
 def test_serve_no_access_log_disables_it(monkeypatch):
     _, captured = _serve_captured(monkeypatch, "--no-access-log")
-    assert captured["access_log"] is False
+    assert _app_access_log(captured["app"]) is False
 
 
 def test_serve_rejects_unknown_output_encoding():
@@ -362,12 +352,12 @@ def test_serve_backend_onnxruntime_and_force_onnx_on_degraded_is_accepted(monkey
 
 def test_serve_workers_uses_an_import_string_factory(monkeypatch):
     _, captured = _serve_captured(monkeypatch, "--workers", "2")
-    assert captured["app"] == "downshift.cli.main:_serve_app_factory"
+    assert captured["app"] == "downshift.cli.runtime:_serve_app_factory"
     assert captured["workers"] == 2
     assert captured["factory"] is True
 
-    args = main.ServeArgs(**json.loads(os.environ[main._SERVE_ARGS_ENV]))
-    assert args.model == CLEAN
+    args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
+    assert args.load.model == CLEAN
 
 
 def test_serve_workers_splits_threads_across_the_cpu_count(monkeypatch):
@@ -375,52 +365,46 @@ def test_serve_workers_splits_threads_across_the_cpu_count(monkeypatch):
     _, captured = _serve_captured(monkeypatch, "--workers", "4")
     assert captured["workers"] == 4
 
-    args = main.ServeArgs(**json.loads(os.environ[main._SERVE_ARGS_ENV]))
-    assert args.intra_op_threads == 4
+    args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
+    assert args.options.intra_op_threads == 4
 
 
 def test_serve_workers_explicit_intra_op_threads_wins(monkeypatch):
     monkeypatch.setattr(os, "cpu_count", lambda: 16)
     _serve_captured(monkeypatch, "--workers", "4", "--intra-op-threads", "7")
 
-    args = main.ServeArgs(**json.loads(os.environ[main._SERVE_ARGS_ENV]))
-    assert args.intra_op_threads == 7
+    args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
+    assert args.options.intra_op_threads == 7
+
+
+def _rebuilt_app():
+    """What a --workers worker does: rebuild the app from the env, then let the loader run."""
+    api = main._serve_app_factory()
+    with TestClient(api):
+        api.state.loader_thread.join(timeout=60)
+    return api
 
 
 def test_serve_app_factory_rebuilds_the_app_from_env(monkeypatch):
     pytest.importorskip("downshift.serve.app")
     args = main.ServeArgs(
-        model=CLEAN,
-        inputs=None,
-        model_class=None,
-        unsafe_load=False,
-        adapter=None,
-        k=1,
-        dynamic=None,
+        load=LoadSpec(CLEAN),
+        options=ServeOptions(
+            k=1,
+            device="cpu",
+            warmup=1,
+            output_encoding=OutputEncoding.base64,
+            max_input_bytes=1024,
+            max_body_bytes=2048,
+            max_concurrency=2,
+        ),
         reference=None,
         middleware=None,
-        backend="auto",
-        force_onnx=False,
-        device="cpu",
-        warmup=1,
-        intra_op_threads=0,
-        inter_op_threads=0,
-        output_encoding="base64",
-        max_input_bytes=1024,
-        max_body_bytes=2048,
-        max_concurrency=2,
-        max_queue=64,
-        request_timeout=0.0,
-        atol=None,
-        rtol=None,
-        seed=0,
-        vary=None,
         log_level="warning",
-        log_format="text",
     )
-    monkeypatch.setenv(main._SERVE_ARGS_ENV, json.dumps(main.asdict(args)))
+    monkeypatch.setenv(main._SERVE_ARGS_ENV, args.to_json())
 
-    api = main._serve_app_factory()
+    api = _rebuilt_app()
     assert api.state.serving.verdict.status == "CLEAN"
     assert api.state.serving.options.output_encoding == "base64"
     assert api.state.serving.options.max_input_bytes == 1024
@@ -437,10 +421,10 @@ def test_serve_workers_writes_and_ships_the_onnx_artifact(monkeypatch):
     def fake_run(app, **kw):
         seen["app"] = app
         seen.update(kw)
-        args = main.ServeArgs(**json.loads(os.environ[main._SERVE_ARGS_ENV]))
+        args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
         seen["args"] = args
-        assert args.artifact_onnx_path is not None
-        seen["onnx_bytes"] = Path(args.artifact_onnx_path).read_bytes()
+        assert args.artifact.onnx_path is not None
+        seen["onnx_bytes"] = Path(args.artifact.onnx_path).read_bytes()
 
     monkeypatch.setattr(uvicorn, "run", fake_run)
     result = run("serve", CLEAN, "--warmup", "1", "--workers", "2", "--no-access-log")
@@ -449,10 +433,10 @@ def test_serve_workers_writes_and_ships_the_onnx_artifact(monkeypatch):
     assert seen["workers"] == 2
     assert seen["access_log"] is False
     args = seen["args"]
-    assert args.artifact_backend == "onnxruntime"
-    assert args.artifact_verdict is not None
-    assert args.artifact_verdict["status"] == "CLEAN"
-    assert args.artifact_input_names == ["x"]
+    assert args.artifact.backend == "onnxruntime"
+    assert args.artifact.verdict is not None
+    assert args.artifact.verdict["status"] == "CLEAN"
+    assert args.artifact.input_names == ["x"]
     assert len(seen["onnx_bytes"]) > 0
 
 
@@ -464,11 +448,11 @@ def test_serve_workers_degraded_ships_a_torch_artifact_and_warns(monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert "each worker independently reloads and re-warms" in result.output
-    args = main.ServeArgs(**json.loads(os.environ[main._SERVE_ARGS_ENV]))
-    assert args.artifact_backend == "torch"
-    assert args.artifact_verdict is not None
-    assert args.artifact_verdict["status"] == "DEGRADED"
-    assert args.artifact_onnx_path is None
+    args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
+    assert args.artifact.backend == "torch"
+    assert args.artifact.verdict is not None
+    assert args.artifact.verdict["status"] == "DEGRADED"
+    assert args.artifact.onnx_path is None
 
 
 def test_serve_app_factory_from_onnx_artifact_never_calls_capture(monkeypatch, tmp_path):
@@ -487,43 +471,25 @@ def test_serve_app_factory_from_onnx_artifact_never_calls_capture(monkeypatch, t
     monkeypatch.setattr(verdict_mod, "capture", boom)
 
     args = main.ServeArgs(
-        model=CLEAN,
-        inputs=None,
-        model_class=None,
-        unsafe_load=False,
-        adapter=None,
-        k=1,
-        dynamic=None,
+        load=LoadSpec(CLEAN),
+        options=ServeOptions(
+            k=1, device="cpu", warmup=1, max_input_bytes=1024, max_body_bytes=2048
+        ),
         reference=None,
         middleware=None,
-        backend="auto",
-        force_onnx=False,
-        device="cpu",
-        warmup=1,
-        intra_op_threads=0,
-        inter_op_threads=0,
-        output_encoding="json",
-        max_input_bytes=1024,
-        max_body_bytes=2048,
-        max_concurrency=1,
-        max_queue=64,
-        request_timeout=0.0,
-        atol=None,
-        rtol=None,
-        seed=0,
-        vary=None,
         log_level="warning",
-        log_format="text",
-        artifact_backend="onnxruntime",
-        artifact_verdict=verdict.to_dict(),
-        artifact_input_names=list(verdict.input_names),
-        artifact_notes=[],
-        artifact_onnx_path=str(onnx_path),
-        artifact_feeds_path=None,
+        artifact=main.ArtifactHandoff(
+            backend="onnxruntime",
+            verdict=verdict.to_dict(),
+            input_names=list(verdict.input_names),
+            notes=[],
+            onnx_path=str(onnx_path),
+            feeds_path=None,
+        ),
     )
-    monkeypatch.setenv(main._SERVE_ARGS_ENV, json.dumps(main.asdict(args)))
+    monkeypatch.setenv(main._SERVE_ARGS_ENV, args.to_json())
 
-    api = main._serve_app_factory()
+    api = _rebuilt_app()
 
     assert api.state.serving.verdict.status == "CLEAN"
     assert api.state.serving.backend.name == "onnxruntime"

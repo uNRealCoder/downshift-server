@@ -5,18 +5,10 @@ torch_geometric at module level, which would make them look "in play" no matter 
 registry does.
 """
 
-import os
 import subprocess
 import sys
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
-
-def _env() -> dict:
-    env = dict(os.environ)
-    env["PYTHONPATH"] = str(REPO_ROOT / "src") + os.pathsep + str(REPO_ROOT)
-    return env
+from tests.conftest import REPO_ROOT, subprocess_env
 
 
 def _run(script: str) -> subprocess.CompletedProcess:
@@ -25,7 +17,7 @@ def _run(script: str) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         cwd=str(REPO_ROOT),
-        env=_env(),
+        env=subprocess_env(REPO_ROOT),
     )
 
 

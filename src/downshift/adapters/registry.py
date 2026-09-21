@@ -6,25 +6,37 @@ silently.
 
 import importlib.util
 import sys
+from enum import StrEnum
 from importlib import import_module
 from importlib.metadata import entry_points
 from pathlib import Path
 
 from torch import nn
 
+from downshift._imports import LoadError
 from downshift.adapters.base import Adapter
-from downshift.loading import LoadError
 
 ENTRY_POINT_GROUP = "downshift.adapters"
+
+
+class Family(StrEnum):
+    """The built-in adapter names, so "hf"/"pyg"/"generic" aren't repeated as string literals
+    across this module, loading.py and the CLI. A custom adapter's own `name` is still a plain
+    string - this only names the three downshift ships."""
+
+    hf = "hf"
+    pyg = "pyg"
+    generic = "generic"
+
 
 # Most specific first; generic last so it only wins when nothing else matches. The third
 # element is the module whose presence in sys.modules means the family is actually in play
 # (so discovery never imports transformers/torch_geometric on their behalf); None for generic,
 # which has no optional dependency to gate on.
 _BUILTIN_SPECS = (
-    ("hf", "downshift.adapters.hf:ADAPTER", "transformers"),
-    ("pyg", "downshift.adapters.pyg:ADAPTER", "torch_geometric"),
-    ("generic", "downshift.adapters.generic:ADAPTER", None),
+    (Family.hf, "downshift.adapters.hf:ADAPTER", "transformers"),
+    (Family.pyg, "downshift.adapters.pyg:ADAPTER", "torch_geometric"),
+    (Family.generic, "downshift.adapters.generic:ADAPTER", None),
 )
 _BUILTIN_VALUES = frozenset(spec for _, spec, _ in _BUILTIN_SPECS)
 
@@ -116,9 +128,9 @@ def available() -> dict[str, Adapter]:
         if adapter is not None:
             adapters.setdefault(adapter.name, adapter)
     # Generic must be tried last regardless of registration order.
-    generic = adapters.pop("generic", None)
+    generic = adapters.pop(Family.generic, None)
     if generic is not None:
-        adapters["generic"] = generic
+        adapters[Family.generic] = generic
     _cache[key] = adapters
     return adapters
 

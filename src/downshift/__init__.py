@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from downshift._version import __version__
+from downshift.settings import DEFAULT_SAMPLES
 
 if TYPE_CHECKING:
     from downshift.adapters.base import Adapter, Prepared, VaryFn
@@ -20,6 +21,9 @@ if TYPE_CHECKING:
     from downshift.core.verdict import ExportVerdict, build_verdict, check, prepare_model
     from downshift.core.verify import NumericsReport, OnnxRuntimeError
 
+# Spelled out rather than derived from _LAZY: a literal list is what lets ruff see the
+# TYPE_CHECKING imports above as exported (F401) and what `from downshift import *` and
+# doc tooling read. A name added to _LAZY must be added here too.
 __all__ = [
     "Adapter",
     "ExportVerdict",
@@ -66,7 +70,7 @@ def export(
     model,
     output: str | Path,
     example_inputs: tuple | None = None,
-    k: int = 8,
+    k: int = DEFAULT_SAMPLES,
     adapter: Adapter | str | None = None,
     dynamic: dict[str, list[int]] | None = None,
     fp16: bool = False,
