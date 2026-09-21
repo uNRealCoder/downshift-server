@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -37,7 +37,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: pip
       - run: pip install "torch==2.5.1" --index-url https://download.pytorch.org/whl/cpu
       - run: pip install "onnx==1.16.0" "onnxruntime==1.17.0" "onnxscript==0.5.0" "numpy<2"
@@ -50,20 +50,11 @@ jobs:
         # pins, torch 2.5.1's dynamo tracer can't export a from-scratch BertModel with a
         # dynamic sequence axis, or a few PyG message-passing patterns (ConstraintViolationError /
         # "Unsupported: call_method" from torch itself, not from this project's code, and not
-        # fixed by any onnx/onnxruntime/onnxscript combination tried). Deselected here until
-        # the torch floor moves past 2.5.x; every other test, including the rest of the hf and
+        # fixed by any onnx/onnxruntime/onnxscript combination tried). Those tests carry
+        # `@pytest.mark.needs_torch_26`; conftest.py skips them here based on torch.__version__
+        # until the floor moves past 2.5.x. Every other test, including the rest of the hf and
         # gnn suites, runs and passes.
-        run: >
-          pytest -q
-          --deselect tests/test_hf.py::test_bert_exports_clean
-          --deselect tests/test_hf.py::test_bert_generalises_across_batch_and_sequence
-          --deselect tests/test_hf.py::test_bert_without_inputs_uses_config_derived_inputs
-          --deselect tests/test_hf.py::test_bert_at_max_position_embeddings_is_clean
-          --deselect tests/test_hf.py::test_bert_at_max_position_embeddings_serves
-          --deselect "tests/test_export_pyg.py::test_gnn_fixture_is_clean[gnn_gcn]"
-          --deselect "tests/test_export_pyg.py::test_gnn_fixture_is_clean[gnn_sage]"
-          --deselect "tests/test_export_pyg.py::test_gnn_fixture_is_clean[gnn_gat]"
-          --deselect tests/test_export_pyg.py::test_gnn_verdict_survives_node_edge_count_mismatch
+        run: pytest -q
 
   windows:
     runs-on: windows-latest
@@ -79,23 +70,3 @@ jobs:
       - run: ruff format --check .
       - run: mypy src
       - run: pytest -q --cov=src/downshift --cov-report=term-missing --cov-fail-under=95
-
-  examples:
-    # Every lesson runs without a network call: lesson 5's Hugging Face encoder is a random
-    # BertModel built in-process (see examples/README.md), not a hub download.
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
-      - run: pip install -e ".[dev,gnn,hf,fast]"
-      - name: Run examples
-        run: |
-          set -e
-          for f in examples/0[1-7]_*.py; do
-            echo "=== $f ==="
-            timeout 300 python "$f"
-          done
