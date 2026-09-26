@@ -13,6 +13,7 @@ def verdict() -> downshift.ExportVerdict:
     return downshift.check(tiny_bert.make_model(), tiny_bert.make_inputs())
 
 
+@pytest.mark.needs_torch_26
 def test_bert_exports_clean(verdict):
     assert verdict.status == "CLEAN", verdict.reason
     assert verdict.model_family == "hf-transformers"
@@ -25,13 +26,42 @@ def test_bert_inputs_and_dynamic_dims(verdict):
     assert verdict.dynamic_dims == {"input_ids": [0, 1], "attention_mask": [0, 1]}
 
 
+@pytest.mark.needs_torch_26
 def test_bert_generalises_across_batch_and_sequence(verdict):
     assert verdict.numerics is not None
     assert verdict.numerics.passed
     assert verdict.numerics.shape_generalization is True
 
 
+@pytest.mark.needs_torch_26
 def test_bert_without_inputs_uses_config_derived_inputs():
     verdict = downshift.check(tiny_bert.make_model())
     assert verdict.status == "CLEAN", verdict.reason
     assert verdict.input_names == ("input_ids", "attention_mask")
+
+
+@pytest.mark.needs_torch_26
+def test_bert_at_max_position_embeddings_is_clean():
+    """The example sits at the model's own sequence-length ceiling; the sampler must not
+    push a varied sample past it (that used to be an exit-4 crash, not a verdict)."""
+    model = tiny_bert.make_model()  # max_position_embeddings=64
+    inputs = tiny_bert.make_inputs(batch=1, seq=64)
+
+    verdict = downshift.check(model, inputs)
+
+    assert verdict.status == "CLEAN", verdict.reason
+
+
+@pytest.mark.needs_torch_26
+def test_bert_at_max_position_embeddings_serves():
+    from downshift.loading import LoadedModel
+    from downshift.serve.engine import prepare_serving
+
+    model = tiny_bert.make_model()
+    inputs = tiny_bert.make_inputs(batch=1, seq=64)
+    loaded = LoadedModel(source="tiny_bert", model=model, example_inputs=inputs, adapter_hint="hf")
+
+    state = prepare_serving(loaded)
+
+    assert state.ready
+    assert state.verdict.status == "CLEAN", state.verdict.reason

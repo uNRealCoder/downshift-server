@@ -9,8 +9,9 @@ import torch
 from torch_geometric.data import Data as PyGData
 from torch_geometric.nn import SAGEConv
 
+import downshift
 from downshift.adapters import _flatten, generic, hf, pyg, registry
-from downshift.export.verdict import prepare_model
+from downshift.core.verdict import prepare_model
 from downshift.loading import LoadError
 from tests.models import (
     clean_mlp,
@@ -24,6 +25,14 @@ from tests.models import (
 # --- registry ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _clear_adapter_discovery_cache():
+    """available() caches per process; each test needs to see its own entry_points patch."""
+    registry._cache.clear()
+    yield
+    registry._cache.clear()
+
+
 def test_available_lists_builtins_with_generic_last():
     names = list(registry.available())
     assert {"generic", "pyg", "hf"} <= set(names)
@@ -31,7 +40,7 @@ def test_available_lists_builtins_with_generic_last():
 
 
 def test_get_unknown_adapter_lists_available_names():
-    with pytest.raises(KeyError, match="nope") as excinfo:
+    with pytest.raises(LoadError, match="nope") as excinfo:
         registry.get("nope")
     assert "generic" in str(excinfo.value)
 
@@ -51,8 +60,10 @@ class _FakeAdapter:
 
 
 class _FakeEntryPoint:
-    def __init__(self, loader):
+    def __init__(self, loader, name="fake", value="fake.module:ADAPTER"):
         self._loader = loader
+        self.name = name
+        self.value = value
 
     def load(self):
         return self._loader()
@@ -84,7 +95,16 @@ def test_load_spec_returns_none_when_module_missing():
 
 
 def test_get_returns_the_matching_adapter():
-    assert registry.get("generic") is generic.ADAPTER
+    assert isinstance(registry.get("generic"), generic.GenericAdapter)
+
+
+def test_entry_point_pointing_at_a_class_is_instantiated(monkeypatch):
+    monkeypatch.setattr(
+        registry, "entry_points", lambda group: [_FakeEntryPoint(lambda: _FakeAdapter)]
+    )
+
+    assert isinstance(registry.available()["fake"], _FakeAdapter)
+    assert isinstance(registry.get("fake"), _FakeAdapter)
 
 
 # --- custom adapters loaded from a .py file ----------------------------------------------
@@ -186,6 +206,29 @@ def test_prepare_model_accepts_adapter_name_as_string():
     assert prepared.family == "generic-torch"
 
 
+def test_prepare_model_vary_overrides_the_adapters_own_vary_fn():
+    def custom_vary(i):
+        return clean_mlp.make_inputs()
+
+    prepared = prepare_model(clean_mlp.make_model(), clean_mlp.make_inputs(), vary=custom_vary)
+
+    assert prepared.vary_fn is custom_vary
+
+
+def test_check_vary_is_used_for_verification_samples():
+    calls: list[int] = []
+    base = clean_mlp.make_inputs()
+
+    def custom_vary(i):
+        calls.append(i)
+        return base
+
+    verdict = downshift.check(clean_mlp.make_model(), base, vary=custom_vary, k=3)
+
+    assert verdict.status == "CLEAN", verdict.reason
+    assert calls == [0, 1, 2]
+
+
 @pytest.mark.parametrize(
     ("make_model", "make_inputs", "expected"),
     [
@@ -211,14 +254,14 @@ def test_detect_picks_the_family_adapter(make_model, make_inputs, expected):
     ids=["linear", "conv2d"],
 )
 def test_generic_guesses_single_tensor_from_first_layer(make_model, expected_shape):
-    guess = generic.ADAPTER.example_inputs(make_model())
+    guess = generic.GenericAdapter().example_inputs(make_model())
     assert guess is not None
     assert len(guess) == 1
     assert tuple(guess[0].shape) == expected_shape
 
 
 def test_generic_does_not_guess_for_multi_argument_forward():
-    assert generic.ADAPTER.example_inputs(scatter_include_self_false.make_model()) is None
+    assert generic.GenericAdapter().example_inputs(scatter_include_self_false.make_model()) is None
 
 
 class _Conv1dOnly(torch.nn.Module):
@@ -263,24 +306,24 @@ class _NoGuessableLayer(torch.nn.Module):
     ids=["conv1d", "conv3d"],
 )
 def test_generic_guesses_conv1d_and_conv3d(model_cls, expected_shape):
-    guess = generic.ADAPTER.example_inputs(model_cls())
+    guess = generic.GenericAdapter().example_inputs(model_cls())
     assert guess is not None
     assert tuple(guess[0].shape) == expected_shape
 
 
 def test_generic_guesses_embedding_input():
-    guess = generic.ADAPTER.example_inputs(_EmbeddingOnly())
+    guess = generic.GenericAdapter().example_inputs(_EmbeddingOnly())
     assert guess is not None
     assert tuple(guess[0].shape) == (1, 8)
     assert guess[0].dtype == torch.int64
 
 
 def test_generic_guess_returns_none_for_unrecognized_layer():
-    assert generic.ADAPTER.example_inputs(_NoGuessableLayer()) is None
+    assert generic.GenericAdapter().example_inputs(_NoGuessableLayer()) is None
 
 
 def test_generic_flattens_dataclass_input_into_named_tensors():
-    prepared = generic.ADAPTER.prepare(dict_input.make_model(), dict_input.make_inputs())
+    prepared = generic.GenericAdapter().prepare(dict_input.make_model(), dict_input.make_inputs())
 
     assert prepared.input_names == ("x", "mask")
     assert all(isinstance(t, torch.Tensor) for t in prepared.inputs)
@@ -328,14 +371,14 @@ def test_shim_inherits_train_eval_mode(training):
 
 
 def test_pyg_example_inputs_guesses_from_message_passing_layer():
-    guess = pyg.ADAPTER.example_inputs(gnn_gcn.make_model())
+    guess = pyg.PyGAdapter().example_inputs(gnn_gcn.make_model())
     assert guess is not None
     assert isinstance(guess[0], PyGData)
     assert guess[0].x.shape[1] == 8
 
 
 def test_pyg_example_inputs_none_without_message_passing_layer():
-    assert pyg.ADAPTER.example_inputs(clean_mlp.make_model()) is None
+    assert pyg.PyGAdapter().example_inputs(clean_mlp.make_model()) is None
 
 
 class _BipartiteSAGE(torch.nn.Module):
@@ -348,7 +391,7 @@ class _BipartiteSAGE(torch.nn.Module):
 
 
 def test_pyg_first_in_channels_unwraps_a_tuple_in_channels():
-    guess = pyg.ADAPTER.example_inputs(_BipartiteSAGE())
+    guess = pyg.PyGAdapter().example_inputs(_BipartiteSAGE())
     assert guess is not None
     assert guess[0].x.shape[1] == 8
 
@@ -358,7 +401,7 @@ def test_pyg_prepare_includes_edge_attr_when_present_on_the_input():
     data = PyGData(
         x=torch.randn(6, 8), edge_index=torch.randint(0, 6, (2, 10)), edge_attr=torch.randn(10, 3)
     )
-    prepared = pyg.ADAPTER.prepare(model, (data,))
+    prepared = pyg.PyGAdapter().prepare(model, (data,))
     assert prepared.input_names == ("x", "edge_index", "edge_attr")
     assert len(prepared.inputs) == 3
 
@@ -393,14 +436,59 @@ def test_pyg_vary_fn_never_references_missing_nodes():
         assert int(edge_index.max()) < x.shape[0]
 
 
+def test_pyg_vary_fn_clamps_node_count_to_the_dims_bounds():
+    x = torch.randn(4, 3)
+    edge_index = torch.randint(0, 4, (2, 6))
+    base = (x, edge_index)
+    n_dim = torch.export.Dim("num_nodes", min=1, max=5)
+    e_dim = torch.export.Dim("num_edges", min=1, max=1 << 16)
+    dynamic_shapes = ({0: n_dim}, {1: e_dim})
+
+    vary = pyg.make_vary_fn(base, ("x", "edge_index"), dynamic_shapes)
+
+    for i in range(1, 21):
+        sample_x, _ = vary(i)
+        assert sample_x.shape[0] <= 5
+
+
 def test_hf_vary_fn_keeps_ids_in_vocab_and_mask_aligned():
-    base = tiny_bert.make_inputs()
-    vary = hf.make_vary_fn(base, vocab_size=100)
+    base = tiny_bert.make_inputs(seq=16)
+    vary = hf.make_vary_fn(base, vocab_size=100, max_seq=64)
 
     assert vary(0) is base
+    saw_padding = False
     for i in range(1, 21):
         ids, mask = vary(i)
         assert ids.dtype == base[0].dtype
         assert 0 <= int(ids.min()) and int(ids.max()) < 100
         assert mask.shape == ids.shape
-        assert bool((mask == 1).all())
+        assert bool((mask[:, 0] == 1).all())  # every row keeps at least one attended position
+        if bool((mask == 0).any()):
+            saw_padding = True
+    assert saw_padding  # at least one of the varied samples is padded
+
+
+def test_hf_vary_fn_clamps_sequence_length_to_max_seq():
+    base = tiny_bert.make_inputs(seq=4)
+    vary = hf.make_vary_fn(base, vocab_size=100, max_seq=6)
+
+    for i in range(1, 21):
+        _, mask = vary(i)
+        assert mask.shape[1] <= 6
+
+
+def test_hf_vary_fn_checks_the_longest_sequence_the_model_declares():
+    base = tiny_bert.make_inputs(seq=4)
+    vary = hf.make_vary_fn(base, vocab_size=100, max_seq=64, longest=64)
+
+    ids, mask = vary(1)
+    assert ids.shape == (1, 64)
+    assert bool((mask == 1).all())  # every position attended, so the whole table is used
+    assert all(vary(i)[0].shape[1] <= 64 for i in range(2, 21))
+
+
+def test_hf_vary_fn_without_a_declared_limit_never_samples_at_the_cap():
+    base = tiny_bert.make_inputs(seq=4)
+    vary = hf.make_vary_fn(base, vocab_size=100, max_seq=4096)
+
+    assert all(vary(i)[0].shape[1] <= 8 for i in range(1, 21))

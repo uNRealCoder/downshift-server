@@ -6,9 +6,9 @@ import pytest
 import torch
 from torch import nn
 
-import downshift.adapters as adapters_pkg
-from downshift.adapters import hf
-from downshift.loading import LoadError, _instantiate, import_object, load_model
+import downshift
+from downshift import hf_repo
+from downshift.loading import LoadError, LoadSpec, _instantiate, import_object, load_model
 from tests.models import clean_mlp, tiny_bert
 
 MLP_FACTORY = "tests.models.clean_mlp:make_model"
@@ -17,7 +17,7 @@ MLP_CLASS = "tests.models.clean_mlp:CleanMLP"
 
 @pytest.mark.parametrize("spec", [MLP_FACTORY, MLP_CLASS], ids=["factory", "class"])
 def test_import_spec_picks_up_sibling_make_inputs(spec):
-    loaded = load_model(spec)
+    loaded = load_model(LoadSpec(spec))
 
     assert isinstance(loaded.model, nn.Module)
     assert loaded.onnx_path is None
@@ -27,7 +27,7 @@ def test_import_spec_picks_up_sibling_make_inputs(spec):
 
 
 def test_explicit_inputs_spec_overrides_sibling():
-    loaded = load_model(MLP_FACTORY, inputs="tests.models.clean_mlp:make_inputs")
+    loaded = load_model(LoadSpec(MLP_FACTORY, inputs="tests.models.clean_mlp:make_inputs"))
     assert isinstance(loaded.example_inputs, tuple)
     assert tuple(loaded.example_inputs[0].shape) == (1, 16)
 
@@ -43,7 +43,7 @@ def test_explicit_inputs_spec_overrides_sibling():
 )
 def test_bad_import_specs_raise_load_error(spec, message):
     with pytest.raises(LoadError, match=message):
-        load_model(spec)
+        load_model(LoadSpec(spec))
 
 
 def test_state_dict_requires_model_class(tmp_path):
@@ -51,7 +51,7 @@ def test_state_dict_requires_model_class(tmp_path):
     torch.save(clean_mlp.make_model().state_dict(), path)
 
     with pytest.raises(LoadError, match="--model-class"):
-        load_model(str(path))
+        load_model(LoadSpec(str(path)))
 
 
 def test_state_dict_loads_into_model_class(tmp_path):
@@ -59,7 +59,7 @@ def test_state_dict_loads_into_model_class(tmp_path):
     path = tmp_path / "w.pt"
     torch.save(source.state_dict(), path)
 
-    loaded = load_model(str(path), model_class=MLP_CLASS)
+    loaded = load_model(LoadSpec(str(path), model_class=MLP_CLASS))
 
     assert isinstance(loaded.model, nn.Module)
     assert loaded.onnx_path is None
@@ -74,22 +74,22 @@ def test_pickled_module_needs_unsafe_load(tmp_path):
     torch.save(clean_mlp.make_model(), path)
 
     with pytest.raises(LoadError, match="--unsafe-load"):
-        load_model(str(path))
+        load_model(LoadSpec(str(path)))
 
-    loaded = load_model(str(path), unsafe_load=True)
+    loaded = load_model(LoadSpec(str(path), unsafe_load=True))
     assert isinstance(loaded.model, clean_mlp.CleanMLP)
 
 
 def test_missing_onnx_file_is_an_error(tmp_path):
-    with pytest.raises(LoadError, match="does not exist"):
-        load_model(str(tmp_path / "missing.onnx"))
+    with pytest.raises(LoadError, match="not on this machine"):
+        load_model(LoadSpec(str(tmp_path / "missing.onnx")))
 
 
 def test_existing_onnx_file_is_passed_through(tmp_path):
     path = tmp_path / "m.onnx"
     path.write_bytes(b"")  # load_model only checks existence; intake parses later
 
-    loaded = load_model(str(path))
+    loaded = load_model(LoadSpec(str(path)))
 
     assert loaded.model is None
     assert loaded.onnx_path == path
@@ -116,7 +116,7 @@ def test_checkpoint_load_failure_with_unsafe_load_raises_load_error(tmp_path):
     path.write_bytes(b"not a real checkpoint")
 
     with pytest.raises(LoadError, match="failed to load"):
-        load_model(str(path), unsafe_load=True)
+        load_model(LoadSpec(str(path), unsafe_load=True))
 
 
 def test_checkpoint_with_unexpected_payload_type_is_rejected(tmp_path):
@@ -124,7 +124,7 @@ def test_checkpoint_with_unexpected_payload_type_is_rejected(tmp_path):
     torch.save([1, 2, 3], path)
 
     with pytest.raises(LoadError, match="expected a state dict"):
-        load_model(str(path))
+        load_model(LoadSpec(str(path)))
 
 
 def test_unrecognized_existing_file_suffix_is_rejected(tmp_path):
@@ -132,62 +132,59 @@ def test_unrecognized_existing_file_suffix_is_rejected(tmp_path):
     path.write_text("hi")
 
     with pytest.raises(LoadError, match="don't know how to load"):
-        load_model(str(path))
+        load_model(LoadSpec(str(path)))
 
 
-def test_missing_path_with_a_suffix_is_reported_as_not_existing(tmp_path):
+def test_missing_path_with_a_suffix_is_reported_as_not_on_this_machine(tmp_path):
     missing = tmp_path / "missing.xyz"
 
-    with pytest.raises(LoadError, match="does not exist"):
-        load_model(str(missing))
+    with pytest.raises(LoadError, match="not on this machine"):
+        load_model(LoadSpec(str(missing)))
 
 
-def test_hf_extra_not_installed_reports_a_helpful_error(monkeypatch):
-    monkeypatch.delattr(adapters_pkg, "hf", raising=False)
-    monkeypatch.setitem(sys.modules, "downshift.adapters.hf", None)
+def test_hf_extra_not_installed_reports_a_helpful_error(tmp_path, monkeypatch):
+    (tmp_path / "config.json").write_text("{}")
+    monkeypatch.delattr(downshift, "hf_repo", raising=False)
+    monkeypatch.setitem(sys.modules, "downshift.hf_repo", None)
 
     with pytest.raises(LoadError, match=r"\[hf\] extra"):
-        load_model("org/repo")
+        load_model(LoadSpec(str(tmp_path)))
 
 
-def test_hf_hub_load_failure_is_wrapped_in_load_error(monkeypatch):
-    def boom(repo_id):
-        raise OSError("network unreachable")
+def test_hf_load_failure_is_wrapped_in_load_error(tmp_path, monkeypatch):
+    (tmp_path / "config.json").write_text("{}")
 
-    monkeypatch.setattr(hf, "load_pretrained", boom)
+    def boom(path, pooling=None, normalize=None):
+        raise OSError("model.safetensors is missing")
+
+    monkeypatch.setattr(hf_repo, "load_pretrained", boom)
 
     with pytest.raises(LoadError, match="can't load"):
-        load_model("org/repo")
+        load_model(LoadSpec(str(tmp_path)))
 
 
-def test_unknown_string_is_treated_as_hf_repo_id(monkeypatch):
-    seen = []
+@pytest.mark.parametrize("spec", ["org/tiny-bert", "bert-base-uncased"], ids=["org", "bare"])
+def test_hub_id_is_rejected_rather_than_downloaded(spec, monkeypatch):
+    def boom(path):
+        raise AssertionError("load_pretrained must not be reached for a hub id")
 
-    def fake_load(repo_id):
-        seen.append(repo_id)
-        return tiny_bert.make_model()
+    monkeypatch.setattr(hf_repo, "load_pretrained", boom)
 
-    monkeypatch.setattr(hf, "load_pretrained", fake_load)
-
-    loaded = load_model("org/tiny-bert")
-
-    assert seen == ["org/tiny-bert"]
-    assert loaded.adapter_hint == "hf"
-    assert isinstance(loaded.model, nn.Module)
-    assert loaded.example_inputs is None
+    with pytest.raises(LoadError, match="hub id is not accepted"):
+        load_model(LoadSpec(spec))
 
 
 def test_local_dir_with_config_json_is_treated_as_hf_repo(tmp_path, monkeypatch):
     (tmp_path / "config.json").write_text("{}")
     seen = []
 
-    def fake_load(repo_id_or_path):
+    def fake_load(repo_id_or_path, pooling=None, normalize=None):
         seen.append(repo_id_or_path)
         return tiny_bert.make_model()
 
-    monkeypatch.setattr(hf, "load_pretrained", fake_load)
+    monkeypatch.setattr(hf_repo, "load_pretrained", fake_load)
 
-    loaded = load_model(str(tmp_path))
+    loaded = load_model(LoadSpec(str(tmp_path)))
 
     assert seen == [str(tmp_path)]
     assert loaded.adapter_hint == "hf"
@@ -198,13 +195,4 @@ def test_local_dir_without_config_json_is_rejected(tmp_path):
     (tmp_path / "README.md").write_text("not a model repo")
 
     with pytest.raises(LoadError, match="no config.json"):
-        load_model(str(tmp_path))
-
-
-def test_local_hf_repo_dir_needs_hf_extra(tmp_path, monkeypatch):
-    (tmp_path / "config.json").write_text("{}")
-    monkeypatch.delattr(adapters_pkg, "hf", raising=False)
-    monkeypatch.setitem(sys.modules, "downshift.adapters.hf", None)
-
-    with pytest.raises(LoadError, match=r"\[hf\] extra"):
-        load_model(str(tmp_path))
+        load_model(LoadSpec(str(tmp_path)))

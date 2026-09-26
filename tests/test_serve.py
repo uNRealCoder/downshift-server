@@ -13,12 +13,14 @@ from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from downshift.loading import LoadedModel, load_model
-from downshift.serve import app as serve_app
+from downshift.loading import LoadedModel, LoadSpec, load_model
+from downshift.serve import app_for
+from downshift.serve import predict as serve_predict
 from downshift.serve.app import build_app
 from downshift.serve.engine import ServeOptions, prepare_serving
 from downshift.serve.schemas import OutputEncoding
 from tests.conftest import b64_input, b64_output
+from tests.models import clean_mlp
 
 MLP_INPUT = {"inputs": {"x": [[0.0] * 16]}}
 
@@ -52,16 +54,6 @@ def _with_options(state, **overrides):
 
 
 @pytest.fixture(scope="module")
-def mlp_client(mlp_state) -> TestClient:
-    return TestClient(build_app(mlp_state))
-
-
-@pytest.fixture(scope="module")
-def gcn_client(serve_fixture) -> TestClient:
-    return TestClient(build_app(serve_fixture("gnn_gcn")))
-
-
-@pytest.fixture(scope="module")
 def branch_client(branch_state) -> TestClient:
     return TestClient(build_app(branch_state))
 
@@ -85,7 +77,41 @@ def test_health_ready_metadata(mlp_client, mlp_state):
         "max_body_bytes": mlp_state.options.max_body_bytes,
         "max_input_bytes": mlp_state.options.max_input_bytes,
         "max_concurrency": mlp_state.options.max_concurrency,
+        "max_queue": mlp_state.options.max_queue,
+        "request_timeout": mlp_state.options.request_timeout,
     }
+    assert set(meta["boot"]) >= {"export", "verify", "session", "warmup"}
+    assert meta["warmup"] == {
+        "count": mlp_state.warmup_stats.count,
+        "mean_ms": mlp_state.warmup_stats.mean_ms,
+        "synthesized": mlp_state.warmup_stats.synthesized,
+    }
+
+
+def test_app_for_serves_predict_immediately():
+    client = TestClient(app_for(clean_mlp.make_model(), clean_mlp.make_inputs(), warmup=1))
+    resp = client.post("/predict", json=MLP_INPUT)
+    assert resp.status_code == 200, resp.text
+    assert client.get("/ready").json() == {"ready": True}
+
+
+def test_app_for_verifies_a_pre_built_onnx_against_a_reference(exported_mlp):
+    path, model, _ = exported_mlp
+    client = TestClient(app_for(str(path), clean_mlp.make_inputs(), reference=model, warmup=1))
+    meta = client.get("/metadata").json()
+    assert meta["verdict"]["status"] == "CLEAN", meta["verdict"]["reason"]
+    assert meta["backend"]["name"] == "onnxruntime"
+
+
+def test_app_for_mounts_under_a_prefix():
+    from fastapi import FastAPI
+
+    outer = FastAPI()
+    outer.mount("/model", app_for(clean_mlp.make_model(), clean_mlp.make_inputs(), warmup=1))
+    client = TestClient(outer)
+    assert client.get("/model/health").json() == {"status": "ok"}
+    resp = client.post("/model/predict", json=MLP_INPUT)
+    assert resp.status_code == 200, resp.text
 
 
 def test_predict_batch(mlp_client):
@@ -96,6 +122,34 @@ def test_predict_batch(mlp_client):
     assert body["shapes"]["output_0"] == [3, 4]
     assert np.asarray(body["outputs"]["output_0"]).shape == (3, 4)
     assert body["dtypes"]["output_0"] == "float32"
+
+
+def test_predict_generates_a_request_id_and_echoes_it(mlp_client):
+    resp = mlp_client.post("/predict", json=MLP_INPUT)
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["x-request-id"]
+
+
+def test_predict_echoes_a_client_supplied_request_id(mlp_client):
+    resp = mlp_client.post(
+        "/predict", json=MLP_INPUT, headers={"x-request-id": "caller-supplied-id"}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["x-request-id"] == "caller-supplied-id"
+
+
+def test_health_gets_its_own_request_id_too(mlp_client):
+    resp = mlp_client.get("/health")
+    assert resp.headers["x-request-id"]
+
+
+def test_predict_reports_server_timing(mlp_client):
+    resp = mlp_client.post("/predict", json=MLP_INPUT)
+    assert resp.status_code == 200, resp.text
+    timing = resp.headers["server-timing"]
+    assert "parse;dur=" in timing
+    assert "codec;dur=" in timing
+    assert "infer;dur=" in timing
 
 
 def test_predict_missing_input(mlp_client):
@@ -280,6 +334,20 @@ def test_predict_graph_on_non_graph_model(mlp_client):
     assert "not graph-shaped" in resp.json()["detail"]
 
 
+def test_predict_graph_rejects_an_out_of_range_edge_index(gcn_client):
+    x = np.random.randn(5, 8).tolist()
+    resp = gcn_client.post("/predict/graph", json={"x": x, "edge_index": [[0, 99], [1, 2]]})
+    assert resp.status_code == 400
+    assert "outside the node range [0, 5)" in resp.json()["detail"]
+
+
+def test_predict_graph_rejects_a_negative_edge_index(gcn_client):
+    x = np.random.randn(5, 8).tolist()
+    resp = gcn_client.post("/predict/graph", json={"x": x, "edge_index": [[-1, 2], [1, 2]]})
+    assert resp.status_code == 400
+    assert "outside the node range [0, 5)" in resp.json()["detail"]
+
+
 def test_predict_graph_with_edge_attr_is_accepted(gcn_client):
     x = np.random.randn(5, 8).tolist()
     edge_index = [[0, 1, 2, 3, 4, 0, 2], [1, 2, 3, 4, 0, 3, 4]]
@@ -335,7 +403,7 @@ def test_predict_output_serializes(mlp_state, monkeypatch, output):
 def test_predict_unsupported_dtype_falls_back_per_array(mlp_state, monkeypatch):
     # Simulate a dtype this orjson cannot write natively (e.g. float128 on Linux) without
     # depending on the platform: drop float32 from the supported set for this test only.
-    monkeypatch.setattr(serve_app, "_ORJSON_DTYPES", serve_app._ORJSON_DTYPES - {"float32"})
+    monkeypatch.setattr(serve_predict, "_ORJSON_DTYPES", serve_predict._ORJSON_DTYPES - {"float32"})
     fallback = np.array([[1.0, 2.0]], dtype=np.float32)
     native = np.array([[3, 4]], dtype=np.int64)
     client = _client_emitting(mlp_state, monkeypatch, {"a": fallback, "b": native})
@@ -347,7 +415,7 @@ def test_predict_unsupported_dtype_falls_back_per_array(mlp_state, monkeypatch):
 
 
 def test_backends_agree_on_same_contract():
-    loaded = load_model("tests.models.clean_mlp:make_model")
+    loaded = load_model(LoadSpec("tests.models.clean_mlp:make_model"))
     same_weights = LoadedModel(
         source=loaded.source, model=loaded.model, example_inputs=loaded.example_inputs
     )
@@ -413,11 +481,46 @@ def test_middleware_specs(mlp_state):
         build_app(mlp_state, middleware=["tests.test_serve:not_middleware"])
 
 
-def test_ready_503_when_not_ready(mlp_state):
-    not_ready = dataclasses.replace(mlp_state, ready=False)
-    resp = TestClient(build_app(not_ready)).get("/ready")
-    assert resp.status_code == 503
-    assert resp.json() == {"ready": False}
+def test_ready_and_predict_503_until_the_loader_lands(mlp_state):
+    """Plan 3.3 U3: bind first, load on a background thread, 503 until the verdict is in,
+    200 after, no restart in between."""
+    release = threading.Event()
+
+    def loader():
+        assert release.wait(timeout=5)
+        return mlp_state
+
+    app = build_app(loader=loader)
+    with TestClient(app) as client:
+        assert client.get("/health").status_code == 200
+
+        ready = client.get("/ready")
+        assert ready.status_code == 503
+        assert ready.json() == {"ready": False, "phase": "load"}
+
+        for resp in (
+            client.get("/metadata"),
+            client.get("/schema"),
+            client.post("/predict", json=MLP_INPUT),
+        ):
+            assert resp.status_code == 503, resp.text
+            assert resp.headers["retry-after"] == "2"
+            assert resp.json() == {"detail": "model is not ready"}
+
+        release.set()
+        app.state.loader_thread.join(timeout=5)
+
+        assert client.get("/ready").json() == {"ready": True}
+        assert client.get("/metadata").status_code == 200
+        assert client.get("/schema").status_code == 200
+        assert client.post("/predict", json=MLP_INPUT).status_code == 200
+
+
+def test_build_app_needs_exactly_one_of_state_or_loader(mlp_state):
+    with pytest.raises(ValueError, match="exactly one"):
+        build_app()
+    with pytest.raises(ValueError, match="exactly one"):
+        build_app(mlp_state, loader=lambda: mlp_state)
 
 
 def test_predict_torch_backend_shape_error_is_400(serve_fixture):
@@ -438,10 +541,13 @@ def test_predict_backend_bug_maps_to_500_without_leaking_details(mlp_state, monk
         resp = client.post("/predict", json=MLP_INPUT)
 
     assert resp.status_code == 500
-    assert resp.json() == {"detail": "inference failed on the server; see the server log"}
+    body = resp.json()
+    assert body["detail"] == "inference failed on the server; see the server log"
+    assert body["request_id"] == resp.headers["x-request-id"]
     assert "some internal bug" not in resp.text
     assert "/etc/secret/path" not in resp.text
     assert "unhandled exception" in caplog.text
+    assert body["request_id"] in caplog.text
 
 
 def test_predict_torch_backend_out_of_memory_maps_to_500(serve_fixture):
@@ -541,3 +647,102 @@ def test_predict_concurrency_option_allows_overlapping_inferences(mlp_state, mon
 
     assert all(r.status_code == 200 for r in results)
     assert max_active == 2
+
+
+def _wait_until(predicate, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        assert time.monotonic() < deadline, "condition never became true"
+        time.sleep(0.005)
+
+
+def test_predict_past_capacity_is_a_fast_503(mlp_state, monkeypatch):
+    release = threading.Event()
+
+    def blocking_infer(inputs):
+        release.wait(timeout=5)
+        return {"output_0": np.zeros((1, 4), dtype=np.float32)}
+
+    state = _with_options(mlp_state, max_concurrency=1, max_queue=1)
+    monkeypatch.setattr(state.backend, "infer", blocking_infer)
+    client = TestClient(build_app(state))
+
+    try:
+        with ThreadPoolExecutor(3) as pool:
+            admitted = [pool.submit(client.post, "/predict", json=MLP_INPUT) for _ in range(2)]
+            _wait_until(lambda: state.in_flight >= 2)
+
+            start = time.monotonic()
+            over = client.post("/predict", json=MLP_INPUT)
+            elapsed = time.monotonic() - start
+
+            release.set()
+            results = [f.result() for f in admitted]
+    finally:
+        release.set()
+
+    assert over.status_code == 503
+    assert over.headers["retry-after"] == "1"
+    assert "server is at capacity" in over.json()["detail"]
+    assert "1 running" in over.json()["detail"]
+    assert "1 queued" in over.json()["detail"]
+    assert elapsed < 0.5  # never touches the executor
+    assert all(r.status_code == 200 for r in results)
+
+
+def test_predict_queued_past_request_timeout_is_503_and_never_infers(mlp_state, monkeypatch):
+    calls: list[int] = []
+
+    def slow_infer(inputs):
+        calls.append(1)
+        time.sleep(0.3)
+        return {"output_0": np.zeros((1, 4), dtype=np.float32)}
+
+    state = _with_options(mlp_state, max_concurrency=1, max_queue=5, request_timeout=0.05)
+    monkeypatch.setattr(state.backend, "infer", slow_infer)
+    client = TestClient(build_app(state))
+
+    with ThreadPoolExecutor(2) as pool:
+        first = pool.submit(client.post, "/predict", json=MLP_INPUT)
+        _wait_until(lambda: state.in_flight >= 1)
+        second = pool.submit(client.post, "/predict", json=MLP_INPUT)
+
+        first_result = first.result()
+        second_result = second.result()
+
+    assert first_result.status_code == 200
+    assert second_result.status_code == 503
+    assert "--request-timeout" in second_result.json()["detail"]
+    assert len(calls) == 1  # the queued predict never reached infer()
+
+
+def test_health_stays_fast_while_predicts_are_queued(mlp_state, monkeypatch):
+    release = threading.Event()
+
+    def blocking_infer(inputs):
+        release.wait(timeout=5)
+        return {"output_0": np.zeros((1, 4), dtype=np.float32)}
+
+    state = _with_options(mlp_state, max_concurrency=1, max_queue=50)
+    monkeypatch.setattr(state.backend, "infer", blocking_infer)
+    client = TestClient(build_app(state))
+
+    try:
+        with ThreadPoolExecutor(10) as pool:
+            predicts = [pool.submit(client.post, "/predict", json=MLP_INPUT) for _ in range(10)]
+            _wait_until(lambda: state.in_flight >= 10)
+
+            start = time.monotonic()
+            health = client.get("/health")
+            elapsed = time.monotonic() - start
+
+            release.set()
+            for f in predicts:
+                assert f.result().status_code == 200
+    finally:
+        release.set()
+
+    assert health.status_code == 200
+    # Generously below the 5+ second stalls a shared sync threadpool used to cause; the
+    # point is "never blocks behind the predict queue", not a tight latency bound.
+    assert elapsed < 1.0

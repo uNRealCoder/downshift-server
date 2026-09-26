@@ -6,7 +6,7 @@ from enum import StrEnum
 from typing import Annotated, Any
 
 import numpy as np
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from downshift.serve.codec import b64decode
 from downshift.settings import DEFAULT_MAX_INPUT_BYTES
@@ -31,10 +31,13 @@ OutputEncodingField = Annotated[
     ),
 ]
 
-# ORT reports dtypes as "tensor(float)"; map those names onto numpy ones.
+# ORT reports dtypes as "tensor(float)"; map those names onto numpy ones. bfloat16 has no
+# numpy dtype of its own; the wire contract for it is float32, same as the torch backend's
+# (B1), so it maps there too.
 _ORT_DTYPES = {
     "float": "float32",
     "float16": "float16",
+    "bfloat16": "float32",
     "double": "float64",
     "int8": "int8",
     "int16": "int16",
@@ -47,14 +50,16 @@ _TENSOR_RE = re.compile(r"^tensor\((\w+)\)$")
 
 
 def normalize_dtype(dtype: str | None) -> str | None:
-    """Turn "tensor(float)" or "float32" into a numpy dtype name; None if unknown."""
+    """Turn "tensor(float)", "tensor(float32)" or "float32" into a numpy dtype name; None if
+    unknown. The torch backend spells dtypes the numpy way inside "tensor(...)", ORT its own."""
     if dtype is None:
         return None
     match = _TENSOR_RE.match(dtype)
-    if match:
-        return _ORT_DTYPES.get(match.group(1))
+    name = match.group(1) if match else dtype
+    if match and name in _ORT_DTYPES:
+        return _ORT_DTYPES[name]
     try:
-        return np.dtype(dtype).name
+        return np.dtype(name).name
     except TypeError:
         return None
 
@@ -72,16 +77,35 @@ class TypedArray(BaseModel):
 
 
 class PredictRequest(BaseModel):
-    """`inputs` maps input name -> nested list, or a TypedArray object for explicit typing."""
+    """`inputs` maps input name -> nested list, or a TypedArray object for explicit typing.
 
-    inputs: dict[str, Any]
+    A model served from a Hugging Face repo directory that has tokenizer files also accepts
+    `text` (one string or a list) instead of `inputs`; the server tokenizes. Send one or the
+    other, not both.
+    """
+
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    text: str | list[str] | None = None
     output_encoding: OutputEncodingField = None
+
+    @model_validator(mode="after")
+    def _one_kind_of_input(self) -> "PredictRequest":
+        if self.text is not None and self.inputs:
+            raise ValueError("send either 'inputs' or 'text', not both")
+        return self
 
 
 class PredictResponse(BaseModel):
     outputs: dict[str, Any]
     shapes: dict[str, list[int]]
     dtypes: dict[str, str]
+    # Present only for a sequence classifier: one {label, score, probabilities} per row.
+    predictions: list[dict[str, Any]] | None = None
+
+
+# The input names that make a model "graph-shaped": what /predict/graph accepts, and what
+# /schema checks before advertising that route.
+GRAPH_INPUTS = frozenset({"x", "edge_index"})
 
 
 class GraphPredictRequest(BaseModel):
@@ -97,15 +121,175 @@ class GraphPredictRequest(BaseModel):
     output_encoding: OutputEncodingField = None
 
 
+class WorstMismatchInfo(BaseModel):
+    sample: int
+    output: int
+    index: list[int]
+    expected: float
+    got: float
+    input_shapes: list[list[int]]
+
+
+class NumericsInfo(BaseModel):
+    samples_tested: int
+    max_abs_err: float
+    max_rel_err: float
+    failures: int
+    shape_generalization: bool | None
+    tolerance_abs: float
+    tolerance_rel: float
+    tolerance_dtype: str
+    tolerance_overridden: bool
+    baseline_failed: bool
+    worst: WorstMismatchInfo | None = None
+    sample_shapes: list[list[list[int]]] = Field(default_factory=list)
+    seed: int
+    notes: list[str] = Field(default_factory=list)
+    passed: bool
+
+
+class VerdictInfo(BaseModel):
+    """ExportVerdict.to_dict(); see downshift.core.verdict."""
+
+    status: str
+    model_family: str
+    capture_strategy: str | None
+    opset: int | None
+    op_types: dict[str, int]
+    numerics: NumericsInfo | None
+    shape_generalization: bool | None
+    shape_generalization_reason: str | None
+    recommended_backend: str
+    reason: str
+    input_names: list[str]
+    dynamic_dims: dict[str, list[int]]
+    unsupported_ops: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    # No onnx_path: to_dict() carries one, but it is a location on the server's disk.
+
+
+class IOSpecInfo(BaseModel):
+    name: str
+    dtype: str | None
+    shape: list[int | str | None] | None
+
+
+class BackendInfo(BaseModel):
+    """BackendMeta.to_dict(); see downshift.serve.backends."""
+
+    name: str
+    device: str
+    inputs: list[IOSpecInfo] = Field(default_factory=list)
+    outputs: list[IOSpecInfo] = Field(default_factory=list)
+
+
 class MetadataResponse(BaseModel):
     model: str
     family: str
-    verdict: dict
-    backend: dict
+    verdict: VerdictInfo
+    backend: BackendInfo
     input_names: list[str]
     notes: list[str] = Field(default_factory=list)
     version: str
     limits: dict = Field(default_factory=dict)
+    boot: dict[str, float] = Field(default_factory=dict)
+    warmup: dict | None = None
+
+
+class AxisBound(BaseModel):
+    """min/max the adapter's export traced this axis for (torch.export.Dim's own bounds).
+
+    Only present for axes an adapter made dynamic on a model downshift itself exported; a
+    bare `.onnx` with no reference model carries none (TensorSchema.bounds is None then).
+    """
+
+    min: int
+    max: int
+
+
+class TensorSchema(BaseModel):
+    """One input or output as /schema describes it.
+
+    In `shape`, an int is a fixed size and a string is a dynamic axis: either a name the
+    adapter chose ("batch", "seq") or the plain word "dynamic". `example_shape` is that
+    shape with every dynamic axis pinned to 1, which is what `example_request` used.
+    `bounds`, when known, is parallel to `shape`: one AxisBound per dynamic axis downshift's
+    own export traced, None elsewhere.
+    """
+
+    name: str
+    dtype: str | None = None
+    shape: list[int | str] | None = None
+    required: bool | None = None  # inputs only; every declared input is required
+    example_shape: list[int] | None = None
+    bounds: list[AxisBound | None] | None = None
+
+
+class InputFormat(BaseModel):
+    """One of the wire forms a tensor value may take in a request body."""
+
+    name: str
+    description: str
+
+
+class SourceInfo(BaseModel):
+    spec: str
+    kind: str
+    description: str
+    fetched_at_runtime: bool
+
+
+class TextInputInfo(BaseModel):
+    """Present when /predict also takes {"text": ...}. See downshift/adapters/text.py."""
+
+    field: str
+    max_length: int
+    over_length: str
+    example_request: dict
+    # The three below are set only for a sequence classifier.
+    labels: list[str] | None = None
+    activation: str | None = None
+    response: str | None = None
+
+
+class EmbeddingInfo(BaseModel):
+    """Present when the graph ends in a pooling step. See downshift/adapters/embedding.py."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    pooling: str
+    normalized: bool
+    dimension: int | None
+    max_seq_length: int | None
+    origin: str = Field(alias="from")
+
+
+class SchemaLimits(BaseModel):
+    max_body_bytes: int
+    max_input_bytes: int
+
+
+class SchemaResponse(BaseModel):
+    """The answer to "what do I POST?": see downshift/serve/describe.py."""
+
+    model: str
+    source: SourceInfo
+    family: str
+    backend: str
+    device: str
+    endpoint: str
+    graph_endpoint: str | None = None
+    inputs: list[TensorSchema] = Field(default_factory=list)
+    outputs: list[TensorSchema] = Field(default_factory=list)
+    example_request: dict | None = None
+    example_curl: str | None = None
+    text_input: TextInputInfo | None = None
+    embedding: EmbeddingInfo | None = None
+    input_formats: list[InputFormat] = Field(default_factory=list)
+    output_encodings: list[str] = Field(default_factory=list)
+    default_output_encoding: str
+    limits: SchemaLimits
+    notes: list[str] = Field(default_factory=list)
 
 
 class HealthResponse(BaseModel):
@@ -114,6 +298,9 @@ class HealthResponse(BaseModel):
 
 class ReadyResponse(BaseModel):
     ready: bool
+    # The loader's current phase while not ready (U4); None once ready, or when the app was
+    # built with state= directly (no loader, so no not-ready window to report on).
+    phase: str | None = None
 
 
 def _from_base64(

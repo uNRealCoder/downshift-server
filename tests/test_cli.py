@@ -1,22 +1,28 @@
 """CLI contract: exit codes and JSON. Banner and table text are deliberately not asserted."""
 
 import json
-import logging
 import os
 import sys
 from pathlib import Path
 
 import pytest
 import torch
+import uvicorn
+from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
+import downshift
 from downshift.cli import main
 from downshift.cli.main import app
+from downshift.loading import LoadSpec
+from downshift.serve.options import ServeOptions
+from downshift.serve.schemas import OutputEncoding
 from tests.models import clean_mlp
 
 CLEAN = "tests.models.clean_mlp:make_model"
 DEGRADED = "tests.models.scatter_include_self_false:make_model"
 FAILED = "tests.models.data_dependent_branch:make_model"
+BROKEN = "tests.models.broken_factory:make_model"
 
 runner = CliRunner()
 
@@ -63,38 +69,83 @@ def test_check_bad_spec_is_usage_error():
     assert result.stdout == ""
 
 
+def test_check_imports_a_model_module_from_the_current_directory(tmp_path, monkeypatch):
+    # The `downshift` console script, unlike `python -m downshift`, does not put the current
+    # directory on sys.path by itself; the CLI does.
+    (tmp_path / "cwd_model.py").write_text(
+        "from tests.models.clean_mlp import make_inputs, make_model\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "path", [p for p in sys.path if p not in ("", str(tmp_path))])
+
+    result = run("check", "cwd_model:make_model", "--json")
+
+    assert result.exit_code == 0, result.output
+    assert parse(result)["status"] == "CLEAN"
+
+
+def test_check_file_name_spec_says_to_use_the_module_name():
+    result = run("check", "my_model.py:model", "--json")
+    assert result.exit_code == main.EXIT_USAGE, result.output
+    assert "my_model:model" in result.output
+
+
 def test_check_table_output():
     result = run("check", CLEAN)
     assert result.exit_code == 0, result.output
 
 
-def test_check_log_format_json_is_accepted():
-    result = run("check", CLEAN, "--log-format", "json", "--json")
+def test_check_atol_rtol_override():
+    result = run("check", CLEAN, "--atol", "1", "--rtol", "1", "--json")
     assert result.exit_code == 0, result.output
+    numerics = parse(result)["numerics"]
+    assert numerics["tolerance_abs"] == 1.0
+    assert numerics["tolerance_rel"] == 1.0
 
 
-def test_json_formatter_serialises_exc_info():
-    try:
-        raise ValueError("boom")
-    except ValueError:
-        exc_info = sys.exc_info()
-    record = logging.LogRecord("test", logging.ERROR, __file__, 1, "failed", (), exc_info)
-
-    payload = json.loads(main._JsonFormatter().format(record))
-
-    assert payload["level"] == "ERROR"
-    assert "ValueError" in payload["exc_info"]
+def test_check_records_seed_and_tolerance_dtype_in_json():
+    result = run("check", CLEAN, "--seed", "3", "--json")
+    assert result.exit_code == 0, result.output
+    numerics = parse(result)["numerics"]
+    assert numerics["seed"] == 3
+    assert numerics["tolerance_dtype"] == "float32"
 
 
-def test_check_unknown_adapter_is_an_unexpected_crash():
+def test_check_vary_accepts_an_import_spec():
+    result = run("check", CLEAN, "--vary", "tests.test_cli:_custom_vary", "--json")
+    assert result.exit_code == 0, result.output
+    assert parse(result)["status"] == "CLEAN"
+
+
+def _custom_vary(i: int) -> tuple:
+    from tests.models import clean_mlp
+
+    return clean_mlp.make_inputs()
+
+
+def test_check_unknown_adapter_is_a_usage_error():
     result = run("check", CLEAN, "--adapter", "doesnotexist", "--json")
-    assert result.exit_code == main.EXIT_CRASH, result.output
-    assert "KeyError" in result.output
+    assert result.exit_code == main.EXIT_USAGE, result.output
+    assert "LoadError" not in result.output
+    assert "doesnotexist" in result.output
 
 
 def test_check_crash_with_debug_prints_traceback():
-    result = run("check", CLEAN, "--adapter", "doesnotexist", "--log-level", "debug", "--json")
+    result = run("check", BROKEN, "--log-level", "debug", "--json")
     assert result.exit_code == main.EXIT_CRASH, result.output
+
+
+def test_check_failed_table_points_at_debug_logging():
+    result = run("check", FAILED)
+    assert result.exit_code == 1, result.output
+    assert "--log-level debug" in result.output
+
+
+def test_check_failed_debug_logs_every_strategys_traceback():
+    result = run("check", FAILED, "--log-level", "debug")
+    assert result.exit_code == 1, result.output
+    assert "strict=False failed" in result.output
+    assert "strict=True failed" in result.output
 
 
 def test_check_unsafe_load_prints_a_warning(tmp_path: Path):
@@ -170,7 +221,7 @@ def test_export_custom_name(tmp_path: Path):
     [
         (CLEAN, "clean_mlp"),
         ("./gat_fraud_v3.pt", "gat_fraud_v3"),
-        ("org/repo", "repo"),
+        ("models/bert-base/", "bert-base"),
         ("model.onnx", "model"),
     ],
 )
@@ -178,14 +229,44 @@ def test_slug(spec: str, expected: str):
     assert main.slug(spec) == expected
 
 
-def _serve_captured(monkeypatch, *extra_args: str) -> tuple:
-    """Run `serve CLEAN --warmup 1 <extra_args>` with uvicorn.run stubbed out.
+def _fake_uvicorn_server(monkeypatch, captured: dict) -> None:
+    """Single-worker `serve` now binds via uvicorn.Server directly (not uvicorn.run), so
+    should_exit is reachable from the loader thread. Stand in for it: capture the config,
+    and drive the app's lifespan the way a real server would (so the loader thread the
+    plan describes actually runs and lands app.state.serving), without opening a socket.
+    """
 
-    Returns (CliRunner result, the kwargs uvicorn.run received plus its `app`).
+    def fake_init(self, config) -> None:
+        self.config = config
+        self.should_exit = False
+        captured.update(
+            app=config.app,
+            host=config.host,
+            port=config.port,
+            log_level=config.log_level,
+            access_log=config.access_log,
+        )
+
+    def fake_run(self) -> None:
+        with TestClient(self.config.app):
+            thread = getattr(self.config.app.state, "loader_thread", None)
+            if thread is not None:
+                thread.join(timeout=30)
+
+    monkeypatch.setattr(uvicorn.Server, "__init__", fake_init)
+    monkeypatch.setattr(uvicorn.Server, "run", fake_run)
+
+
+def _serve_captured(monkeypatch, *extra_args: str) -> tuple:
+    """Run `serve CLEAN --warmup 1 <extra_args>` with uvicorn stubbed out: uvicorn.run for
+    `--workers` > 1 (unchanged), uvicorn.Server for the single-worker bind-first path.
+
+    Returns (CliRunner result, the captured config values plus the app).
     """
     pytest.importorskip("downshift.serve.app")
     captured: dict = {}
-    monkeypatch.setattr(main.uvicorn, "run", lambda app, **kw: captured.update(app=app, **kw))
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: captured.update(app=app, **kw))
+    _fake_uvicorn_server(monkeypatch, captured)
     result = run("serve", CLEAN, "--warmup", "1", *extra_args)
     assert result.exit_code == 0, result.output
     return result, captured
@@ -225,7 +306,32 @@ def test_serve_passes_max_body_bytes_and_max_concurrency(monkeypatch):
     options = captured["app"].state.serving.options
     assert options.max_body_bytes == 8192
     assert options.max_concurrency == 4
-    assert "Concurrency" in result.output
+    assert "Capacity" in result.output
+
+
+def test_serve_passes_max_queue_and_request_timeout(monkeypatch):
+    result, captured = _serve_captured(monkeypatch, "--max-queue", "8", "--request-timeout", "2.5")
+    options = captured["app"].state.serving.options
+    assert options.max_queue == 8
+    assert options.request_timeout == 2.5
+    assert "Capacity" in result.output
+
+
+def _app_access_log(api) -> bool:
+    """uvicorn's own access log is always off; the app's RequestIdMiddleware writes the line."""
+    middleware = next(m for m in api.user_middleware if m.cls.__name__ == "RequestIdMiddleware")
+    return middleware.kwargs["access_log"]
+
+
+def test_serve_access_log_defaults_to_enabled(monkeypatch):
+    _, captured = _serve_captured(monkeypatch)
+    assert captured["access_log"] is False
+    assert _app_access_log(captured["app"]) is True
+
+
+def test_serve_no_access_log_disables_it(monkeypatch):
+    _, captured = _serve_captured(monkeypatch, "--no-access-log")
+    assert _app_access_log(captured["app"]) is False
 
 
 def test_serve_rejects_unknown_output_encoding():
@@ -233,44 +339,94 @@ def test_serve_rejects_unknown_output_encoding():
     assert result.exit_code == 2, result.output  # typer usage error: not a choice
 
 
+def test_serve_load_failure_on_the_loader_thread_exits_with_the_usual_code(monkeypatch):
+    """A model that fails to load in the background thread must still end the process with
+    the exit code _exit_on_error would give it synchronously, not serve 503 forever."""
+    captured: dict = {}
+    _fake_uvicorn_server(monkeypatch, captured)
+
+    result = run("serve", CLEAN, "--adapter", "doesnotexist")
+
+    assert result.exit_code == main.EXIT_USAGE, result.output
+    assert "LoadError" not in result.output
+    assert "doesnotexist" in result.output
+
+
+def test_serve_backend_onnxruntime_on_degraded_is_a_usage_error(monkeypatch):
+    captured: dict = {}
+    _fake_uvicorn_server(monkeypatch, captured)
+
+    result = run("serve", DEGRADED, "--backend", "onnxruntime")
+
+    assert result.exit_code == main.EXIT_USAGE, result.output
+    assert "--force-onnx" in result.output
+
+
+def test_serve_backend_onnxruntime_and_force_onnx_on_degraded_is_accepted(monkeypatch):
+    captured: dict = {}
+    _fake_uvicorn_server(monkeypatch, captured)
+
+    result = run("serve", DEGRADED, "--backend", "onnxruntime", "--force-onnx", "--warmup", "0")
+
+    assert result.exit_code == 0, result.output
+    assert captured["app"].state.serving.backend.name == "onnxruntime"
+
+
 def test_serve_workers_uses_an_import_string_factory(monkeypatch):
     _, captured = _serve_captured(monkeypatch, "--workers", "2")
-    assert captured["app"] == "downshift.cli.main:_serve_app_factory"
+    assert captured["app"] == "downshift.cli.runtime:_serve_app_factory"
     assert captured["workers"] == 2
     assert captured["factory"] is True
 
-    args = main.ServeArgs(**json.loads(os.environ[main._SERVE_ARGS_ENV]))
-    assert args.model == CLEAN
+    args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
+    assert args.load.model == CLEAN
+
+
+def test_serve_workers_splits_threads_across_the_cpu_count(monkeypatch):
+    monkeypatch.setattr(os, "cpu_count", lambda: 16)
+    _, captured = _serve_captured(monkeypatch, "--workers", "4")
+    assert captured["workers"] == 4
+
+    args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
+    assert args.options.intra_op_threads == 4
+
+
+def test_serve_workers_explicit_intra_op_threads_wins(monkeypatch):
+    monkeypatch.setattr(os, "cpu_count", lambda: 16)
+    _serve_captured(monkeypatch, "--workers", "4", "--intra-op-threads", "7")
+
+    args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
+    assert args.options.intra_op_threads == 7
+
+
+def _rebuilt_app():
+    """What a --workers worker does: rebuild the app from the env, then let the loader run."""
+    api = main._serve_app_factory()
+    with TestClient(api):
+        api.state.loader_thread.join(timeout=60)
+    return api
 
 
 def test_serve_app_factory_rebuilds_the_app_from_env(monkeypatch):
     pytest.importorskip("downshift.serve.app")
     args = main.ServeArgs(
-        model=CLEAN,
-        inputs=None,
-        model_class=None,
-        unsafe_load=False,
-        adapter=None,
-        k=1,
-        dynamic=None,
+        load=LoadSpec(CLEAN),
+        options=ServeOptions(
+            k=1,
+            device="cpu",
+            warmup=1,
+            output_encoding=OutputEncoding.base64,
+            max_input_bytes=1024,
+            max_body_bytes=2048,
+            max_concurrency=2,
+        ),
         reference=None,
         middleware=None,
-        backend="auto",
-        force_onnx=False,
-        device="cpu",
-        warmup=1,
-        intra_op_threads=0,
-        inter_op_threads=0,
-        output_encoding="base64",
-        max_input_bytes=1024,
-        max_body_bytes=2048,
-        max_concurrency=2,
         log_level="warning",
-        log_format="text",
     )
-    monkeypatch.setenv(main._SERVE_ARGS_ENV, json.dumps(main.asdict(args)))
+    monkeypatch.setenv(main._SERVE_ARGS_ENV, args.to_json())
 
-    api = main._serve_app_factory()
+    api = _rebuilt_app()
     assert api.state.serving.verdict.status == "CLEAN"
     assert api.state.serving.options.output_encoding == "base64"
     assert api.state.serving.options.max_input_bytes == 1024
@@ -278,10 +434,116 @@ def test_serve_app_factory_rebuilds_the_app_from_env(monkeypatch):
     assert api.state.serving.options.max_concurrency == 2
 
 
-def test_version():
-    result = run("version")
-    assert result.exit_code == 0
-    assert main.__version__ in result.stdout
+def test_a_worker_that_cannot_load_exits_with_uvicorns_startup_failure_code(monkeypatch):
+    """uvicorn's worker supervisor respawns a worker that dies with any other code, which
+    would reload the same failing model forever; STARTUP_FAILURE makes it stop the server."""
+    pytest.importorskip("downshift.serve.app")
+    from uvicorn.config import STARTUP_FAILURE
+
+    from downshift.cli import runtime
+
+    args = main.ServeArgs(
+        load=LoadSpec(CLEAN),
+        options=ServeOptions(k=1, device="cpu", warmup=1),
+        reference=None,
+        middleware=None,
+        log_level="warning",
+    )
+    monkeypatch.setenv(main._SERVE_ARGS_ENV, args.to_json())
+
+    def fail(_args):
+        raise MemoryError("not enough RAM for another copy")
+
+    exits: list[int] = []
+    monkeypatch.setattr(runtime, "_build_serving_state", fail)
+    monkeypatch.setattr(os, "_exit", exits.append)
+
+    _rebuilt_app()
+
+    assert exits == [STARTUP_FAILURE]
+
+
+def test_serve_workers_writes_and_ships_the_onnx_artifact(monkeypatch):
+    """Parent-side: the .onnx the parent exported exists on disk, and its bytes plus the
+    verdict are what the workers get, before the (stubbed) uvicorn.run's `finally` cleans
+    the temp file up."""
+    seen: dict = {}
+
+    def fake_run(app, **kw):
+        seen["app"] = app
+        seen.update(kw)
+        args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
+        seen["args"] = args
+        assert args.artifact.onnx_path is not None
+        seen["onnx_bytes"] = Path(args.artifact.onnx_path).read_bytes()
+
+    monkeypatch.setattr(uvicorn, "run", fake_run)
+    result = run("serve", CLEAN, "--warmup", "1", "--workers", "2", "--no-access-log")
+    assert result.exit_code == 0, result.output
+
+    assert seen["workers"] == 2
+    assert seen["access_log"] is False
+    args = seen["args"]
+    assert args.artifact.backend == "onnxruntime"
+    assert args.artifact.verdict is not None
+    assert args.artifact.verdict["status"] == "CLEAN"
+    assert args.artifact.input_names == ["x"]
+    assert len(seen["onnx_bytes"]) > 0
+
+
+def test_serve_workers_degraded_ships_a_torch_artifact_and_warns(monkeypatch):
+    seen: dict = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: seen.update(app=app, **kw))
+
+    result = run("serve", DEGRADED, "--warmup", "0", "--workers", "2")
+
+    assert result.exit_code == 0, result.output
+    assert "each worker independently reloads and re-warms" in result.output
+    args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
+    assert args.artifact.backend == "torch"
+    assert args.artifact.verdict is not None
+    assert args.artifact.verdict["status"] == "DEGRADED"
+    assert args.artifact.onnx_path is None
+
+
+def test_serve_app_factory_from_onnx_artifact_never_calls_capture(monkeypatch, tmp_path):
+    """Worker rebuild from an onnxruntime artifact must not re-run capture()/verify(): the
+    parent already did that once."""
+    pytest.importorskip("downshift.serve.app")
+    onnx_path = tmp_path / "clean_mlp.onnx"
+    verdict = downshift.export(clean_mlp.make_model(), onnx_path, clean_mlp.make_inputs())
+    assert verdict.status == "CLEAN", verdict.reason
+
+    from downshift.core import verdict as verdict_mod
+
+    def boom(*args, **kwargs):
+        raise AssertionError("capture() must not run when serving a parent's artifact")
+
+    monkeypatch.setattr(verdict_mod, "capture", boom)
+
+    args = main.ServeArgs(
+        load=LoadSpec(CLEAN),
+        options=ServeOptions(
+            k=1, device="cpu", warmup=1, max_input_bytes=1024, max_body_bytes=2048
+        ),
+        reference=None,
+        middleware=None,
+        log_level="warning",
+        artifact=main.ArtifactHandoff(
+            backend="onnxruntime",
+            verdict=verdict.to_dict(),
+            input_names=list(verdict.input_names),
+            notes=[],
+            onnx_path=str(onnx_path),
+            feeds_path=None,
+        ),
+    )
+    monkeypatch.setenv(main._SERVE_ARGS_ENV, args.to_json())
+
+    api = _rebuilt_app()
+
+    assert api.state.serving.verdict.status == "CLEAN"
+    assert api.state.serving.backend.name == "onnxruntime"
 
 
 def test_version_eager_flag():

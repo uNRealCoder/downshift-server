@@ -12,6 +12,8 @@ import pytest
 import torch
 
 import downshift
+from downshift.core import verdict as verdict_mod
+from downshift.core.capture import CaptureResult
 from tests.models import (
     bf16_weights,
     clean_mlp,
@@ -102,6 +104,29 @@ def test_check_with_fp16_does_not_mutate_the_callers_model() -> None:
     assert next(verdict.prepared.model.parameters()).dtype == torch.float16
 
 
+def test_build_verdict_uses_first_failure_and_mines_unsupported_ops_from_all(monkeypatch) -> None:
+    first = RuntimeError("aten.scatter_reduce.two not supported")
+    second = RuntimeError("generic export failure mentioning aten.index_put too")
+
+    def fake_capture(model, inputs, dynamic_shapes=None):
+        return CaptureResult(
+            success=False,
+            capture_strategy=None,
+            exception=first,
+            exceptions=[("strict=False", first), ("strict=True", second)],
+        )
+
+    monkeypatch.setattr(verdict_mod, "capture", fake_capture)
+    prepared = verdict_mod.prepare_model(clean_mlp.make_model(), clean_mlp.make_inputs())
+
+    verdict = verdict_mod.build_verdict(prepared)
+
+    assert verdict.status == "FAILED"
+    assert "aten.scatter_reduce" in verdict.reason  # the first failure, not the second's
+    assert verdict.unsupported_ops == ["index_put", "scatter_reduce"]  # mined from both
+    assert verdict.capture_exceptions == [("strict=False", first), ("strict=True", second)]
+
+
 def test_scatter_fixture_numerics_actually_diverge() -> None:
     """DEGRADED has to mean real numeric divergence, not just a non-empty failure reason."""
     model = scatter_include_self_false.make_model()
@@ -114,3 +139,23 @@ def test_scatter_fixture_numerics_actually_diverge() -> None:
     assert verdict.numerics.failures > 0
     assert verdict.numerics.max_abs_err > verdict.numerics.tolerance_abs
     assert verdict.recommended_backend == "torch"
+
+
+@pytest.mark.parametrize(
+    ("module", "status"),
+    [
+        (clean_mlp, "CLEAN"),
+        (scatter_include_self_false, "DEGRADED"),
+        (data_dependent_branch, "FAILED"),
+    ],
+    ids=["clean", "degraded", "failed"],
+)
+def test_verdict_round_trips_through_dict(module, status: str) -> None:
+    """from_dict(v.to_dict()) must reproduce to_dict() exactly, since this is how a
+    `serve --workers N` worker gets its verdict without redoing capture/verify itself."""
+    verdict = downshift.check(module.make_model(), module.make_inputs(), k=4)
+    assert verdict.status == status, verdict.reason
+
+    rebuilt = verdict_mod.ExportVerdict.from_dict(verdict.to_dict())
+
+    assert rebuilt.to_dict() == verdict.to_dict()

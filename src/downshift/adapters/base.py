@@ -8,11 +8,20 @@ to generate more samples for verification.
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
 from torch import nn
 
 VaryFn = Callable[[int], tuple]
+
+
+class Family(StrEnum):
+    """The built-in adapter names. A custom adapter's `name` is a plain string."""
+
+    hf = "hf"
+    pyg = "pyg"
+    generic = "generic"
 
 
 @dataclass
