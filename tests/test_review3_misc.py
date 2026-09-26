@@ -74,8 +74,11 @@ def _serve_args(**overrides) -> ServeArgs:
             onnx_path="model.onnx",
             feeds_path="feeds.npz",
             axis_bounds=axis_bounds_to_json(BOUNDS),
+            kind="onnx-file",
+            hf_source="path/to/repo/dir",
         ),
         "access_log": False,
+        "tokenizer_from": "path/to/repo/dir",
     }
     fields.update(overrides)
     return ServeArgs(**fields)
@@ -110,7 +113,7 @@ def test_serve_args_round_trip_without_an_artifact_defaults_access_log_on():
 @pytest.fixture(scope="module")
 def hf():
     pytest.importorskip("transformers")
-    from downshift.adapters import hf as module
+    from downshift import hf_repo as module
 
     return module
 

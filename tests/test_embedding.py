@@ -157,14 +157,15 @@ def test_a_row_does_not_depend_on_what_it_is_batched_with(client):
 
 
 def test_the_authors_max_seq_length_wins_over_the_position_embeddings(client):
-    """Position embeddings allow 32; the repo says it was trained at 16. Longer input is cut
-    at 16 and flagged, so it matches what sentence-transformers itself would return."""
+    """Position embeddings allow 32; the repo says it was trained at 16, so 16 tokens is the
+    most a row may have: one more is refused rather than silently cut."""
     fifteen = " ".join(["hello"] * 14)  # + [CLS] [SEP] = 16: fits
     seventeen = " ".join(["hello"] * 15)  # 17: one over
 
-    body = client.post("/predict", json={"text": [fifteen, seventeen]}).json()
-
-    assert body["truncated"] == [False, True]
+    assert client.post("/predict", json={"text": fifteen}).status_code == 200
+    r = client.post("/predict", json={"text": [fifteen, seventeen]})
+    assert r.status_code == 400
+    assert "16 tokens" in r.text
 
 
 def test_schema_says_what_kind_of_vector_this_is(client):
@@ -286,6 +287,72 @@ def _cli(*args: str):
     return CliRunner().invoke(main.app, list(args))
 
 
+@pytest.fixture(scope="module")
+def onnx_path(state, tmp_path_factory) -> str:
+    """repo's model, already exported to a standalone .onnx - the counterpart to serving
+    repo directly, for the --tokenizer-from tests below."""
+    path = tmp_path_factory.mktemp("onnx") / "model.onnx"
+    path.write_bytes(state.verdict.onnx_bytes)
+    return str(path)
+
+
+def _stub_uvicorn_server(monkeypatch) -> dict:
+    """Single-worker `serve` binds via uvicorn.Server directly; stand in for it so the CLI
+    test runs the real loader thread without opening a socket. Local, minimal copy of
+    test_cli.py's _fake_uvicorn_server - kept here rather than imported across test modules."""
+    import uvicorn
+
+    captured: dict = {}
+
+    def fake_init(self, config) -> None:
+        self.config = config
+        self.should_exit = False
+        captured["app"] = config.app
+
+    def fake_run(self) -> None:
+        with TestClient(self.config.app):
+            thread = getattr(self.config.app.state, "loader_thread", None)
+            if thread is not None:
+                thread.join(timeout=30)
+
+    monkeypatch.setattr(uvicorn.Server, "__init__", fake_init)
+    monkeypatch.setattr(uvicorn.Server, "run", fake_run)
+    return captured
+
+
+def test_serve_rejects_a_tokenizer_from_that_is_not_an_hf_repo(onnx_path, tmp_path):
+    not_a_repo = tmp_path / "not-a-repo"
+    not_a_repo.mkdir()
+
+    result = _cli("serve", onnx_path, "--tokenizer-from", str(not_a_repo))
+
+    assert result.exit_code == main.EXIT_USAGE, result.output
+    assert "config.json" in result.output
+
+
+def test_serve_tokenizer_from_attaches_text_input_end_to_end(monkeypatch, onnx_path, repo):
+    captured = _stub_uvicorn_server(monkeypatch)
+
+    result = _cli("serve", onnx_path, "--tokenizer-from", repo, "--warmup", "1")
+
+    assert result.exit_code == 0, result.output
+    serving = captured["app"].state.serving
+    assert serving.hf_source == repo
+    assert serving.text is not None
+    assert serving.verdict.status == "UNVERIFIED"  # no --reference given: numerics untouched
+
+
+def test_serve_reference_alone_does_not_attach_text(monkeypatch, onnx_path, repo):
+    captured = _stub_uvicorn_server(monkeypatch)
+
+    result = _cli("serve", onnx_path, "--reference", repo, "--warmup", "1")
+
+    assert result.exit_code == 0, result.output
+    serving = captured["app"].state.serving
+    assert serving.text is None
+    assert serving.verdict.status == "CLEAN", serving.verdict.reason
+
+
 def test_check_takes_the_pooling_flags(repo):
     result = _cli("check", repo, "--pooling", "cls", "--no-normalize", "--json")
 
@@ -354,6 +421,7 @@ def test_onnx_artifact_worker_still_takes_text_and_reports_the_recipe(
         notes=[],
         onnx_path=str(onnx_path),
         kind=state.source_kind,  # what the parent's serve_cmd ships
+        hf_source=state.hf_source,
     )
 
     worker = _rebuilt(monkeypatch, args)
@@ -373,6 +441,7 @@ def test_torch_artifact_worker_still_takes_text_and_reports_the_recipe(monkeypat
         backend="torch",
         verdict=torch_state.verdict.to_dict(),
         notes=[],
+        hf_source=torch_state.hf_source,
     )
 
     worker = _rebuilt(monkeypatch, args)

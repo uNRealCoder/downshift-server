@@ -1,8 +1,8 @@
 """Text in, class probabilities out, for a downloaded Hugging Face repo.
 
 `/predict` normally takes tensors. When the served directory also holds tokenizer files,
-`{"text": ...}` is accepted too: the server tokenizes, truncates to the model's own limit and
-pads the batch, then feeds the same graph the tensor path does. A sequence classifier also
+`{"text": ...}` is accepted too: the server tokenizes and pads the batch (refusing a row longer
+than the model's own limit), then feeds the same graph the tensor path does. A sequence classifier also
 gets a `predictions` block (softmax, or sigmoid for a multi-label config) next to the raw
 logits. Nothing here imports transformers: the tokenizer is whatever object the hf adapter
 loaded, used through its call signature.
@@ -27,32 +27,22 @@ class TextIO:
     id2label: dict[int, str] | None = None  # set for a sequence classifier
     activation: str | None = None  # SOFTMAX or SIGMOID; None when the output is not a class score
 
-    def encode(self, text: list[str]) -> tuple[dict[str, np.ndarray], list[bool]]:
-        """(tokenizer outputs, per-row truncated flags) for a batch of texts.
-
-        Rows longer than the model's limit are cut, not rejected, and reported back: a
-        classifier that quietly reads only the head of a long input is a hazard the caller
-        should be told about. The caller picks the outputs the graph actually takes.
+    def encode(self, text: list[str]) -> dict[str, np.ndarray]:
+        """Tokenizer outputs for a batch of texts, padded to the longest row; the caller picks
+        the ones the graph takes. A row longer than the model can read is refused with a
+        ValueError, never cut: the only cap on input size is the request body limit.
         """
-        encoded = self.tokenizer(
-            text,
-            truncation=True,
-            max_length=self.max_length,
-            padding=True,
-            return_tensors="np",
-        )
-        if encoded.encodings is not None:
-            # Fast tokenizer: one pass. `overflowing` holds the cut-off remainder as its own
-            # Encoding, non-empty exactly when this row was truncated (checked against
-            # transformers 5.17 without return_overflowing_tokens=True: it is populated).
-            truncated = [bool(e.overflowing) for e in encoded.encodings]
-        else:
-            # Slow tokenizer: no Encoding objects to inspect, so measure with a second pass.
-            # verbose=False: this call only measures. Without it transformers warns that the
-            # text "will result in indexing errors", which is not true of the encoded above.
-            full = self.tokenizer(text, truncation=False, padding=False, verbose=False)
-            truncated = [len(ids) > self.max_length for ids in full["input_ids"]]
-        return {name: np.asarray(value) for name, value in encoded.items()}, truncated
+        encoded = self.tokenizer(text)
+        lengths = [len(ids) for ids in encoded["input_ids"]]
+        over = {i: n for i, n in enumerate(lengths) if n > self.max_length}
+        if over:
+            rows = ", ".join(f"row {i}: {n}" for i, n in over.items())
+            raise ValueError(
+                f"text longer than this model reads ({self.max_length} tokens, from the "
+                f"model's own files) is refused rather than cut; token counts {rows}"
+            )
+        padded = self.tokenizer.pad(encoded, return_tensors="np")
+        return {name: np.asarray(value) for name, value in padded.items()}
 
     def predictions(self, logits: np.ndarray) -> list[dict[str, Any]] | None:
         """One {label, score, probabilities} per row, or None when this is not a

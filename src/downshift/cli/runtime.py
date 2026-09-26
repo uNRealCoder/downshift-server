@@ -71,6 +71,10 @@ class ArtifactHandoff:
     axis_bounds: dict[str, list[list]] | None = None
     # The parent's ServingState.source_kind: an ONNX worker has no LoadedModel to read it from.
     kind: str | None = None
+    # The parent's ServingState.hf_source: the HF repo directory to
+    # read tokenizer/pooling metadata from, if any. Carried rather than re-derived so a
+    # worker never needs to re-validate --tokenizer-from itself.
+    hf_source: str | None = None
 
 
 @dataclass
@@ -87,6 +91,9 @@ class ServeArgs:
     log_level: str
     artifact: ArtifactHandoff | None = None
     access_log: bool = True
+    # A Hugging Face repo directory validated by loading.resolve_tokenizer_source, or None.
+    # Independent of `reference`: this is the whole of --tokenizer-from's job.
+    tokenizer_from: str | None = None
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))
@@ -197,6 +204,7 @@ def _build_from_onnx_artifact(args: ServeArgs, opts: ServeOptions) -> ServingSta
         example_inputs,
         axis_bounds_from_json(args.artifact.axis_bounds) if args.artifact.axis_bounds else None,
         kind=args.artifact.kind or UNKNOWN_SOURCE,
+        hf_source=args.artifact.hf_source,
     )
 
 
@@ -209,7 +217,9 @@ def _build_from_torch_artifact(args: ServeArgs, opts: ServeOptions) -> ServingSt
     load_start = time.perf_counter()
     loaded = _load(args.load)
     load_s = time.perf_counter() - load_start
-    state = serving_state_from_torch_artifact(loaded, verdict, opts, notes=args.artifact.notes)
+    state = serving_state_from_torch_artifact(
+        loaded, verdict, opts, notes=args.artifact.notes, hf_source=args.artifact.hf_source
+    )
     state.timings[Phase.load] = load_s
     return state
 
@@ -228,7 +238,7 @@ def _build_serving_state(args: ServeArgs) -> ServingState:
     # --reference shares --pooling/--normalize with MODEL: see check_cmd's comment.
     ref = _load(replace(args.load, model=args.reference)) if args.reference else None
     load_s = time.perf_counter() - load_start
-    state = prepare_serving(loaded, opts, ref)
+    state = prepare_serving(loaded, opts, ref, tokenizer_from=args.tokenizer_from)
     state.timings[Phase.load] = load_s
     return state
 
@@ -245,15 +255,27 @@ def _serve_app_factory() -> FastAPI:
     exactly like the single-worker path; with one set, it loads the parent's already-verified
     export instead (see ServeArgs). Unlike the single-worker path, a failed load here has no
     uvicorn.Server to set should_exit on (that Server is built by uvicorn itself, after this
-    function returns) - the worker stays up serving 503s rather than exiting the process.
+    function returns), so the loader below exits the process directly instead: a worker that
+    can't load must not stay up quietly serving 503s forever with nothing to say why. It exits
+    with uvicorn's STARTUP_FAILURE code, which tells uvicorn's worker supervisor to stop the
+    whole server rather than respawn the worker into the same failure (and the same reload)
+    forever.
     """
+    from uvicorn.config import STARTUP_FAILURE
+
     from downshift.serve.app import build_app
 
     args = ServeArgs.from_json(os.environ[_SERVE_ARGS_ENV])
     _setup_logging(LogLevel(args.log_level))
 
     def loader() -> ServingState:
-        state = _build_serving_state(args)
+        try:
+            state = _build_serving_state(args)
+        except Exception as exc:
+            if LogLevel(args.log_level) is LogLevel.debug:
+                render.print_traceback()
+            render.error(f"model failed to load in this worker: {type(exc).__name__}: {exc}")
+            os._exit(STARTUP_FAILURE)
         render.print_ready(state)
         return state
 

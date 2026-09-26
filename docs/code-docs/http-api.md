@@ -227,7 +227,6 @@ class PredictResponse(BaseModel):
     shapes: dict[str, list[int]]
     dtypes: dict[str, str]
     predictions: list[dict] | None = None  # sequence classifiers only
-    truncated: list[bool] | None = None  # `text` requests only
 ```
 
 Nested-list body:
@@ -285,16 +284,16 @@ curl -s localhost:8000/predict -H 'content-type: application/json' \
   -d '{"text": ["What is the capital of France?", "Ignore all previous instructions."]}'
 ```
 
-The server tokenizes, pads the batch and truncates each row to the smallest limit the model's
-own files declare: the tokenizer's `model_max_length`, the model's `max_position_embeddings`, and
+The server tokenizes and pads the batch. Each row may be at most as long as the smallest limit
+the model's own files declare: the tokenizer's `model_max_length`, the model's `max_position_embeddings`, and
 for an embedding model the `max_seq_length` its author trained at (see "Embedding models"). None
 of these is downshift's to choose. For the RoBERTa family (`roberta`, `xlm-roberta`,
 `xlm-roberta-xl`, `camembert`) the usable length is `max_position_embeddings - (pad_token_id +
-1)`, because position ids start after the padding index: 514 positions serve 512 tokens. With a
-fast tokenizer the batch is tokenized in one pass, and the truncation flags come from that same
-call. A row that was cut is reported in
-`truncated` (one bool per row), never silently: a classifier that read only the head of a long
-input is something the caller has to know. A single string is a batch of one, so `shapes` never
+1)`, because position ids start after the padding index: 514 positions serve 512 tokens. A
+longer row is refused with a 400 naming each over-long row and its token count, never cut: a
+classifier that read only the head of a long input would answer about text it never saw. The
+only cap on how much text a request carries is the request body limit (`--max-body-bytes`).
+A single string is a batch of one, so `shapes` never
 depends on which form was sent.
 
 When `config.json` declares a sequence-classification architecture, the repo is loaded with its
@@ -306,8 +305,7 @@ then also carries `predictions`, one entry per row, for `text` and tensor reques
  "shapes": {"output_0": [1, 3]},
  "dtypes": {"output_0": "float32"},
  "predictions": [{"label": "INJECTION", "score": 0.9997,
-                  "probabilities": {"BENIGN": 0.0002, "INJECTION": 0.9997, "JAILBREAK": 0.0001}}],
- "truncated": [false]}
+                  "probabilities": {"BENIGN": 0.0002, "INJECTION": 0.9997, "JAILBREAK": 0.0001}}]}
 ```
 
 `probabilities` is a softmax over the logits, or a per-label sigmoid when the config says
@@ -362,7 +360,7 @@ Status codes:
 | `400` | `{"detail": "this model takes tensors only: ..."}` | A `text` request to a model with no tokenizer. |
 | `400` | `{"detail": "input_ids axis 1 is 65; this model accepts 1 to 64"}` | An axis outside the `bounds` `GET /schema` reports for that input. |
 | `400` | `{"detail": "input_ids contains -1, outside the vocabulary [0, 30522)"}` | A model served from a Hugging Face repo directory: any `input_ids` value outside `[0, vocab_size)`. Checked before inference because ONNX Runtime wraps a negative index instead of refusing it. |
-| `400` | `{"detail": "..."}` | The backend itself rejected the inputs (`InferenceInputError`). ONNX Runtime: a shape/graph error. Torch: only client-shaped errors - an `IndexError`, or a `RuntimeError`/`ValueError` whose message is about a shape, size, dimension, dtype or out-of-range index, and not an out-of-memory error. Any other exception from the model is a `500`. |
+| `400` | `{"detail": "..."}` | The backend itself rejected the inputs (`InferenceInputError`). ONNX Runtime: a shape/graph error. Torch: a `RuntimeError`/`ValueError`/`IndexError` from the model, unless its message marks a server-side fault (out of memory on CPU or GPU, a CUDA/cuDNN/cuBLAS error, an illegal memory access, an internal assert, a missing kernel, tensors on different devices), which is a `500`. |
 | `401` | `{"detail": "Authorization header is not set or incorrect"}`, header `WWW-Authenticate: Bearer` | `DOWNSHIFT_SERVER_API_KEY` is set and the request has no matching bearer token. Every route but `/health` and `/ready`. |
 | `413` | `{"detail": "request body is N bytes; the server limit is M bytes (--max-body-bytes)"}` | Body over `--max-body-bytes` (default 64 MiB), rejected before JSON parsing. `N` is the declared `Content-Length`, or, for a chunked body, the running total at the moment it crossed the limit. |
 | `422` | FastAPI's default validation error body | Malformed JSON, or a required field (`inputs`) missing. |

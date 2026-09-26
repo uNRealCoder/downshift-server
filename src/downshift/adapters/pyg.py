@@ -13,8 +13,7 @@ from torch_geometric.data import Data
 from torch_geometric.nn import MessagePassing
 
 from downshift.adapters._flatten import build_shim_class
-from downshift.adapters.base import Prepared, VaryFn
-from downshift.adapters.registry import Family
+from downshift.adapters.base import Family, Prepared, VaryFn
 from downshift.core.shapes import alternative_sizes, dim_bounds, pick_size
 
 BASE_FIELD_NAMES = ("x", "edge_index")  # edge_attr appended when present on the input Data
@@ -120,6 +119,3 @@ def make_vary_fn(
         return tuple(sample)
 
     return vary
-
-
-ADAPTER = PyGAdapter()

@@ -6,8 +6,8 @@ import pytest
 import torch
 from torch import nn
 
-import downshift.adapters as adapters_pkg
-from downshift.adapters import hf
+import downshift
+from downshift import hf_repo
 from downshift.loading import LoadError, LoadSpec, _instantiate, import_object, load_model
 from tests.models import clean_mlp, tiny_bert
 
@@ -144,8 +144,8 @@ def test_missing_path_with_a_suffix_is_reported_as_not_on_this_machine(tmp_path)
 
 def test_hf_extra_not_installed_reports_a_helpful_error(tmp_path, monkeypatch):
     (tmp_path / "config.json").write_text("{}")
-    monkeypatch.delattr(adapters_pkg, "hf", raising=False)
-    monkeypatch.setitem(sys.modules, "downshift.adapters.hf", None)
+    monkeypatch.delattr(downshift, "hf_repo", raising=False)
+    monkeypatch.setitem(sys.modules, "downshift.hf_repo", None)
 
     with pytest.raises(LoadError, match=r"\[hf\] extra"):
         load_model(LoadSpec(str(tmp_path)))
@@ -157,7 +157,7 @@ def test_hf_load_failure_is_wrapped_in_load_error(tmp_path, monkeypatch):
     def boom(path, pooling=None, normalize=None):
         raise OSError("model.safetensors is missing")
 
-    monkeypatch.setattr(hf, "load_pretrained", boom)
+    monkeypatch.setattr(hf_repo, "load_pretrained", boom)
 
     with pytest.raises(LoadError, match="can't load"):
         load_model(LoadSpec(str(tmp_path)))
@@ -168,20 +168,10 @@ def test_hub_id_is_rejected_rather_than_downloaded(spec, monkeypatch):
     def boom(path):
         raise AssertionError("load_pretrained must not be reached for a hub id")
 
-    monkeypatch.setattr(hf, "load_pretrained", boom)
+    monkeypatch.setattr(hf_repo, "load_pretrained", boom)
 
     with pytest.raises(LoadError, match="hub id is not accepted"):
         load_model(LoadSpec(spec))
-
-
-def test_hf_adapter_refuses_anything_but_a_local_directory(tmp_path):
-    pytest.importorskip("transformers")
-
-    with pytest.raises(ValueError, match="not a directory"):
-        hf.load_pretrained("bert-base-uncased")
-
-    with pytest.raises(ValueError, match="not a directory"):
-        hf.load_pretrained(str(tmp_path / "nope"))
 
 
 def test_local_dir_with_config_json_is_treated_as_hf_repo(tmp_path, monkeypatch):
@@ -192,7 +182,7 @@ def test_local_dir_with_config_json_is_treated_as_hf_repo(tmp_path, monkeypatch)
         seen.append(repo_id_or_path)
         return tiny_bert.make_model()
 
-    monkeypatch.setattr(hf, "load_pretrained", fake_load)
+    monkeypatch.setattr(hf_repo, "load_pretrained", fake_load)
 
     loaded = load_model(LoadSpec(str(tmp_path)))
 
@@ -205,13 +195,4 @@ def test_local_dir_without_config_json_is_rejected(tmp_path):
     (tmp_path / "README.md").write_text("not a model repo")
 
     with pytest.raises(LoadError, match="no config.json"):
-        load_model(LoadSpec(str(tmp_path)))
-
-
-def test_local_hf_repo_dir_needs_hf_extra(tmp_path, monkeypatch):
-    (tmp_path / "config.json").write_text("{}")
-    monkeypatch.delattr(adapters_pkg, "hf", raising=False)
-    monkeypatch.setitem(sys.modules, "downshift.adapters.hf", None)
-
-    with pytest.raises(LoadError, match=r"\[hf\] extra"):
         load_model(LoadSpec(str(tmp_path)))

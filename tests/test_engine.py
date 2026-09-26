@@ -263,6 +263,56 @@ def test_ort_providers_prefers_cuda_when_available(monkeypatch):
     assert backends_mod._ort_providers("cuda") == ["CUDAExecutionProvider", "CPUExecutionProvider"]
 
 
+class _FakeSession:
+    """Stands in for an ort.InferenceSession that ended up on the given providers."""
+
+    def __init__(self, providers: list[str]) -> None:
+        self._providers = providers
+
+    def get_providers(self) -> list[str]:
+        return self._providers
+
+    def get_inputs(self) -> list:
+        return []
+
+    def get_outputs(self) -> list:
+        return []
+
+
+def _fake_gpu_wheel(monkeypatch, session_providers: list[str]) -> None:
+    """onnxruntime-gpu installed (CUDA listed as available), but the session it hands back runs
+    on `session_providers`: the CPU alone when the CUDA/cuDNN libraries would not load."""
+    monkeypatch.setattr(
+        backends_mod.ort,
+        "get_available_providers",
+        lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"],
+    )
+    monkeypatch.setattr(
+        backends_mod.ort, "InferenceSession", lambda *a, **k: _FakeSession(session_providers)
+    )
+
+
+def test_ort_backend_refuses_cuda_when_the_session_fell_back_to_the_cpu(monkeypatch):
+    _fake_gpu_wheel(monkeypatch, ["CPUExecutionProvider"])
+
+    with pytest.raises(ValueError, match=r"--device cuda: onnxruntime could not start CUDA.*CPU"):
+        OnnxRuntimeBackend(b"model", device="cuda")
+
+
+def test_ort_backend_accepts_cuda_when_the_session_runs_on_it(monkeypatch):
+    _fake_gpu_wheel(monkeypatch, ["CUDAExecutionProvider", "CPUExecutionProvider"])
+
+    backend = OnnxRuntimeBackend(b"model", device="cuda")
+
+    assert backend.provider == "CUDAExecutionProvider"
+
+
+def test_ort_backend_does_not_check_for_cuda_on_a_cpu_server(monkeypatch):
+    _fake_gpu_wheel(monkeypatch, ["CPUExecutionProvider"])
+
+    assert OnnxRuntimeBackend(b"model", device="cpu").provider == "CPUExecutionProvider"
+
+
 def _bare_verdict(**overrides) -> ExportVerdict:
     fields = dict(
         status="CLEAN",

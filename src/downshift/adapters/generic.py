@@ -13,8 +13,7 @@ import torch
 from torch import nn
 
 from downshift.adapters._flatten import build_shim_class
-from downshift.adapters.base import Prepared
-from downshift.adapters.registry import Family
+from downshift.adapters.base import Family, Prepared
 from downshift.core.shapes import infer_dynamic_shapes
 
 _GUESS_SPATIAL = 32
@@ -94,6 +93,3 @@ def _flatten_dataclass(
     dataclass_type = type(arg)
     shim = build_shim_class(names)(model, lambda fields: dataclass_type(**fields), names)
     return shim, tensors, names
-
-
-ADAPTER = GenericAdapter()

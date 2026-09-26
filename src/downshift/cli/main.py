@@ -16,6 +16,7 @@ import gc
 import json
 import os
 import shutil
+import sys
 import traceback
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -53,6 +54,7 @@ from downshift.cli.options import (
     RtolOpt,
     SamplesOpt,
     SeedOpt,
+    TokenizerFromOpt,
     UnsafeLoadOpt,
     VaryOpt,
     WorkersOpt,
@@ -112,7 +114,13 @@ def _main(
         ),
     ] = False,
 ) -> None:
-    pass
+    # Like `python -m downshift`: import specs (MODEL, --inputs, --model-class, --vary,
+    # --middleware) also resolve against the current directory. Appended, not prepended, so a
+    # local file never shadows the stdlib or an installed package. --workers processes are
+    # spawned with this sys.path.
+    cwd = os.getcwd()
+    if cwd not in sys.path:
+        sys.path.append(cwd)
 
 
 @contextmanager
@@ -305,6 +313,7 @@ def serve_cmd(
         int, typer.Option("--warmup", min=0, help="Warm-up inferences before /ready flips")
     ] = settings.WARMUP,
     reference: ReferenceOpt = None,
+    tokenizer_from: TokenizerFromOpt = None,
     middleware: Annotated[
         list[str] | None,
         typer.Option(
@@ -343,6 +352,11 @@ def serve_cmd(
 
     _setup_logging(log_level)
     with _exit_on_error(log_level is LogLevel.debug):
+        resolved_tokenizer_from = None
+        if tokenizer_from is not None:
+            from downshift.loading import resolve_tokenizer_source
+
+            resolved_tokenizer_from = resolve_tokenizer_source(tokenizer_from)
         if workers > 1 and intra_op_threads == 0:
             # Unset (0 means "let ONNX Runtime/torch choose") oversubscribes N-fold across
             # worker processes; split the logical cores instead. Explicit flags still win.
@@ -381,6 +395,7 @@ def serve_cmd(
             middleware=list(middleware) if middleware else None,
             log_level=log_level.value,
             access_log=access_log,
+            tokenizer_from=resolved_tokenizer_from,
         )
         if workers <= 1:
             from downshift.serve.app import build_app
@@ -457,6 +472,7 @@ def serve_cmd(
                 feeds_path=feeds_path_str,
                 axis_bounds=axis_bounds_to_json(state.axis_bounds),
                 kind=state.source_kind,
+                hf_source=state.hf_source,
             )
             del state
             gc.collect()

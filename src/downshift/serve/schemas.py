@@ -101,8 +101,6 @@ class PredictResponse(BaseModel):
     dtypes: dict[str, str]
     # Present only for a sequence classifier: one {label, score, probabilities} per row.
     predictions: list[dict[str, Any]] | None = None
-    # Present only for a `text` request: True where that row was cut to the model's limit.
-    truncated: list[bool] | None = None
 
 
 # The input names that make a model "graph-shaped": what /predict/graph accepts, and what

@@ -27,26 +27,28 @@ _ort_state = ort.capi.onnxruntime_pybind11_state
 _ORT_CLIENT_ERRORS = (_ort_state.InvalidArgument, _ort_state.InvalidGraph)
 
 
-# Torch has no exception class for "the client's tensor was the wrong shape or dtype": those
-# are plain RuntimeError/ValueError with these words in the message. Anything without one
-# (an unsupported op, a CUDA failure, a bug in the module) is the server's problem and stays a
-# 500, as does an out-of-memory error, whose message also says "size".
-_TORCH_CLIENT_MARKERS = (
-    "shape",
-    "size",
-    "dimension",
-    "dtype",
-    "scalar type",
-    "must match",
-    "should be the same",
-    "broadcast",
-    "out of range",
+# Torch has no exception class for "the client's tensor was the wrong shape, dtype or index":
+# those are plain RuntimeError/ValueError, in as many different phrasings as there are ops
+# (a shape mismatch, a bad dtype, an out-of-bounds target, ...). Enumerating client-input
+# phrasings is whack-a-mole and under-classifies; enumerating the server-side ones is a much
+# shorter, more stable list - a hardware/driver fault or a torch-internal bug - so those are
+# what stays a 500, and everything else is presumed to be the client's fault.
+_TORCH_SERVER_MARKERS = (
+    "out of memory",
+    "cuda error",
+    "cudnn error",
+    "cublas",
+    "illegal memory access",
+    "internal assert",
+    "not implemented for",  # a missing kernel/op, not a bad value
+    "can't allocate memory",  # torch's CPU allocator ("DefaultCPUAllocator: can't allocate ...")
+    "expected all tensors to be on the same device",  # a model bug, not the request's
 )
 
 
 def _is_client_input_message(message: str) -> bool:
     lowered = message.lower()
-    return "out of memory" not in lowered and any(m in lowered for m in _TORCH_CLIENT_MARKERS)
+    return not any(m in lowered for m in _TORCH_SERVER_MARKERS)
 
 
 class InferenceInputError(ValueError):
@@ -135,6 +137,24 @@ def _ort_providers(device: str) -> list[str]:
     return [_CPU_EP]
 
 
+def _require_cuda_provider(session: ort.InferenceSession, requested: list[str]) -> None:
+    """ONNX Runtime lists CUDAExecutionProvider as available whenever the onnxruntime-gpu wheel
+    is installed, and quietly drops it from a session when the CUDA or cuDNN libraries that wheel
+    was built for cannot be loaded, so the session runs on the CPU. --device cuda is a promise
+    about where the model runs; break it loudly, like torch's own missing-CUDA check."""
+    if requested[0] != _CUDA_EP:
+        return
+    actual = session.get_providers()[0]
+    if actual != _CUDA_EP:
+        raise ValueError(
+            f"--device cuda: onnxruntime could not start {_CUDA_EP} and would have served on "
+            f"{actual}. onnxruntime-gpu needs the CUDA and cuDNN runtime libraries it was built "
+            "for on this machine's library path (its release notes name the CUDA major version); "
+            "downshift silences onnxruntime's own load errors, so run "
+            "onnxruntime.preload_dlls() in Python to see them, or pass --device cpu"
+        )
+
+
 def _session_options(intra_op_threads: int, inter_op_threads: int) -> ort.SessionOptions:
     """Max graph optimization always on. Thread counts of 0 mean "let ONNX Runtime choose",
     which is also its own default, so this is safe to set unconditionally."""
@@ -166,6 +186,7 @@ class OnnxRuntimeBackend:
             providers = _ort_providers(resolve_device(device))
             options = _session_options(intra_op_threads, inter_op_threads)
             self.session = ort.InferenceSession(source, sess_options=options, providers=providers)
+            _require_cuda_provider(self.session, providers)
         self.provider = self.session.get_providers()[0]
         self.input_names = [i.name for i in self.session.get_inputs()]
         self.onnx_output_names = [o.name for o in self.session.get_outputs()]
@@ -174,8 +195,14 @@ class OnnxRuntimeBackend:
         self.verified_provider: str | None = None
 
     def infer(self, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+        # run_with_ort_values, not run(): a bf16 output has no numpy dtype of its own
+        # (OrtValue.numpy() raises "No corresponding Numpy type"), so ordinary session.run()
+        # can never return one. Only the OrtValue form exposes DLPack, which torch does
+        # understand for bf16, letting _widen_ort_value reuse the same float32 wire
+        # contract (B1) as TorchBackend.infer.
+        ort_inputs = {name: ort.OrtValue.ortvalue_from_numpy(arr) for name, arr in inputs.items()}
         try:
-            outputs = self.session.run(self.onnx_output_names, inputs)
+            outputs = self.session.run_with_ort_values(self.onnx_output_names, ort_inputs)
         except _ORT_CLIENT_ERRORS as exc:
             raise InferenceInputError(str(exc).splitlines()[0]) from exc
         except _ort_state.Fail as exc:
@@ -183,7 +210,7 @@ class OnnxRuntimeBackend:
             if "shape" not in message.lower():
                 raise
             raise InferenceInputError(message.splitlines()[0]) from exc
-        return dict(zip(self.output_names, outputs, strict=True))
+        return dict(zip(self.output_names, (_widen_ort_value(o) for o in outputs), strict=True))
 
     def metadata(self) -> BackendMeta:
         def spec(name: str, node) -> IOSpec:
@@ -286,6 +313,26 @@ def _dynamic_shape(shape: tuple[int, ...]) -> list[int | str | None]:
 def widen_for_wire(t: torch.Tensor) -> torch.Tensor:
     """bf16/fp16 -> float32, everything else unchanged (B1)."""
     return t.float() if t.dtype in _WIDEN_DTYPES else t
+
+
+def _widen_ort_value(value: ort.OrtValue) -> np.ndarray:
+    """An ORT output as a wire-ready numpy array, bf16/fp16 widened to float32 (B1) like
+    TorchBackend.infer. fp16 goes through numpy, which has the dtype. bf16 has none
+    (OrtValue.numpy() raises "No corresponding Numpy type"), so it takes the DLPack bridge
+    into torch, which only newer onnxruntime builds expose on OrtValue."""
+    data_type = value.data_type()
+    if data_type == "tensor(float16)":
+        widened: np.ndarray = value.numpy().astype(np.float32)
+        return widened
+    if data_type == "tensor(bfloat16)":
+        if not hasattr(value, "__dlpack__"):
+            raise RuntimeError(
+                f"this model returns bfloat16, and onnxruntime {ort.__version__} cannot hand a "
+                "bfloat16 output back to Python; upgrade onnxruntime or serve with --backend torch"
+            )
+        return widen_for_wire(torch.from_dlpack(value)).numpy()
+    array: np.ndarray = value.numpy()
+    return array
 
 
 def example_feeds(input_names: Sequence[str], example_inputs: tuple) -> dict[str, np.ndarray]:

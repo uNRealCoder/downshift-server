@@ -26,6 +26,7 @@ def app_for(
     *,
     source: str | None = None,
     reference: torch.nn.Module | None = None,
+    tokenizer_from: str | Path | None = None,
     middleware: Sequence[str] = (),
     api_key: str | None = settings.API_KEY,
     **options: Any,
@@ -41,6 +42,11 @@ def app_for(
     same as `--reference` on the CLI - without it a `.onnx` `model` is served UNVERIFIED.
     Nothing is downloaded here either: an `.onnx` path has to exist before this is called.
 
+    `tokenizer_from` is a downloaded Hugging Face repo directory to load the tokenizer,
+    pooling recipe and label metadata from, same as `--tokenizer-from` on the CLI - for a
+    `.onnx`/checkpoint `model` that has none of its own. Independent of `reference`: it
+    never affects verification, and the two may name the same directory or different ones.
+
     `source` is the label `/metadata` and `/schema` report; it defaults to the `.onnx`
     path (reported as its file name only), or to `"model"` for an `nn.Module`, which has no
     path to name.
@@ -48,7 +54,12 @@ def app_for(
     `api_key` defaults to DOWNSHIFT_SERVER_API_KEY (settings.API_KEY), same as the CLI (U7,
     ruling 5); pass a value, or None to force it off, to override that for this app.
     """
-    from downshift.loading import IN_PROCESS_MODULE, ONNX_FILE, LoadedModel
+    from downshift.loading import (
+        IN_PROCESS_MODULE,
+        ONNX_FILE,
+        LoadedModel,
+        resolve_tokenizer_source,
+    )
     from downshift.serve.app import build_app
     from downshift.serve.engine import ServeOptions, prepare_serving
 
@@ -71,5 +82,10 @@ def app_for(
         if reference is not None
         else None
     )
-    state = prepare_serving(loaded, ServeOptions(**options), ref)
+    resolved_tokenizer_from = (
+        resolve_tokenizer_source(str(tokenizer_from)) if tokenizer_from is not None else None
+    )
+    state = prepare_serving(
+        loaded, ServeOptions(**options), ref, tokenizer_from=resolved_tokenizer_from
+    )
     return build_app(state=state, middleware=tuple(middleware), api_key=api_key)

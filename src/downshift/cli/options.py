@@ -72,6 +72,18 @@ ReferenceOpt = Annotated[
         help="Local PyTorch model to verify a .onnx against; same accepted forms as MODEL",
     ),
 ]
+TokenizerFromOpt = Annotated[
+    str | None,
+    typer.Option(
+        "--tokenizer-from",
+        metavar="DIR",
+        help=(
+            "Hugging Face repo directory to load the tokenizer, pooling recipe and label "
+            "metadata from, for a .onnx or PyTorch MODEL that has none of its own. "
+            "Independent of --reference: this never affects numeric verification."
+        ),
+    ),
+]
 IntraOpThreadsOpt = Annotated[
     int,
     typer.Option(

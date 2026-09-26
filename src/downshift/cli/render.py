@@ -336,7 +336,7 @@ def print_banner(state: ServingState, host: str, port: int, workers: int = 1) ->
     if state.text is not None:
         rows.add(
             "Text input",
-            f'"text" accepted, cut at {state.text.max_length} tokens  (truncated rows are flagged)',
+            f'"text" accepted, up to {state.text.max_length} tokens a row  (longer rows are refused)',
         )
     rows.add("Dynamic dims", _dynamic_text(verdict))
     for warning in verdict.warnings:

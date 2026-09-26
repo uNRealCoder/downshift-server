@@ -17,7 +17,7 @@ from downshift.core.phase import Phase, report
 from downshift.core.prevalidated import intake
 from downshift.core.shapes import dim_bounds
 from downshift.core.verdict import BackendName, ExportVerdict, build_verdict, prepare_model
-from downshift.loading import HF_REPO_DIR, UNKNOWN_SOURCE, LoadedModel
+from downshift.loading import HF_REPO_DIR, UNKNOWN_SOURCE, LoadedModel, LoadError
 from downshift.serve.backends import (
     Backend,
     OnnxRuntimeBackend,
@@ -63,6 +63,11 @@ class ServingState:
     # HF_REPO_DIR, IMPORT_SPEC, IN_PROCESS_MODULE). Reported under /schema's `source`, and
     # labelled on the boot banner, so it is visible that nothing was fetched to serve this.
     source_kind: str = UNKNOWN_SOURCE
+    # The Hugging Face repo directory attach_hf_metadata should read tokenizer/pooling/label
+    # metadata from, or None to skip that. Usually `source` itself (kind HF_REPO_DIR), but a
+    # bare .onnx MODEL takes it from --tokenizer-from instead, kept separate from --reference
+    # (numerics only) so each flag does exactly one job.
+    hf_source: str | None = None
     # Tokenizer and label metadata when the source is a Hugging Face repo directory that has
     # them; what lets /predict take `text` and answer with class probabilities.
     text: TextIO | None = None
@@ -206,10 +211,16 @@ def choose_backend(verdict: ExportVerdict, opts: ServeOptions) -> tuple[BackendN
 
 _TEXT_UNAVAILABLE_PREFIX = "text input unavailable:"
 _NO_TOKENIZER_NOTE = "no tokenizer files in the repo directory; /predict takes tensors only"
+_POOLING_IGNORED_NOTE = (
+    "--pooling/--normalize ignored: they only apply to a Hugging Face repo served directly; "
+    "a --tokenizer-from companion supplies the tokenizer, not the graph"
+)
 
 
 def attach_hf_metadata(state: ServingState) -> None:
-    """Fill in state.text and state.embedding for a Hugging Face repo directory.
+    """Fill in state.text and state.embedding from state.hf_source, when there is one: the
+    served model itself for a Hugging Face repo directory, or a companion HF repo directory
+    named by --tokenizer-from when the served model is a bare .onnx.
 
     Every place that builds a ServingState calls this, including the `--workers N` builders
     that skip prepare_serving. The embedding recipe is read again from the repo with the same
@@ -220,30 +231,62 @@ def attach_hf_metadata(state: ServingState) -> None:
     A `--workers` worker starts with the parent's notes (shipped in ArtifactHandoff) already
     on state.notes, then runs this again itself; the two notes below are replaced rather than
     appended so a worker doesn't print its own note twice.
+
+    A bad --pooling/--normalize, or a repo AutoConfig can't parse, hard-fails the boot here
+    exactly as it would for the same repo served directly (loading._load_hf): the recipe is
+    not optional the way text input is, so --tokenizer-from must not turn that misconfiguration
+    into a soft banner note just because it was reached through a different flag.
     """
-    if state.source_kind != HF_REPO_DIR:
+    if state.hf_source is None:
         return
     state.notes = [
         note
         for note in state.notes
-        if not note.startswith(_TEXT_UNAVAILABLE_PREFIX) and note != _NO_TOKENIZER_NOTE
+        if not note.startswith(_TEXT_UNAVAILABLE_PREFIX)
+        and note not in (_NO_TOKENIZER_NOTE, _POOLING_IGNORED_NOTE)
     ]
     opts = state.options
     try:
-        from downshift.adapters import hf
-
-        # Set before anything that needs a tokenizer or a recipe, so the token-id range check
-        # (B3) still works when those fail.
-        state.vocab_size = hf.vocab_size(state.source)
-        recipe = hf.embedding_recipe(state.source, opts.pooling, opts.normalize)
-        text = hf.load_text_io(state.source, recipe)
-    except Exception as exc:  # noqa: BLE001 - whatever transformers raises, this is optional
+        from downshift import hf_repo
+    except ImportError as exc:
         state.notes.append(f"{_TEXT_UNAVAILABLE_PREFIX} {type(exc).__name__}: {exc}")
         return
-    state.embedding = recipe
+
+    # One config read for everything below. vocab_size is set before anything that needs a
+    # tokenizer or a recipe, so the token-id range check (B3) still works when those fail.
+    try:
+        config = hf_repo.load_config(state.hf_source)
+        vocab = getattr(config, "vocab_size", None)
+        state.vocab_size = int(vocab) if vocab is not None else None
+        # --pooling/--normalize reshape the hf adapter's own export; a --tokenizer-from
+        # companion's graph is already built, so for it they would only mislabel /schema.
+        direct = state.source_kind == HF_REPO_DIR
+        pooling, normalize = (opts.pooling, opts.normalize) if direct else (None, None)
+        recipe = hf_repo.embedding_recipe(state.hf_source, config, pooling, normalize)
+    except (OSError, ValueError) as exc:  # ValueError also covers RecipeError
+        raise LoadError(f"{state.hf_source}: {exc}") from exc
+
+    try:
+        text = hf_repo.load_text_io(state.hf_source, config, recipe)
+    except Exception as exc:  # noqa: BLE001 - no tokenizer files is optional, unlike the recipe
+        state.notes.append(f"{_TEXT_UNAVAILABLE_PREFIX} {type(exc).__name__}: {exc}")
+        return
+    if not direct and (opts.pooling is not None or opts.normalize is not None):
+        state.notes.append(_POOLING_IGNORED_NOTE)
+    # The hf adapter's own export applies the recipe (a PoolingHead in the graph). A
+    # --tokenizer-from companion's recipe still sets the text path's max_seq_length, but the
+    # served graph may be the bare encoder: only claim the recipe when its output is pooled.
+    if direct or _pooled_output(state.backend):
+        state.embedding = recipe
     state.text = text
     if text is None:
         state.notes.append(_NO_TOKENIZER_NOTE)
+
+
+def _pooled_output(backend: Backend) -> bool:
+    """Whether output_0 is one vector per row ([batch, hidden]) rather than token-level."""
+    outputs = backend.metadata().outputs
+    return bool(outputs) and outputs[0].shape is not None and len(outputs[0].shape) == 2
 
 
 def _reusable_verify_session(verdict: ExportVerdict, opts: ServeOptions) -> Any:
@@ -336,6 +379,7 @@ def _new_state(
     notes: list[str] | None = None,
     kind: str = UNKNOWN_SOURCE,
     axis_bounds: dict[str, dict[int, DimBound]] | None = None,
+    hf_source: str | None = None,
 ) -> ServingState:
     """The single ServingState constructor every builder below funnels through, so
     finish_state (and so attach_hf_metadata) never gets skipped by a builder that forgot.
@@ -350,12 +394,16 @@ def _new_state(
         notes=list(notes or []),
         source_kind=kind,
         axis_bounds=_axis_bounds(verdict) if axis_bounds is None else axis_bounds,
+        hf_source=hf_source,
     )
     return finish_state(state, timings)
 
 
 def prepare_serving(
-    loaded: LoadedModel, opts: ServeOptions | None = None, reference: LoadedModel | None = None
+    loaded: LoadedModel,
+    opts: ServeOptions | None = None,
+    reference: LoadedModel | None = None,
+    tokenizer_from: str | None = None,
 ) -> ServingState:
     opts = opts or ServeOptions()
     timings: dict[str, float] = {}
@@ -391,6 +439,7 @@ def prepare_serving(
         timings,
         notes=notes,
         kind=loaded.kind,
+        hf_source=loaded.source if loaded.kind == HF_REPO_DIR else tokenizer_from,
     )
 
 
@@ -404,14 +453,15 @@ def serving_state_from_artifact(
     example_inputs: tuple | None = None,
     axis_bounds: dict[str, dict[int, DimBound]] | None = None,
     kind: str = UNKNOWN_SOURCE,
+    hf_source: str | None = None,
 ) -> ServingState:
     """Rebuild a ServingState in a `serve --workers N` worker from the ONNX graph and
     verdict a parent process already exported and verified: no capture, no verify, just a
-    session over the artifact. `input_names`, `notes` and `kind` are the parent's own (the
-    verdict it shipped has no `prepared` to derive them from, and there is no LoadedModel to
-    read the kind from); `example_inputs` are real feeds the
-    parent saved alongside the graph when it had any, loaded by the caller from the .npz
-    sidecar - otherwise warmup() synthesizes them (see synthesize_feeds).
+    session over the artifact. `input_names`, `notes`, `kind` and `hf_source` are the parent's
+    own (the verdict it shipped has no `prepared` to derive them from, and there is no
+    LoadedModel to read the kind from); `example_inputs` are real feeds the parent saved
+    alongside the graph when it had any, loaded by the caller from the .npz sidecar -
+    otherwise warmup() synthesizes them (see synthesize_feeds).
     """
     verdict.onnx_path = onnx_path
     timings: dict[str, float] = {}
@@ -429,6 +479,7 @@ def serving_state_from_artifact(
         notes=notes,
         kind=kind,
         axis_bounds=axis_bounds,
+        hf_source=hf_source,
     )
 
 
@@ -437,11 +488,14 @@ def serving_state_from_torch_artifact(
     verdict: ExportVerdict,
     opts: ServeOptions,
     notes: list[str] | None = None,
+    hf_source: str | None = None,
 ) -> ServingState:
     """Rebuild a ServingState in a `serve --workers N` worker when the parent's export chose
     torch: the worker still loads and prepares the model itself (torch weights aren't shipped
     between processes), but takes the parent's already-verified verdict as given rather than
-    re-exporting. `loaded` is the caller's own reload of the same model spec the parent used.
+    re-exporting. `loaded` is the caller's own reload of the same model spec the parent used;
+    `hf_source` is the parent's own resolved value, carried the same way as in
+    serving_state_from_artifact.
     """
     report(Phase.load)
     prepared = _prepare(loaded, opts)
@@ -460,6 +514,7 @@ def serving_state_from_torch_artifact(
         timings,
         notes=notes,
         kind=loaded.kind,
+        hf_source=hf_source,
     )
 
 

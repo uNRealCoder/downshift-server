@@ -300,7 +300,7 @@ def test_print_banner_shows_embedding_and_text_rows(caplog):
     assert "Embedding" in out
     assert "mean pooling, L2-normalised" in out
     assert "from modules.json" in out
-    assert "cut at 256 tokens" in out
+    assert "up to 256 tokens a row" in out
 
 
 def test_print_banner_omits_embedding_and_text_rows_for_other_models(caplog):

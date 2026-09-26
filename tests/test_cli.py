@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -66,6 +67,27 @@ def test_check_bad_spec_is_usage_error():
     result = run("check", "tests.models.does_not_exist:make_model", "--json")
     assert result.exit_code == 4, result.output
     assert result.stdout == ""
+
+
+def test_check_imports_a_model_module_from_the_current_directory(tmp_path, monkeypatch):
+    # The `downshift` console script, unlike `python -m downshift`, does not put the current
+    # directory on sys.path by itself; the CLI does.
+    (tmp_path / "cwd_model.py").write_text(
+        "from tests.models.clean_mlp import make_inputs, make_model\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "path", [p for p in sys.path if p not in ("", str(tmp_path))])
+
+    result = run("check", "cwd_model:make_model", "--json")
+
+    assert result.exit_code == 0, result.output
+    assert parse(result)["status"] == "CLEAN"
+
+
+def test_check_file_name_spec_says_to_use_the_module_name():
+    result = run("check", "my_model.py:model", "--json")
+    assert result.exit_code == main.EXIT_USAGE, result.output
+    assert "my_model:model" in result.output
 
 
 def test_check_table_output():
@@ -410,6 +432,35 @@ def test_serve_app_factory_rebuilds_the_app_from_env(monkeypatch):
     assert api.state.serving.options.max_input_bytes == 1024
     assert api.state.serving.options.max_body_bytes == 2048
     assert api.state.serving.options.max_concurrency == 2
+
+
+def test_a_worker_that_cannot_load_exits_with_uvicorns_startup_failure_code(monkeypatch):
+    """uvicorn's worker supervisor respawns a worker that dies with any other code, which
+    would reload the same failing model forever; STARTUP_FAILURE makes it stop the server."""
+    pytest.importorskip("downshift.serve.app")
+    from uvicorn.config import STARTUP_FAILURE
+
+    from downshift.cli import runtime
+
+    args = main.ServeArgs(
+        load=LoadSpec(CLEAN),
+        options=ServeOptions(k=1, device="cpu", warmup=1),
+        reference=None,
+        middleware=None,
+        log_level="warning",
+    )
+    monkeypatch.setenv(main._SERVE_ARGS_ENV, args.to_json())
+
+    def fail(_args):
+        raise MemoryError("not enough RAM for another copy")
+
+    exits: list[int] = []
+    monkeypatch.setattr(runtime, "_build_serving_state", fail)
+    monkeypatch.setattr(os, "_exit", exits.append)
+
+    _rebuilt_app()
+
+    assert exits == [STARTUP_FAILURE]
 
 
 def test_serve_workers_writes_and_ships_the_onnx_artifact(monkeypatch):

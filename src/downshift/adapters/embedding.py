@@ -23,7 +23,7 @@ from torch import nn
 
 from downshift.adapters.pooling import PoolingChoice
 
-# Set on the loaded model by hf.load_pretrained; the hf adapter reads it in prepare().
+# Set on the loaded model by hf_repo.load_pretrained; the hf adapter reads it in prepare().
 EMBEDDING_ATTR = "downshift_embedding"
 
 _POOLING_FLAGS = {

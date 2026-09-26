@@ -181,7 +181,7 @@ def _text_input(state: ServingState) -> TextInputInfo | None:
     return TextInputInfo(
         field="text",
         max_length=text.max_length,
-        over_length="truncated to max_length; the response's `truncated` marks those rows",
+        over_length="refused with 400; nothing is truncated",
         example_request={"text": ["your text here"]},
         labels=labels,
         activation=text.activation if text.id2label else None,
@@ -226,11 +226,18 @@ def describe(state: ServingState, predict_url: str) -> SchemaResponse:
     example = _example_inputs(inputs)
     body: dict[str, Any] | None = {"inputs": example} if example is not None else None
     notes = _notes(outputs, inputs, example)
-    if state.source_kind == HF_REPO_DIR and state.embedding is None and _token_level(outputs):
-        notes.append(
-            "output_0 is token-level ([batch, seq, hidden]): this repo declares no pooling "
-            "recipe, so nothing was pooled. Serve with --pooling to get one vector per text."
-        )
+    if state.hf_source is not None and state.embedding is None and _token_level(outputs):
+        if state.source_kind == HF_REPO_DIR:
+            notes.append(
+                "output_0 is token-level ([batch, seq, hidden]): this repo declares no pooling "
+                "recipe, so nothing was pooled. Serve with --pooling to get one vector per text."
+            )
+        else:
+            notes.append(
+                "output_0 is token-level ([batch, seq, hidden]): the served graph does no "
+                "pooling, and --tokenizer-from only supplies the tokenizer. Pool the vectors "
+                "yourself, or serve the Hugging Face repo directory with --pooling instead."
+            )
 
     name = display_source(state.source, state.source_kind)
     return SchemaResponse(

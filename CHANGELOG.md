@@ -7,6 +7,14 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- `downshift serve mymodel:build` now finds `mymodel.py` in the current directory, as
+  `python -m downshift` always did; the `downshift` console script used to fail with
+  "No module named 'mymodel'". An import spec that names a file (`mymodel.py:build`) is a
+  usage error that gives the module form, and the docs that showed the file form are fixed.
+- A Hugging Face model's numerics check now always includes one full-length sample at the
+  longest sequence the model declares (512 tokens for all-MiniLM-L6-v2). Before, every
+  sample stayed within twice the example's length (16 tokens), so a graph that diverged
+  only on long inputs could be verdicted CLEAN.
 - `GET /metadata` and `GET /schema` no longer send the server's directory layout to whoever
   can reach the port: `model` and `source.spec` are the file or directory name only
   (`/srv/models/bert` reports `bert`; an import spec is unchanged), `verdict.onnx_path` is
@@ -41,7 +49,8 @@ All notable changes to this project are documented here. Format follows
   window. Before, `/ready` was already `200` by the time uvicorn started serving, so it
   never carried information a client could act on. A failed load still exits the process
   with the same code `check`/`export` would use for the same error, instead of leaving the
-  server up and permanently unready.
+  server up and permanently unready. With `--workers N`, a worker that fails to load stops
+  the whole server instead of being respawned by uvicorn into the same failure forever.
 - `downshift --help` (and every other subcommand's `--help`) no longer imports torch,
   onnxruntime, fastapi or uvicorn, and returns in well under a second instead of about
   5s. `downshift/__init__.py` is lazy (PEP 562): `check`, `intake`, `ExportVerdict` and
@@ -57,13 +66,16 @@ All notable changes to this project are documented here. Format follows
 - A bfloat16 model on the torch fallback now boots (numpy has no bfloat16). bf16 and fp16
   models are served on a float32 wire: floating inputs are cast to the module's own dtype
   inside the torch backend and outputs are widened back, and `GET /schema` reports float32.
+  On ONNX Runtime, a bfloat16 output needs an onnxruntime whose `OrtValue` supports DLPack;
+  an older one gets an error that points at `--backend torch`.
 - A negative token id sent to a Hugging Face repo model was wrapped around by ONNX Runtime
   and came back as a confident `200`. `input_ids` outside `[0, vocab_size)` is now a `400`
   naming the value, before inference.
 - The torch backend answered every `RuntimeError`/`ValueError` from the model with a `400`,
-  blaming the client for bugs and unsupported ops. It now answers `400` only for
-  client-shaped errors (an index out of range, a shape or dtype mismatch); any other
-  exception from the model is a `500`.
+  blaming the client for bugs and unsupported ops. Server-side faults are now a `500`: out of
+  memory (CPU or GPU), a CUDA/cuDNN/cuBLAS error, an internal assert, a missing kernel, or
+  tensors on different devices. The rest stay a `400`, since torch reports the client's
+  shape, dtype and index mistakes in too many phrasings to list.
 - The usable sequence length of a RoBERTa-family Hugging Face model is
   `max_position_embeddings - (pad_token_id + 1)` (514 positions serve 512 tokens), not
   `max_position_embeddings`.
@@ -109,7 +121,8 @@ All notable changes to this project are documented here. Format follows
   rows. Its endpoint reads `localhost`, plus the bind address when it is `0.0.0.0`.
 - `.gitattributes` (`* text=auto eol=lf`).
 - `POST /predict` takes `{"text": ...}` for a Hugging Face repo directory that has tokenizer
-  files: the server tokenizes, pads and truncates, and reports truncated rows in `truncated`.
+  files: the server tokenizes and pads the batch. A row longer than the model reads is refused
+  with a 400 rather than cut; the only cap on input size is the request body limit.
   `GET /schema` gains a `text_input` block.
 - A sequence classifier answers with `predictions` (label, score and per-label probabilities:
   softmax, or sigmoid for a multi-label config) next to the raw logits.
@@ -118,12 +131,21 @@ All notable changes to this project are documented here. Format follows
   L2 normalisation are read from the repo and put inside the exported graph, so `output_0` is
   `[batch, dim]` and ONNX Runtime runs the whole thing. Checked on all-MiniLM-L6-v2: CLEAN
   (max abs err 4e-07), and within 1.5e-07 of a reference computed the sentence-transformers
-  way. Text is cut at the repo's own `max_seq_length` (256 for MiniLM, not its 512 position
-  embeddings), flagged in `truncated`; `GET /schema` gains an `embedding` block.
+  way. Text longer than the repo's own `max_seq_length` (256 for MiniLM, not its 512 position
+  embeddings) is refused with a 400; `GET /schema` gains an `embedding` block.
 - `--pooling mean|cls|max|mean_sqrt_len|none` and `--normalize/--no-normalize` on `check`,
   `export` and `serve`, for a repo that declares no recipe or to override one. `none` serves
   token vectors. A recipe downshift cannot apply faithfully (a Dense module, last-token or
   weighted pooling, several poolings at once) is refused at load rather than approximated.
+- `serve model.onnx --tokenizer-from path/to/repo/dir/` loads the repo directory's tokenizer,
+  pooling recipe and label metadata, so `{"text": ...}` and embedding/classifier output work
+  on an already-exported `.onnx` the same way they do when the repo itself is MODEL. The
+  served graph is used as-is: `GET /schema` reports the repo's pooling recipe only when the
+  graph's output is already one vector per row, and `--pooling`/`--normalize` are ignored
+  with a banner note, since they can't change a graph that is already built.
+  Independent of `--reference`, which stays purely numeric: the two flags can name the same
+  directory or different ones, and neither implies the other. A `--workers N` worker gets the
+  resolved path from the parent rather than re-validating `--tokenizer-from` itself.
 - **`GET /schema`**: what to POST, without having to have seen the model. Every input's
   name, dtype and shape (read off the graph that is actually running, not off the source
   model), the outputs, the three accepted wire formats, the body-size limits, and an
@@ -228,6 +250,16 @@ All notable changes to this project are documented here. Format follows
 
 ### Changed
 
+- **Adapters are classes; the registry creates their instances.** The built-in adapter
+  modules no longer export module-level singletons (`downshift.adapters.generic.ADAPTER`,
+  `downshift.adapters.hf.HF_ADAPTER` and `downshift.adapters.pyg.PYG_ADAPTER` are gone). Use
+  `registry.get("generic")`, or construct `GenericAdapter()`, `HFAdapter()` or `PyGAdapter()`
+  directly. The Hugging Face repo readers (`load_pretrained`, `load_text_io`, ...) moved from
+  `downshift.adapters.hf` to `downshift.hf_repo`, so loading and serving no longer import
+  the adapter. The documented way to register a plugin is now to
+  point the entry point at the class (`myfamily = "my_pkg.adapter:MyAdapter"`), and the
+  registry instantiates it with no arguments. Entry points and `--adapter file.py` specs that
+  point at an instance still work.
 - **Python 3.12 is now the minimum** (`requires-python = ">=3.12,<3.15"`); 3.11 is no longer
   supported. CI drops the 3.11 leg from the test matrix, and the `floor` job (oldest
   torch/onnx/onnxruntime/onnxscript pins) now runs on 3.12. Ruff targets `py312`.
@@ -326,8 +358,6 @@ All notable changes to this project are documented here. Format follows
   `request_id`.
 - Every `DOWNSHIFT_*` environment variable now also applies to library use (`app_for()`,
   `ServeOptions()`), not only to the CLI. They are read once, at import time.
-- A Hugging Face text request is tokenized in one pass: with a fast tokenizer, the
-  truncation flags come from the same call.
 - With `--workers N` the parent frees its copy of the model before the workers start.
 - **Internals.** The Hugging Face text and embedding pieces live in `adapters/text.py`,
   `adapters/pooling.py` and `adapters/embedding.py`. The CLI is split into `cli/main.py` (commands), `cli/options.py` (typer option types) and

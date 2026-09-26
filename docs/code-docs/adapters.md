@@ -118,12 +118,13 @@ run first.
 
 ```toml
 [project.entry-points."downshift.adapters"]
-myfamily = "my_pkg.adapter:ADAPTER"
+myfamily = "my_pkg.adapter:MyAdapter"
 ```
 
-`my_pkg/adapter.py` needs a module-level `ADAPTER = MyAdapter()` (an instance, not the
-class - unlike the `--adapter path/to/file.py` form, entry points are always resolved as
-an attribute, never instantiated for you).
+The entry point names the adapter class, and the registry instantiates it with no
+arguments - the same way it builds the built-ins, none of which keeps a module-level
+instance. An entry point that names a ready-made instance instead is used
+as-is, so plugins written against the older `ADAPTER = MyAdapter()` convention still load.
 
 **The module stays cheap to import.** `available()` imports every registered entry
 point's module just to build the adapter list, on every process that calls `check`,
@@ -132,8 +133,8 @@ point's module just to build the adapter list, on every process that calls `chec
 dependency isn't installed" and silently skipped, which means a *different* kind of
 import failure (a typo, a genuinely broken dependency chain) is silently skipped too. Put
 your model library's own import, and anything else heavy, inside `prepare()` - which only
-runs once `matches()` has already said yes - not at module scope where `ADAPTER =
-MyAdapter()` is defined. This is exactly why the built-in `hf` and `pyg` adapters are
+runs once `matches()` has already said yes - not at the module scope that defines
+`MyAdapter`. This is exactly why the built-in `hf` and `pyg` adapters are
 *not* entry points: `HFAdapter`/`PyGAdapter` need `transformers`/`torch_geometric` already
 imported just to define the class, so they can't follow their own rule. `registry.py`
 loads them directly instead, gated on `"transformers" in sys.modules` /
@@ -144,12 +145,13 @@ loads them directly instead, gated on `"transformers" in sys.modules` /
 No install, no entry point, no `pyproject.toml` change:
 
 ```bash
-downshift check my_model.py:model --adapter path/to/pointcloud_adapter.py
+downshift check my_model:model --adapter path/to/pointcloud_adapter.py
 ```
 
-The file needs a module-level `ADAPTER = MyAdapter()`, or point at the class itself with
-`--adapter path/to/pointcloud_adapter.py:MyAdapter` and `registry.load_from_file`
-instantiates it with no arguments. Either way, the loaded object is checked with
+Point at the class with `--adapter path/to/pointcloud_adapter.py:MyAdapter` and
+`registry.load_from_file` instantiates it with no arguments. A bare `.py` path looks up a
+module-level `ADAPTER` instead, which may name the class (`ADAPTER = MyAdapter`) or an
+instance. Either way, the loaded object is checked with
 `isinstance(obj, Adapter)` and `load_from_file` raises `LoadError` with a specific message
 if it doesn't implement all five attributes.
 
@@ -220,9 +222,6 @@ class PointCloudAdapter:
             vary_fn=None,  # the default axis-0 sampler already ties both inputs together
             family=self.family,
         )
-
-
-ADAPTER = PointCloudAdapter()
 ```
 
 Both inputs' axis 0 share one `torch.export.Dim`, so `torch.export` knows `points` and
@@ -237,13 +236,14 @@ Use it without registering anything:
 import downshift
 
 model = PointCloudNet().eval()
-verdict = downshift.check(model, adapter=ADAPTER)  # example_inputs() supplies the inputs
+# example_inputs() supplies the inputs
+verdict = downshift.check(model, adapter=PointCloudAdapter())
 ```
 
 or from the CLI, unregistered:
 
 ```bash
-downshift check my_model.py:model --adapter path/to/pointcloud_adapter.py
+downshift check my_model:model --adapter path/to/pointcloud_adapter.py:PointCloudAdapter
 ```
 
 or registered for auto-detection and `--adapter pointcloud`, via

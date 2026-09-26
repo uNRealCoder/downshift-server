@@ -50,7 +50,7 @@ For development, install editable from a checkout instead: `pip install -e ".[de
 
 `downshift` is also runnable as `python -m downshift` if you'd rather not rely on the console script being on `PATH`.
 
-Python 3.12 to 3.14. CPU-only is what this release was tested on. CUDA execution-provider selection exists (`--device cuda`) but is untested in this release.
+Python 3.12 to 3.14. The test suite and the numerics gate run on the CPU. `--device cuda` was smoke-tested once, by hand, on an RTX 4050 with torch 2.14 (CUDA 13.0) and `onnxruntime-gpu` 1.30: both backends served and agreed with the CPU. It needs a matching pair, so install `onnxruntime-gpu` in place of `onnxruntime`, and a torch build whose CUDA major version is the one your `onnxruntime-gpu` wheel was built for (1.30 wants CUDA 13; with a mismatch ONNX Runtime cannot load its CUDA libraries). ONNX Runtime's CUDA provider uses TF32 matrix multiplies by default, which moved a small MLP's output by 4e-4 against the CPU, past the gate's float32 tolerance (atol 1e-4, rtol 1e-3); the gate never sees this because it only runs on the CPU. `--backend torch` on CUDA matched the CPU to 5e-8.
 
 ## Serve
 
@@ -186,7 +186,8 @@ Options that change what gets served:
 
 - `--backend auto|onnxruntime|torch` (env `DOWNSHIFT_BACKEND`). `auto` follows the verdict. `torch` skips the export entirely. `--backend onnxruntime` on a DEGRADED verdict is an error unless `--force-onnx` is also given.
 - `--force-onnx` serves a DEGRADED graph through ONNX Runtime anyway. The banner says so.
-- `--reference model` verifies a pre-built `.onnx` against a PyTorch model; without it the verdict is UNVERIFIED.
+- `--reference model` verifies a pre-built `.onnx` against a PyTorch model; without it the verdict is UNVERIFIED. Purely numeric: pass `--tokenizer-from` too if `.onnx` also needs a tokenizer.
+- `--tokenizer-from dir/` loads the tokenizer, pooling recipe and label metadata for a `.onnx` or PyTorch MODEL from a Hugging Face repo directory, so `{"text": ...}` works without re-exporting. The graph is served as-is: it doesn't add pooling to a bare encoder, and `/schema` reports the recipe only when the output is already pooled. Independent of `--reference`: it never affects verification, and the two can name the same directory or different ones. See [Accepted model forms](#accepted-model-forms).
 - `--middleware pkg.module:Attr` (repeatable) attaches a `BaseHTTPMiddleware` subclass or an `async (request, call_next)` function. No middleware means no overhead.
 - `--output-encoding json|base64` (env `DOWNSHIFT_OUTPUT_ENCODING`, default `json`) sets the response encoding for requests that do not send their own `output_encoding`.
 - `--max-input-bytes N` (env `DOWNSHIFT_MAX_INPUT_BYTES`, default 256 MiB) caps the decoded size of one base64 input; larger is a `400`.
@@ -289,13 +290,15 @@ Three kinds of downloaded artifact, all of them already on the machine running t
 | `weights.pt` | A downloaded PyTorch checkpoint (state dict). Needs `--model-class pkg.module:Class`. Also `.pth`, `.bin`, `.ckpt`. |
 | `path/to/repo/dir/` | A downloaded Hugging Face repo: a directory with a `config.json` in it, which is how one is recognised. Needs the `[hf]` extra. |
 
-A Hugging Face repo is served the way its own files say. A classifier (`...ForSequenceClassification`) loads with its head and answers with class probabilities. A sentence-transformers repo (`modules.json`, `1_Pooling/`) is pooled and normalised inside the exported graph, so `output_0` is one embedding per text. Either way `POST /predict` takes `{"text": ...}` when the repo has tokenizer files, cutting at the length the model's author declared (for the RoBERTa family that is `max_position_embeddings - (pad_token_id + 1)`, so 514 positions serve 512 tokens) and flagging any row it cut. With a fast tokenizer that is one pass: the truncation flags come from the same call. A repo that declares no pooling is not pooled unless you pass `--pooling`. See [`docs/code-docs/http-api.md`](docs/code-docs/http-api.md#embedding-models).
+A Hugging Face repo is served the way its own files say. A classifier (`...ForSequenceClassification`) loads with its head and answers with class probabilities. A sentence-transformers repo (`modules.json`, `1_Pooling/`) is pooled and normalised inside the exported graph, so `output_0` is one embedding per text. Either way `POST /predict` takes `{"text": ...}` when the repo has tokenizer files, up to the length the model's author declared (for the RoBERTa family that is `max_position_embeddings - (pad_token_id + 1)`, so 514 positions serve 512 tokens). A longer row is refused with a 400, never cut; the only cap on how much you send is the request body limit. A repo that declares no pooling is not pooled unless you pass `--pooling`. See [`docs/code-docs/http-api.md`](docs/code-docs/http-api.md#embedding-models).
+
+`downshift serve model.onnx --tokenizer-from path/to/repo/dir/` combines the first two rows: the `.onnx` is served as-is (optimized, UNVERIFIED unless `--reference` is also given), and the repo directory supplies the tokenizer, pooling recipe and label metadata `POST /predict` needs for `{"text": ...}`. `--tokenizer-from` and `--reference` are independent — pass one, the other, both (naming the same directory or different ones), or neither. This is how to serve a model someone already exported to ONNX (with `optimum`, Olive, or by hand) without re-tracing it through `torch.export`, while keeping text input and embedding pooling.
 
 Plus one form that names a model already importable in the server process rather than a file on disk:
 
 | Argument | Meaning |
 |---|---|
-| `pkg.module:attr` | Import spec. `attr` is an `nn.Module` instance or a zero-argument factory. A sibling `make_inputs` in the same module is picked up automatically; otherwise pass `--inputs pkg.module:fn`. |
+| `pkg.module:attr` | Import spec. `attr` is an `nn.Module` instance or a zero-argument factory. A sibling `make_inputs` in the same module is picked up automatically; otherwise pass `--inputs pkg.module:fn`. The module is found on `sys.path` or in the current directory, so `downshift serve my_model:build` works next to `my_model.py`; name the module, not the file (`my_model`, not `my_model.py`). |
 
 `downshift` never contacts the Hugging Face hub: a bare repo id like `bert-base-uncased` is rejected, and the `hf` adapter loads with `local_files_only=True`, so a repo has to be downloaded first (`huggingface-cli download bert-base-uncased --local-dir ./bert-base-uncased`) and passed as a path. That keeps a `serve` in an air-gapped or egress-restricted environment from silently depending on the network at startup. A running server reports which form it was given under `source` on [`GET /schema`](#what-to-post).
 
@@ -326,10 +329,14 @@ Generated by `scripts/gen_matrix.py` from the fixture corpus in `tests/models/`,
 
 Two rows worth reading twice. `custom_autograd` was expected to fail and is CLEAN, because `torch.export` traces straight through a `Function.forward` made of ordinary ops. `scatter_include_self_false` was expected to fail loudly and instead exports with zero errors and returns the wrong numbers; the only thing standing between that graph and production is the numerics check. A third: `bf16_weights` exports cleanly and ONNX Runtime can't run it, since bfloat16 has no CPU Gemm kernel; that used to crash the tool outright and is now a FAILED verdict like any other.
 
-## What this is not
+## Scope and non-goals
 
+downshift serves models whose answer is one forward pass: tensors in, tensors out. That is what makes the gate possible, because a single pass can be checked numerically between the ONNX graph and PyTorch. GNNs, encoders, classifiers, embedders and your own `nn.Module`s fit. Anything that needs a loop around the model does not.
+
+- **No generation.** No `onnxruntime-genai` backend, no OpenAI-compatible endpoints, no KV cache, no sampling loop, no chat templates. Use vLLM, TGI or llama.cpp for that. A decoder-only Hugging Face repo (`...ForCausalLM`) is not a target: it loads as the bare backbone, without its `lm_head`, and serves hidden states, which is almost never the answer you want from it. downshift does not refuse it, so check `GET /schema` for what actually comes out before relying on it.
+- **No remote code.** `trust_remote_code` is never set, so a Hugging Face repo whose `config.json` has an `auto_map` (Alibaba GTE v1.5 and other custom architectures) fails to load. Running Python shipped inside a model repo would break the promise that serving is offline and does nothing you did not ask for. Convert the model to a native architecture, or export it to ONNX yourself and serve that with `--tokenizer-from`.
+- **No multimodal Hugging Face models.** Text in, one tensor out is the supported shape.
 - **No quantization or graph optimization, ever.** Not deferred, cut. Run Olive, `onnxruntime.quantization`, or your own script, then hand the result to `downshift serve model.onnx --reference model.pt` and it gets verified against the original weights like any other export. `--fp16` is a cast before tracing, nothing lower exists here.
-- **No LLM path.** No `onnxruntime-genai` backend, no OpenAI-compatible endpoints, no KV cache, no sampling loop. Encoder-only Hugging Face models work; causal LMs are not a target yet.
 - **No continuous batching, no PagedAttention.** The boot banner is a visual homage to vLLM. That is the full extent of the resemblance.
 - **No dynamic request batching yet.** One request, one inference.
 - **No graph batching yet.** `/predict/graph` takes one graph. Concatenate graphs client-side with offset edge indices if you need more.
@@ -353,29 +360,28 @@ class MyAdapter:
     def matches(self, model, example_inputs) -> bool: ...
     def example_inputs(self, model) -> tuple | None: ...  # None if you can't guess
     def prepare(self, model, example_inputs) -> Prepared: ...
-
-
-ADAPTER = MyAdapter()
 ```
 
 `Prepared` carries the export-ready module, the flat example inputs, their names, the per-input `dynamic_shapes` spec, an optional `vary_fn(i) -> inputs` that generates verification samples, and the family string. `--seed` reproduces those samples for free if `vary_fn` draws its randomness from torch's global RNG (as the built-in `hf` and `pyg` adapters do, inside the `torch.random.fork_rng()` `verify()` already runs every sample in); an adapter that keeps its own `random.Random` won't pick up the seed. Register it under the `downshift.adapters` entry-point group in your own package:
 
 ```toml
 [project.entry-points."downshift.adapters"]
-myfamily = "my_pkg.adapter:ADAPTER"
+myfamily = "my_pkg.adapter:MyAdapter"
 ```
+
+The entry point names the class; downshift instantiates it with no arguments. (An entry point that names a ready-made instance still works.)
 
 Adapters are tried most-specific first; `generic` always goes last. An adapter whose optional dependency is missing is skipped silently.
 
-**The plugin contract:** keep the entry-point module cheap to import — downshift imports every registered entry point's module just to build the adapter list (an `ImportError` there is treated as "optional dependency not installed" and skipped silently). Do the heavy import (your model library, a large parser, ...) inside `prepare()`, which only runs once an adapter has actually matched, not inside the module `ADAPTER` is defined in. The built-in `hf` and `pyg` adapters aren't entry points at all precisely because they can't follow that rule (`transformers`/`torch_geometric` have to be imported to define `HFAdapter`/`PyGAdapter` in the first place); `downshift.adapters.registry` loads them directly instead, gated on the family's module already being in `sys.modules`, so discovering adapters for a plain PyTorch model never imports either.
+**The plugin contract:** keep the entry-point module cheap to import — downshift imports every registered entry point's module just to build the adapter list (an `ImportError` there is treated as "optional dependency not installed" and skipped silently). Do the heavy import (your model library, a large parser, ...) inside `prepare()`, which only runs once an adapter has actually matched, not at the top of the module that defines your adapter class. The built-in `hf` and `pyg` adapters aren't entry points at all precisely because they can't follow that rule (`transformers`/`torch_geometric` have to be imported to define `HFAdapter`/`PyGAdapter` in the first place); `downshift.adapters.registry` loads them directly instead, gated on the family's module already being in `sys.modules`, so discovering adapters for a plain PyTorch model never imports either.
 
 For a one-off adapter that isn't worth packaging, `--adapter` (and `check()`'s `adapter=`) also accepts a bare `.py` file directly, no install or entry point required:
 
 ```bash
-downshift check my_model.py:model --adapter path/to/pointcloud_adapter.py
+downshift check my_model:model --adapter path/to/pointcloud_adapter.py
 ```
 
-The file needs a module-level `ADAPTER = MyAdapter()`, or point at the class directly with `--adapter path/to/pointcloud_adapter.py:MyAdapter` and it's instantiated with no arguments.
+Point at the class with `--adapter path/to/pointcloud_adapter.py:MyAdapter` and it's instantiated with no arguments. A bare `path/to/pointcloud_adapter.py` looks for a module-level `ADAPTER` naming the class (`ADAPTER = MyAdapter`) or an instance of it.
 
 ## Development
 

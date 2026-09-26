@@ -37,7 +37,7 @@ from downshift._imports import (  # noqa: F401
     import_object,
     is_import_spec,
 )
-from downshift.adapters.registry import Family
+from downshift.adapters.base import Family
 
 # What a model argument turned out to be; defined torch-free in downshift.sources and
 # re-exported here, where the kind is decided.
@@ -191,11 +191,23 @@ def load_model(spec: LoadSpec) -> LoadedModel:
     raise LoadError(f"{path} is not on this machine. {ACCEPTED}.")
 
 
+def resolve_tokenizer_source(spec: str) -> str:
+    """Check --tokenizer-from names a downloaded Hugging Face repo directory and return it as
+    a string; the repo itself is read later, by serve.engine.attach_hf_metadata."""
+    path = Path(spec)
+    if not (path / "config.json").is_file():
+        raise LoadError(
+            f"--tokenizer-from {path} is not a downloaded Hugging Face repo directory (one "
+            "holding a config.json); same rule as a Hugging Face repo passed as MODEL."
+        )
+    return str(path)
+
+
 def _load_hf(
     spec: str, inputs: str | None, pooling: str | None, normalize: bool | None
 ) -> LoadedModel:
     try:
-        from downshift.adapters import hf
+        from downshift import hf_repo
         from downshift.adapters.embedding import RecipeError
     except ImportError as exc:
         raise LoadError(
@@ -203,7 +215,7 @@ def _load_hf(
             "pip install 'downshift-server[hf]'"
         ) from exc
     try:
-        model = hf.load_pretrained(spec, pooling, normalize)
+        model = hf_repo.load_pretrained(spec, pooling, normalize)
     except RecipeError as exc:  # about the flags or the recipe, not the download
         raise LoadError(f"{spec}: {exc}") from exc
     except (OSError, ValueError) as exc:  # a bad or incomplete download surfaces as either

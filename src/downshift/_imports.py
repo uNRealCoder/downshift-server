@@ -25,7 +25,13 @@ def import_object(spec: str) -> Any:
     try:
         module = import_module(module_name)
     except ImportError as exc:
-        raise LoadError(f"can't import {module_name!r}: {exc}") from exc
+        hint = ""
+        if module_name.endswith(".py"):
+            hint = (
+                f". An import spec takes a module name, not a file name: "
+                f"{module_name.removesuffix('.py')}:{attr}"
+            )
+        raise LoadError(f"can't import {module_name!r}: {exc}{hint}") from exc
     try:
         return getattr(module, attr)
     except AttributeError as exc:

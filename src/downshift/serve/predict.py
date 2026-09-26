@@ -66,16 +66,15 @@ def as_batch(value: str | list[str]) -> list[str]:
 
 def _text_feeds(
     state: ServingState, text: list[str], declared: dict[str, str | None]
-) -> tuple[dict[str, np.ndarray], list[bool]]:
+) -> dict[str, np.ndarray]:
     """Tokenize a `text` request into the graph's own inputs. ValueError means the client's
     text was unusable."""
     assert state.text is not None  # run_predict refuses a text request without one
-    encoded, truncated = state.text.encode(text)
+    encoded = state.text.encode(text)
     missing = [n for n in state.input_names if n not in encoded]
     if missing:
         raise ValueError(f"the tokenizer does not produce the model's inputs {missing}")
-    feeds = {n: to_numpy(n, encoded[n], declared.get(n)) for n in state.input_names}
-    return feeds, truncated
+    return {n: to_numpy(n, encoded[n], declared.get(n)) for n in state.input_names}
 
 
 def _vocab_violation(state: ServingState, feeds: dict[str, np.ndarray]) -> str | None:
@@ -92,6 +91,22 @@ def _vocab_violation(state: ServingState, feeds: dict[str, np.ndarray]) -> str |
         return None
     bad = lo if lo < 0 else hi
     return f"input_ids contains {bad}, outside the vocabulary [0, {state.vocab_size})"
+
+
+def _edge_index_violation(feeds: dict[str, np.ndarray]) -> str | None:
+    """The /predict/graph analogue of _vocab_violation: edge_index must index into x's node
+    dimension, or a backend that trusts it (gather/scatter with no bounds check of its own)
+    reads or writes out of bounds instead of refusing the request."""
+    edge_index = feeds.get("edge_index")
+    x = feeds.get("x")
+    if edge_index is None or x is None or edge_index.size == 0:
+        return None
+    num_nodes = x.shape[0]
+    lo, hi = int(edge_index.min()), int(edge_index.max())
+    if lo >= 0 and hi < num_nodes:
+        return None
+    bad = lo if lo < 0 else hi
+    return f"edge_index contains {bad}, outside the node range [0, {num_nodes})"
 
 
 def _bound_message(name: str, axis: int, size: int, bound: DimBound) -> str:
@@ -148,10 +163,9 @@ def _predict_body(
     declared = state.declared_dtypes
     max_bytes = state.options.max_input_bytes
     codec_start = time.perf_counter()
-    truncated: list[bool] | None = None
     try:
         if text is not None:
-            feeds, truncated = _text_feeds(state, text, declared)
+            feeds = _text_feeds(state, text, declared)
         else:
             feeds = {
                 n: to_numpy(n, inputs[n], declared.get(n), max_bytes=max_bytes)
@@ -164,6 +178,9 @@ def _predict_body(
     vocab_violation = _vocab_violation(state, feeds)
     if vocab_violation is not None:
         raise HTTPException(400, vocab_violation)
+    edge_index_violation = _edge_index_violation(feeds)
+    if edge_index_violation is not None:
+        raise HTTPException(400, edge_index_violation)
     bound_violation = _bound_violation(state, feeds)
     if bound_violation is not None:
         raise HTTPException(400, bound_violation)
@@ -194,8 +211,6 @@ def _predict_body(
         predictions = state.text.predictions(arrays[FIRST_OUTPUT_NAME])
         if predictions is not None:
             body["predictions"] = predictions
-    if truncated is not None:
-        body["truncated"] = truncated
     codec_ms += (time.perf_counter() - encode_start) * 1000
 
     timings_ms.update(parse=round(parse_ms, 2), codec=round(codec_ms, 2), infer=round(infer_ms, 2))

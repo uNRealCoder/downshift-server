@@ -5,6 +5,7 @@ import dataclasses
 import logging
 import threading
 
+import numpy as np
 import pytest
 import torch
 from fastapi import FastAPI
@@ -14,7 +15,7 @@ from torch import nn
 from downshift.core.phase import Phase, report
 from downshift.loading import LoadSpec, load_model
 from downshift.serve.app import build_app
-from downshift.serve.backends import TorchBackend
+from downshift.serve.backends import OnnxRuntimeBackend, TorchBackend
 from downshift.serve.engine import ServeOptions, ServingState, prepare_serving
 from downshift.serve.options import BackendChoice
 
@@ -247,6 +248,72 @@ def test_a_bf16_model_schema_reports_float32_inputs(bf16_client):
     assert entry["dtype"] == "float32"
 
 
+def _bf16_output_onnx_bytes() -> bytes:
+    """A graph ORT's CPU EP can actually execute (Cast, not Gemm - which has no bf16 CPU
+    kernel, see tests/models/bf16_weights.py) but whose declared output is bfloat16: the
+    case OnnxRuntimeBackend.infer's OrtValue/DLPack widening (B1) covers, since
+    OrtValue.numpy() has no bfloat16/float16 numpy dtype to convert to."""
+    import onnx
+    from onnx import TensorProto, helper
+
+    x = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 8])
+    y = helper.make_tensor_value_info("y", TensorProto.BFLOAT16, [None, 8])
+    cast = helper.make_node("Cast", ["x"], ["y"], to=TensorProto.BFLOAT16)
+    graph = helper.make_graph([cast], "g", [x], [y])
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    onnx.checker.check_model(model)
+    return model.SerializeToString()
+
+
+def test_onnxruntime_backend_widens_a_bfloat16_output_to_float32():
+    backend = OnnxRuntimeBackend(_bf16_output_onnx_bytes(), device="cpu")
+
+    out = backend.infer({"x": np.ones((1, 8), dtype=np.float32)})
+
+    assert out["output_0"].dtype == np.float32
+    np.testing.assert_allclose(out["output_0"], np.ones((1, 8), dtype=np.float32))
+
+
+def _fp16_output_onnx_bytes() -> bytes:
+    import onnx
+    from onnx import TensorProto, helper
+
+    x = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 8])
+    y = helper.make_tensor_value_info("y", TensorProto.FLOAT16, [None, 8])
+    cast = helper.make_node("Cast", ["x"], ["y"], to=TensorProto.FLOAT16)
+    graph = helper.make_graph([cast], "g", [x], [y])
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    onnx.checker.check_model(model)
+    return model.SerializeToString()
+
+
+def test_onnxruntime_backend_widens_a_float16_output_without_dlpack(monkeypatch):
+    """fp16 has a numpy dtype, so it must not depend on OrtValue.__dlpack__, which older
+    onnxruntime releases (the 1.17 floor) do not have."""
+    backend = OnnxRuntimeBackend(_fp16_output_onnx_bytes(), device="cpu")
+    monkeypatch.setattr(torch, "from_dlpack", _no_dlpack)
+
+    out = backend.infer({"x": np.ones((1, 8), dtype=np.float32)})
+
+    assert out["output_0"].dtype == np.float32
+    np.testing.assert_allclose(out["output_0"], np.ones((1, 8), dtype=np.float32))
+
+
+def _no_dlpack(_value):
+    raise AssertionError("fp16 must not go through DLPack")
+
+
+def test_a_bfloat16_output_on_an_onnxruntime_without_dlpack_says_what_to_do():
+    from downshift.serve import backends
+
+    class NoDlpack:
+        def data_type(self) -> str:
+            return "tensor(bfloat16)"
+
+    with pytest.raises(RuntimeError, match="--backend torch"):
+        backends._widen_ort_value(NoDlpack())
+
+
 @pytest.mark.parametrize(
     ("declared", "expected"),
     [
@@ -399,9 +466,18 @@ def test_a_client_shape_mistake_on_torch_is_a_400(torch_state):
 
 
 @pytest.mark.parametrize(
-    "message", ["kaboom: an unrelated failure", "CUDA out of memory. Tried to allocate a size"]
+    "message",
+    [
+        "CUDA out of memory. Tried to allocate a size",
+        "CUDA error: an illegal memory access was encountered",
+        "INTERNAL ASSERT FAILED at foo.cpp:1",
+        "not implemented for 'BFloat16'",
+        "[enforce fail at alloc_cpu.cpp:118] DefaultCPUAllocator: can't allocate memory: "
+        "you tried to allocate 8589934592 bytes.",
+        "Expected all tensors to be on the same device, but found at least two devices",
+    ],
 )
-def test_an_unrelated_runtime_error_in_forward_is_a_500(torch_state, monkeypatch, message):
+def test_a_server_side_runtime_error_in_forward_is_a_500(torch_state, monkeypatch, message):
     monkeypatch.setattr(torch_state.backend, "module", _Failing(message))
     client = TestClient(build_app(torch_state, api_key=None), raise_server_exceptions=False)
 
@@ -410,6 +486,23 @@ def test_an_unrelated_runtime_error_in_forward_is_a_500(torch_state, monkeypatch
     assert resp.status_code == 500
     assert message not in resp.text  # the exception text stays in the server log
     assert resp.json()["request_id"] == resp.headers["x-request-id"]
+
+
+def test_an_unrecognized_runtime_error_in_forward_is_presumed_client_input(
+    torch_state, monkeypatch
+):
+    """Torch has no exception type for "the client's input was bad", only ever-varying
+    RuntimeError/ValueError messages (a shape mismatch, an out-of-bounds target, ...);
+    enumerating every client-input phrasing under-classifies, so anything that isn't one of
+    the few known server-side markers (out of memory, a CUDA/cuDNN fault, an internal
+    assert, a missing kernel) is presumed to be the client's fault instead of an opaque 500."""
+    monkeypatch.setattr(torch_state.backend, "module", _Failing("kaboom: an unrelated failure"))
+    client = TestClient(build_app(torch_state, api_key=None))
+
+    resp = client.post("/predict", json=MLP_INPUT)
+
+    assert resp.status_code == 400
+    assert "kaboom" in resp.json()["detail"]
 
 
 @pytest.mark.parametrize("device", ["cuda", "cuda:0"])

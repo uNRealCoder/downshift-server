@@ -37,7 +37,7 @@ and one form that names a model importable in the process rather than a file:
 
 | Form | Meaning |
 |---|---|
-| `pkg.module:attr` | Import spec; `attr` is an `nn.Module` instance or a zero-argument factory. |
+| `pkg.module:attr` | Import spec; `attr` is an `nn.Module` instance or a zero-argument factory. Resolved on `sys.path`, with the current directory appended by the CLI (as `python -m` would), so a `my_model.py` next to you is `my_model:attr`. |
 
 Model loading is local-only: a Hugging Face hub id (`org/repo`) is rejected with an error
 pointing at `huggingface-cli download`, and the `hf` adapter passes `local_files_only=True`,
@@ -142,7 +142,7 @@ backend. The serving-specific flags:
 | `--max-concurrency INT` | `DOWNSHIFT_MAX_CONCURRENCY` | `1` | Inferences allowed to run at once per worker process. |
 | `--max-queue INT` | `DOWNSHIFT_MAX_QUEUE` | `64` | Predicts allowed to wait past `--max-concurrency` before a new one gets a fast `503`. |
 | `--request-timeout FLOAT` | `DOWNSHIFT_REQUEST_TIMEOUT` | `30.0` | Seconds a predict may wait, unstarted, before a `503` instead of an inference; counts time spent queued. `0` = no limit. |
-| `--workers INT` | `DOWNSHIFT_WORKERS` | `1` | Uvicorn worker processes; each independently loads/exports/warms the model. The parent frees its own copy of the model before the workers start. |
+| `--workers INT` | `DOWNSHIFT_WORKERS` | `1` | Uvicorn worker processes; each independently loads/exports/warms the model. The parent frees its own copy of the model before the workers start. A worker that fails to load stops the whole server (uvicorn's startup-failure exit code) instead of being respawned. |
 | `--log-level debug\|info\|warning\|error` | - | `warning` | See "Logging" below. |
 | `--access-log` / `--no-access-log` | - | on | The one log line per request (`downshift.access`). Uvicorn's own access log is always off. |
 

@@ -95,7 +95,16 @@ def test_load_spec_returns_none_when_module_missing():
 
 
 def test_get_returns_the_matching_adapter():
-    assert registry.get("generic") is generic.ADAPTER
+    assert isinstance(registry.get("generic"), generic.GenericAdapter)
+
+
+def test_entry_point_pointing_at_a_class_is_instantiated(monkeypatch):
+    monkeypatch.setattr(
+        registry, "entry_points", lambda group: [_FakeEntryPoint(lambda: _FakeAdapter)]
+    )
+
+    assert isinstance(registry.available()["fake"], _FakeAdapter)
+    assert isinstance(registry.get("fake"), _FakeAdapter)
 
 
 # --- custom adapters loaded from a .py file ----------------------------------------------
@@ -245,14 +254,14 @@ def test_detect_picks_the_family_adapter(make_model, make_inputs, expected):
     ids=["linear", "conv2d"],
 )
 def test_generic_guesses_single_tensor_from_first_layer(make_model, expected_shape):
-    guess = generic.ADAPTER.example_inputs(make_model())
+    guess = generic.GenericAdapter().example_inputs(make_model())
     assert guess is not None
     assert len(guess) == 1
     assert tuple(guess[0].shape) == expected_shape
 
 
 def test_generic_does_not_guess_for_multi_argument_forward():
-    assert generic.ADAPTER.example_inputs(scatter_include_self_false.make_model()) is None
+    assert generic.GenericAdapter().example_inputs(scatter_include_self_false.make_model()) is None
 
 
 class _Conv1dOnly(torch.nn.Module):
@@ -297,24 +306,24 @@ class _NoGuessableLayer(torch.nn.Module):
     ids=["conv1d", "conv3d"],
 )
 def test_generic_guesses_conv1d_and_conv3d(model_cls, expected_shape):
-    guess = generic.ADAPTER.example_inputs(model_cls())
+    guess = generic.GenericAdapter().example_inputs(model_cls())
     assert guess is not None
     assert tuple(guess[0].shape) == expected_shape
 
 
 def test_generic_guesses_embedding_input():
-    guess = generic.ADAPTER.example_inputs(_EmbeddingOnly())
+    guess = generic.GenericAdapter().example_inputs(_EmbeddingOnly())
     assert guess is not None
     assert tuple(guess[0].shape) == (1, 8)
     assert guess[0].dtype == torch.int64
 
 
 def test_generic_guess_returns_none_for_unrecognized_layer():
-    assert generic.ADAPTER.example_inputs(_NoGuessableLayer()) is None
+    assert generic.GenericAdapter().example_inputs(_NoGuessableLayer()) is None
 
 
 def test_generic_flattens_dataclass_input_into_named_tensors():
-    prepared = generic.ADAPTER.prepare(dict_input.make_model(), dict_input.make_inputs())
+    prepared = generic.GenericAdapter().prepare(dict_input.make_model(), dict_input.make_inputs())
 
     assert prepared.input_names == ("x", "mask")
     assert all(isinstance(t, torch.Tensor) for t in prepared.inputs)
@@ -362,14 +371,14 @@ def test_shim_inherits_train_eval_mode(training):
 
 
 def test_pyg_example_inputs_guesses_from_message_passing_layer():
-    guess = pyg.ADAPTER.example_inputs(gnn_gcn.make_model())
+    guess = pyg.PyGAdapter().example_inputs(gnn_gcn.make_model())
     assert guess is not None
     assert isinstance(guess[0], PyGData)
     assert guess[0].x.shape[1] == 8
 
 
 def test_pyg_example_inputs_none_without_message_passing_layer():
-    assert pyg.ADAPTER.example_inputs(clean_mlp.make_model()) is None
+    assert pyg.PyGAdapter().example_inputs(clean_mlp.make_model()) is None
 
 
 class _BipartiteSAGE(torch.nn.Module):
@@ -382,7 +391,7 @@ class _BipartiteSAGE(torch.nn.Module):
 
 
 def test_pyg_first_in_channels_unwraps_a_tuple_in_channels():
-    guess = pyg.ADAPTER.example_inputs(_BipartiteSAGE())
+    guess = pyg.PyGAdapter().example_inputs(_BipartiteSAGE())
     assert guess is not None
     assert guess[0].x.shape[1] == 8
 
@@ -392,7 +401,7 @@ def test_pyg_prepare_includes_edge_attr_when_present_on_the_input():
     data = PyGData(
         x=torch.randn(6, 8), edge_index=torch.randint(0, 6, (2, 10)), edge_attr=torch.randn(10, 3)
     )
-    prepared = pyg.ADAPTER.prepare(model, (data,))
+    prepared = pyg.PyGAdapter().prepare(model, (data,))
     assert prepared.input_names == ("x", "edge_index", "edge_attr")
     assert len(prepared.inputs) == 3
 
@@ -466,3 +475,20 @@ def test_hf_vary_fn_clamps_sequence_length_to_max_seq():
     for i in range(1, 21):
         _, mask = vary(i)
         assert mask.shape[1] <= 6
+
+
+def test_hf_vary_fn_checks_the_longest_sequence_the_model_declares():
+    base = tiny_bert.make_inputs(seq=4)
+    vary = hf.make_vary_fn(base, vocab_size=100, max_seq=64, longest=64)
+
+    ids, mask = vary(1)
+    assert ids.shape == (1, 64)
+    assert bool((mask == 1).all())  # every position attended, so the whole table is used
+    assert all(vary(i)[0].shape[1] <= 64 for i in range(2, 21))
+
+
+def test_hf_vary_fn_without_a_declared_limit_never_samples_at_the_cap():
+    base = tiny_bert.make_inputs(seq=4)
+    vary = hf.make_vary_fn(base, vocab_size=100, max_seq=4096)
+
+    assert all(vary(i)[0].shape[1] <= 8 for i in range(1, 21))

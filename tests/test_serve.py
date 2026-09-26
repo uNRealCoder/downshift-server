@@ -147,6 +147,7 @@ def test_predict_reports_server_timing(mlp_client):
     resp = mlp_client.post("/predict", json=MLP_INPUT)
     assert resp.status_code == 200, resp.text
     timing = resp.headers["server-timing"]
+    assert "parse;dur=" in timing
     assert "codec;dur=" in timing
     assert "infer;dur=" in timing
 
@@ -331,6 +332,20 @@ def test_predict_graph_on_non_graph_model(mlp_client):
     resp = mlp_client.post("/predict/graph", json={"x": [[0.0] * 16], "edge_index": [[0], [0]]})
     assert resp.status_code == 400
     assert "not graph-shaped" in resp.json()["detail"]
+
+
+def test_predict_graph_rejects_an_out_of_range_edge_index(gcn_client):
+    x = np.random.randn(5, 8).tolist()
+    resp = gcn_client.post("/predict/graph", json={"x": x, "edge_index": [[0, 99], [1, 2]]})
+    assert resp.status_code == 400
+    assert "outside the node range [0, 5)" in resp.json()["detail"]
+
+
+def test_predict_graph_rejects_a_negative_edge_index(gcn_client):
+    x = np.random.randn(5, 8).tolist()
+    resp = gcn_client.post("/predict/graph", json={"x": x, "edge_index": [[-1, 2], [1, 2]]})
+    assert resp.status_code == 400
+    assert "outside the node range [0, 5)" in resp.json()["detail"]
 
 
 def test_predict_graph_with_edge_attr_is_accepted(gcn_client):

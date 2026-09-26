@@ -45,12 +45,13 @@ uvicorn.
 | `_imports.py` | `import_object`, `is_import_spec`, `LoadError` (stdlib only). `loading.py` re-exports them. |
 | `sources.py` | The source-kind names (`onnx-file`, `hf-repo-dir`, ...) and their descriptions (stdlib only). |
 | `loading.py` | Turns a `MODEL` argument into a `LoadedModel`: `LoadSpec`, `load_model`. |
+| `hf_repo.py` | Reads a downloaded Hugging Face repo: `load_config`, `load_pretrained` (with its task head), the pooling recipe, and the tokenizer/labels for text input. Only imported when transformers is installed. |
 | `cli/main.py` | The three commands (`check`, `export`, `serve`). |
 | `cli/options.py` | The typer option types (`Annotated` aliases, `LogLevel`). |
 | `cli/runtime.py` | `ServeArgs`, `_collect_serve_args`, and the `--workers` handoff. |
 | `cli/render.py` | The banner, reports, warnings and errors, all logged as plain text. |
 | `core/` | The gate: `verdict.py` (`check`, `prepare_model`, `build_verdict`), `capture.py`, `verify.py`, `prevalidated.py` (`intake`), `manifest.py`, `shapes.py`, `inputs.py`, and `phase.py` (the `Phase` enum: `load`, `export`, `verify`, `session`, `warmup`; drives the `Boot` timings, `/ready` and the banner). |
-| `adapters/` | `base.py`, `registry.py`, `generic.py`, `pyg.py`, `hf.py`, and the Hugging Face pieces: `text.py` (tokenizing and class probabilities), `pooling.py` (the `--pooling` choices), `embedding.py` (the pooling recipe and the graph that applies it). |
+| `adapters/` | `base.py` (the `Adapter` protocol, `Prepared`, `Family`), `registry.py`, `generic.py`, `pyg.py`, `hf.py`, and the Hugging Face pieces: `text.py` (tokenizing and class probabilities), `pooling.py` (the `--pooling` choices), `embedding.py` (the pooling recipe and the graph that applies it). |
 | `serve/options.py` | `ServeOptions`, `BackendChoice`. |
 | `serve/engine.py` | `ServingState`, `prepare_serving`, warmup. |
 | `serve/app.py` | `build_app`, routing, the request-id and API-key middleware. |

@@ -1,5 +1,6 @@
 """FastAPI app over a ServingState. The same routes regardless of which backend is behind it."""
 
+import asyncio
 import contextvars
 import hmac
 import logging
@@ -64,6 +65,29 @@ class _OrjsonRequest(Request):
             self.state.parse_ms = (time.perf_counter() - parse_start) * 1000
         return self._json
 
+    async def parse_in(self, executor: Any) -> None:
+        """Pre-parse the body in `executor`, off the event loop; json() (called later, as
+        part of FastAPI's own request-body-to-Pydantic resolution) then just returns the
+        cached result instead of doing the parse itself. Used for the predict routes (P3):
+        without this, a body near --max-body-bytes runs orjson.loads() straight on the loop,
+        stalling /health, /ready and every other in-flight request for however long that
+        takes.
+
+        Malformed JSON is left for json() to raise the usual way: self._json stays unset, so
+        FastAPI's own request-body-to-Pydantic resolution calls json() itself and gets the
+        same orjson.JSONDecodeError (a json.JSONDecodeError subclass) it already turns into a
+        422 - paying for a second, synchronous parse only on that error path.
+        """
+        parse_start = time.perf_counter()
+        body = await self.body()
+        loop = asyncio.get_running_loop()
+        try:
+            parsed = await loop.run_in_executor(executor, orjson.loads, body)
+        except ValueError:
+            return
+        self._json = parsed
+        self.state.parse_ms = (time.perf_counter() - parse_start) * 1000
+
 
 def _body_too_large(observed: int, limit: int) -> JSONResponse:
     return JSONResponse(
@@ -119,7 +143,9 @@ class OrjsonRoute(APIRoute):
     For /predict and /predict/graph, a slot is admitted *before* any of that (P1): an
     overloaded server answers 503 without buffering or parsing a byte. The slot is released
     in `finally`, so every exit (413, 400, a validation error, the client disconnecting)
-    releases it exactly once.
+    releases it exactly once. Once the body is in hand, orjson.loads() itself also runs in
+    state.executor rather than on the loop (P3): a body near --max-body-bytes would otherwise
+    block /health, /ready and every other in-flight request for the parse.
     """
 
     def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
@@ -154,6 +180,9 @@ class OrjsonRoute(APIRoute):
                     if isinstance(result, JSONResponse):
                         return result
                     wrapped._body = result
+                if is_predict:
+                    assert current is not None
+                    await wrapped.parse_in(current.executor)
                 return await handler(wrapped)
             finally:
                 if admitted:
@@ -386,9 +415,14 @@ def build_app(
     )
     app.router.route_class = OrjsonRoute
     app.state.serving = state
+    # Starlette makes the *last*-registered middleware the outermost layer, so registration
+    # order here is back to front: load_middleware's user middleware goes on first (innermost,
+    # right next to the routes, so it only ever sees authenticated traffic), ApiKeyMiddleware
+    # next (the gate), and RequestIdMiddleware last (outermost, so access logging and the
+    # X-Request-Id header still cover 401s and everything else uniformly).
+    load_middleware(app, middleware)
     app.add_middleware(ApiKeyMiddleware, api_key=api_key)
     app.add_middleware(RequestIdMiddleware, access_log=access_log)
-    load_middleware(app, middleware)
 
     @app.exception_handler(Exception)
     async def _unhandled_exception(request: Request, exc: Exception) -> JSONResponse:
@@ -436,7 +470,7 @@ def build_app(
         # Free-text fields quote the path an exception was handed (ORT's "Load model from
         # ...", transformers' "Can't load tokenizer for ..."); a client gets the name only.
         located = () if current.source_kind in LABEL_KINDS else (current.source,)
-        paths = (*located, current.verdict.onnx_path)
+        paths = (*located, current.verdict.onnx_path, current.hf_source)
         verdict = current.verdict.to_dict()
         verdict["reason"] = hide_paths(verdict["reason"], paths)
         verdict["warnings"] = [hide_paths(w, paths) for w in verdict["warnings"]]
