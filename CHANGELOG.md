@@ -100,6 +100,19 @@ All notable changes to this project are documented here. Format follows
 - `check(model, fp16=True)` (and `downshift export --fp16`) no longer converts the caller's
   model to float16 in place; it now works on a deep copy.
 - Importing `downshift` no longer changes global logging levels.
+- On the torch fallback, `GET /schema` treated every input's first axis as the batch axis,
+  so a graph model's `edge_index` (`[2, E]`) got an `example_request` of shape `[1, E]` that
+  `/predict` then rejected. The torch backend now reports the axes the adapter actually made
+  dynamic and keeps every other axis at its real size, like ONNX Runtime does.
+- CI was red on every job: two tests built ONNX graphs stamped with the installed onnx's
+  newest IR version (14), which the installed onnxruntime can't read (it stops at 13), and a
+  failing worker load ended the whole `floor` pytest run through `os._exit`. The test graphs
+  now pin their IR version, a test calling `os._exit` fails just that test, and the tests
+  that export a Hugging Face encoder, which torch 2.5's exporter can't handle, carry
+  `needs_torch_26` so the `floor` job skips them. Checked locally on Python 3.12 (floor pins
+  and current releases) and Python 3.14.
+- `docs/compatibility.md` and the README's matrix are regenerated (torch 2.14, onnx 1.22,
+  onnxruntime 1.30): same verdict and backend for every fixture.
 
 ### Added
 

@@ -362,6 +362,7 @@ def _build_backend(name: BackendName, verdict: ExportVerdict, opts: ServeOptions
             opts.device,
             prepared.inputs,
             opts.intra_op_threads,
+            prepared.dynamic_shapes,
         )
     backend.verified_provider = verified_provider_for(verdict)
     return backend

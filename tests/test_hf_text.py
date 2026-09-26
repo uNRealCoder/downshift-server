@@ -87,6 +87,7 @@ def test_encoder_repo_still_loads_as_the_bare_encoder(encoder_dir):
     assert type(model) is BertModel
 
 
+@pytest.mark.needs_torch_26
 def test_classifier_serves_on_onnx_runtime_and_returns_logits(classifier_state):
     assert classifier_state.verdict.status == "CLEAN", classifier_state.verdict.reason
     assert classifier_state.backend.name == "onnxruntime"
@@ -239,6 +240,7 @@ def test_no_predictions_when_the_output_is_not_a_class_score():
 # --- a bare .onnx served with --tokenizer-from pointing at its Hugging Face repo --------------
 
 
+@pytest.mark.needs_torch_26
 def test_onnx_plus_tokenizer_from_gets_pooling_and_text_input(embedding_onnx, embedding_dir):
     state = prepare_serving(load_model(LoadSpec(embedding_onnx)), tokenizer_from=embedding_dir)
 
@@ -266,6 +268,7 @@ def encoder_onnx(encoder_dir, tmp_path_factory) -> str:
     return str(out)
 
 
+@pytest.mark.needs_torch_26
 def test_tokenizer_from_does_not_claim_pooling_a_token_level_graph(encoder_onnx, embedding_dir):
     """embedding_dir declares mean pooling, but the served graph is the bare encoder: /schema
     must not report an embedding recipe the graph never applies, and should say why the
@@ -282,6 +285,7 @@ def test_tokenizer_from_does_not_claim_pooling_a_token_level_graph(encoder_onnx,
     assert any("--tokenizer-from only supplies the tokenizer" in n for n in body["notes"])
 
 
+@pytest.mark.needs_torch_26
 def test_reference_and_tokenizer_from_are_independent(embedding_onnx, embedding_dir):
     """--reference verifies numerics; --tokenizer-from supplies the tokenizer; passing both,
     naming the same directory, does both jobs at once without either implying the other."""
@@ -296,6 +300,7 @@ def test_reference_and_tokenizer_from_are_independent(embedding_onnx, embedding_
     assert state.verdict.status == "CLEAN", state.verdict.reason
 
 
+@pytest.mark.needs_torch_26
 def test_onnx_alone_has_no_text_input_and_is_unverified(embedding_onnx):
     state = prepare_serving(load_model(LoadSpec(embedding_onnx)))
 
@@ -305,6 +310,7 @@ def test_onnx_alone_has_no_text_input_and_is_unverified(embedding_onnx):
     assert state.verdict.status == "UNVERIFIED"
 
 
+@pytest.mark.needs_torch_26
 def test_reference_alone_does_not_turn_on_text_input(embedding_onnx, embedding_dir):
     """--reference is purely numeric: naming an HF repo directory there, with no
     --tokenizer-from, verifies the graph but does not attach a tokenizer."""
@@ -340,6 +346,7 @@ def test_tokenizer_from_must_be_an_hf_repo_directory(tmp_path):
         resolve_tokenizer_source(str(no_config))
 
 
+@pytest.mark.needs_torch_26
 def test_worker_rebuild_attaches_text_from_a_carried_hf_source(embedding_onnx, embedding_dir):
     """serving_state_from_artifact is what a `--workers N` worker calls to rebuild from the
     parent's already-verified onnx artifact; it takes no reference model or --tokenizer-from
@@ -362,6 +369,7 @@ def test_worker_rebuild_attaches_text_from_a_carried_hf_source(embedding_onnx, e
     assert rebuilt.embedding.pooling == "mean"
 
 
+@pytest.mark.needs_torch_26
 def test_app_for_takes_tokenizer_from_independent_of_reference(embedding_onnx, embedding_dir):
     """The library entry point offers the same split as the CLI: tokenizer_from= supplies
     text input, reference= verifies numerics, and neither implies the other."""

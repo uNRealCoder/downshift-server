@@ -6,7 +6,7 @@ needs is built once per session.
 
 import base64
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import numpy as np
@@ -37,6 +37,31 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     for item in items:
         if "needs_torch_26" in item.keywords:
             item.add_marker(skip)
+
+
+class WorkerExit(Exception):
+    """os._exit, called from a test: what a `--workers` worker does when its model fails to
+    load (cli.runtime._serve_app_factory)."""
+
+
+@pytest.fixture(autouse=True)
+def _no_real_os_exit() -> Iterator[None]:
+    """A worker-path test whose load fails would otherwise call the real os._exit and end
+    the whole pytest run with no report. Raising here fails only that test instead.
+
+    Patched by hand, not through `monkeypatch`: an autouse fixture requesting `monkeypatch`
+    would set it up first, so its undo would run after other fixtures' teardowns (e.g.
+    test_settings reloading the module once its env vars are gone)."""
+
+    def fake_exit(code: int) -> None:
+        raise WorkerExit(f"os._exit({code})")
+
+    real_exit = os._exit
+    os._exit = fake_exit  # type: ignore[assignment]
+    try:
+        yield
+    finally:
+        os._exit = real_exit
 
 
 def subprocess_env(*extra_paths: Path) -> dict[str, str]:

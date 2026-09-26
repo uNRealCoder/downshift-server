@@ -167,6 +167,28 @@ def test_onnx_file_with_reference_is_verified(exported_mlp):
     assert state.ready is True
 
 
+def test_torch_backend_reports_only_the_adapters_dynamic_axes():
+    """A graph model's edge_index is [2, E]: only E is dynamic. Reporting axis 0 as "batch"
+    made /schema's example [1, E], which the model then rejected."""
+
+    class TakesGraph(torch.nn.Module):
+        def forward(self, x, edge_index):
+            return x[edge_index[1]]
+
+    x, edge_index = torch.zeros(4, 3), torch.zeros(2, 5, dtype=torch.long)
+    nodes, edges = torch.export.Dim("num_nodes"), torch.export.Dim("num_edges")
+    backend = TorchBackend(
+        TakesGraph(),
+        ("x", "edge_index"),
+        device="cpu",
+        example_inputs=(x, edge_index),
+        dynamic_shapes=({0: nodes}, {1: edges}),
+    )
+
+    shapes = {spec.name: spec.shape for spec in backend.metadata().inputs}
+    assert shapes == {"x": ["num_nodes", 3], "edge_index": [2, "num_edges"]}
+
+
 def test_torch_backend_rejects_missing_input():
     backend = TorchBackend(clean_mlp.make_model(), ("x",), device="cpu")
     with pytest.raises(InferenceInputError, match="missing inputs"):

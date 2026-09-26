@@ -248,6 +248,11 @@ def test_a_bf16_model_schema_reports_float32_inputs(bf16_client):
     assert entry["dtype"] == "float32"
 
 
+# Hand-built graphs pin ir_version: make_model stamps the installed onnx's newest IR version,
+# which can be ahead of what the installed onnxruntime reads (onnx 1.20 writes IR 14 while
+# onnxruntime 1.23 stops at 13). 8 is the lowest that allows opset 17.
+
+
 def _bf16_output_onnx_bytes() -> bytes:
     """A graph ORT's CPU EP can actually execute (Cast, not Gemm - which has no bf16 CPU
     kernel, see tests/models/bf16_weights.py) but whose declared output is bfloat16: the
@@ -260,11 +265,15 @@ def _bf16_output_onnx_bytes() -> bytes:
     y = helper.make_tensor_value_info("y", TensorProto.BFLOAT16, [None, 8])
     cast = helper.make_node("Cast", ["x"], ["y"], to=TensorProto.BFLOAT16)
     graph = helper.make_graph([cast], "g", [x], [y])
-    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)], ir_version=8)
     onnx.checker.check_model(model)
     return model.SerializeToString()
 
 
+@pytest.mark.skipif(
+    not hasattr(__import__("onnxruntime").OrtValue, "__dlpack__"),
+    reason="this onnxruntime has no OrtValue DLPack, so it can't return bfloat16 at all",
+)
 def test_onnxruntime_backend_widens_a_bfloat16_output_to_float32():
     backend = OnnxRuntimeBackend(_bf16_output_onnx_bytes(), device="cpu")
 
@@ -282,7 +291,7 @@ def _fp16_output_onnx_bytes() -> bytes:
     y = helper.make_tensor_value_info("y", TensorProto.FLOAT16, [None, 8])
     cast = helper.make_node("Cast", ["x"], ["y"], to=TensorProto.FLOAT16)
     graph = helper.make_graph([cast], "g", [x], [y])
-    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)], ir_version=8)
     onnx.checker.check_model(model)
     return model.SerializeToString()
 

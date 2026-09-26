@@ -239,6 +239,7 @@ class TorchBackend:
         device: str = "auto",
         example_inputs: tuple | None = None,
         intra_op_threads: int = 0,
+        dynamic_shapes: tuple | None = None,
     ) -> None:
         if intra_op_threads > 0:  # 0 means "leave torch's own default alone"
             torch.set_num_threads(intra_op_threads)
@@ -263,9 +264,10 @@ class TorchBackend:
         self._output_specs: list[IOSpec] = []
         if example_inputs is not None:
             # One pass over the example fills in dtypes and shapes for /metadata.
+            specs = dynamic_shapes or (_BATCH_AXIS,) * len(self.input_names)
             self._input_specs = [
-                _spec_from_tensor(n, t)
-                for n, t in zip(self.input_names, example_inputs, strict=True)
+                _spec_from_tensor(n, t, spec)
+                for n, t, spec in zip(self.input_names, example_inputs, specs, strict=True)
             ]
             feeds = example_feeds(self.input_names, example_inputs)
             self._output_specs = [_spec_from_array(n, a) for n, a in self.infer(feeds).items()]
@@ -305,9 +307,21 @@ class TorchBackend:
         return BackendMeta(self.name, self.device, self._input_specs, self._output_specs)
 
 
-def _dynamic_shape(shape: tuple[int, ...]) -> list[int | str | None]:
-    # Axis 0 is dynamic for anything we serve; report it the way ORT does.
-    return ["batch", *shape[1:]] if shape else []
+# Without an adapter's dynamic_shapes, axis 0 is taken to be the batch axis.
+_BATCH_AXIS = {0: "batch"}
+
+
+def _dynamic_shape(
+    shape: tuple[int, ...], spec: dict | None = _BATCH_AXIS
+) -> list[int | str | None]:
+    """The shape as ORT would report it: a dynamic axis by name, every other axis its size.
+    `spec` is an adapter's {axis: torch.export.Dim} for this input (None: nothing dynamic),
+    so an input like a graph's edge_index [2, E] keeps its fixed leading 2."""
+    dynamic = spec or {}
+    return [
+        getattr(dynamic[i], "__name__", str(dynamic[i])) if i in dynamic else size
+        for i, size in enumerate(shape)
+    ]
 
 
 def widen_for_wire(t: torch.Tensor) -> torch.Tensor:
@@ -352,8 +366,9 @@ def _wire_dtype_name(dtype: torch.dtype) -> str:
     return str(wire).removeprefix("torch.")
 
 
-def _spec_from_tensor(name: str, t: torch.Tensor) -> IOSpec:
-    return IOSpec(name, f"tensor({_wire_dtype_name(t.dtype)})", _dynamic_shape(tuple(t.shape)))
+def _spec_from_tensor(name: str, t: torch.Tensor, spec: dict | None = _BATCH_AXIS) -> IOSpec:
+    dtype = f"tensor({_wire_dtype_name(t.dtype)})"
+    return IOSpec(name, dtype, _dynamic_shape(tuple(t.shape), spec))
 
 
 def _spec_from_array(name: str, a: np.ndarray) -> IOSpec:

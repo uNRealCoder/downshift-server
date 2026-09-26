@@ -18,7 +18,9 @@ def test_op_types_is_a_count_descending_histogram():
     result = capture(clean_mlp.make_model(), clean_mlp.make_inputs())
 
     assert result.success is True
-    assert result.op_types == {"Gemm": 2, "Relu": 1}
+    # Older exporters (torch 2.5) also emit a Transpose per weight ahead of each Gemm.
+    assert result.op_types["Gemm"] == 2
+    assert result.op_types["Relu"] == 1
     counts = list(result.op_types.values())
     assert counts == sorted(counts, reverse=True)
 
