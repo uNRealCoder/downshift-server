@@ -1,0 +1,391 @@
+{
+  "environment": {
+    "downshift": "0.4.0",
+    "downshift_path": "D:\\Projects\\downshift-server\\src\\downshift\\__init__.py",
+    "python": "3.12.10",
+    "platform": "win32",
+    "cpu_count": 16,
+    "torch": "2.14.0+cpu",
+    "onnxruntime": "1.30.0",
+    "torch_num_threads": 8,
+    "torch_interop_threads": 8,
+    "ort_providers": [
+      "AzureExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "timestamp": "2026-09-27T00:58:08"
+  },
+  "config": {
+    "out": "bench/results_hf_tuned_minilm_v0.4.0.json",
+    "duration": 5.0,
+    "warmup": 1.0,
+    "concurrency": [
+      1,
+      8
+    ],
+    "variants": [
+      "downshift_auto_mc4",
+      "downshift_auto_w2"
+    ],
+    "models": [
+      "all-MiniLM-L6-v2"
+    ]
+  },
+  "models": {
+    "all-MiniLM-L6-v2": {
+      "path": "bench/all-MiniLM-L6-v2/all-MiniLM-L6-v2",
+      "check": {
+        "exit_code": 0,
+        "wall_s": 25.98,
+        "report": "2026-09-27 00:58:33 INFO downshift.report: downshift v0.4.0\n  Model           bench/all-MiniLM-L6-v2/all-MiniLM-L6-v2\n  Family          hf-transformers\n  Export          CLEAN  (strict=False, opset 20)\n  Numerics        max abs err 2.38e-07 over 8 samples  OK\n  Tolerance       atol 1e-04, rtol 1e-03 (float32)\n  Samples         input_ids: (2,8) (1,512) (3,9) (1,1) (1,2) (3,16) (1,16) (4,3)\n                  attention_mask: (2,8) (1,512) (3,9) (1,1) (1,2) (3,16) (1,16) (4,3)\n  Shape-general   yes\n  Dynamic dims    input_ids[0], input_ids[1], attention_mask[0], attention_mask[1]\n  Backend         onnxruntime\n  Reason          exported via strict=False; numerics ok across 8 samples (max abs err 2.38e-07)\n\nLoading weights:   0%|          | 0/103 [00:00<?, ?it/s]\nLoading weights: 100%|##########| 103/103 [00:00<00:00, 8166.14it/s]"
+      },
+      "backends": {
+        "downshift_auto_mc4": {
+          "ready_s": 27.09,
+          "served_by": {
+            "name": "onnxruntime",
+            "device": "CPUExecutionProvider",
+            "inputs": [
+              {
+                "name": "input_ids",
+                "dtype": "tensor(int64)",
+                "shape": [
+                  "s43",
+                  "s53"
+                ]
+              },
+              {
+                "name": "attention_mask",
+                "dtype": "tensor(int64)",
+                "shape": [
+                  "s43",
+                  "s53"
+                ]
+              }
+            ],
+            "outputs": [
+              {
+                "name": "output_0",
+                "dtype": "tensor(float)",
+                "shape": [
+                  "s43",
+                  384
+                ]
+              }
+            ]
+          },
+          "runs": [
+            {
+              "concurrency": 1,
+              "loadgen_procs": 1,
+              "ok": 812,
+              "errors": 0,
+              "window_s": 5.002,
+              "throughput_rps": 162.34,
+              "p50_ms": 5.765,
+              "p95_ms": 8.364,
+              "p99_ms": 9.406,
+              "mean_ms": 6.145,
+              "request_bytes": 42,
+              "payload": "short_b1",
+              "health": {
+                "n": 101,
+                "failures": 0,
+                "p50_ms": 2.49,
+                "p99_ms": 17.16,
+                "max_ms": 17.29
+              }
+            },
+            {
+              "concurrency": 8,
+              "loadgen_procs": 4,
+              "ok": 2054,
+              "errors": 0,
+              "window_s": 5.015,
+              "throughput_rps": 409.59,
+              "p50_ms": 19.163,
+              "p95_ms": 24.479,
+              "p99_ms": 31.014,
+              "mean_ms": 19.456,
+              "request_bytes": 42,
+              "payload": "short_b1",
+              "health": {
+                "n": 105,
+                "failures": 0,
+                "p50_ms": 8.64,
+                "p99_ms": 19.93,
+                "max_ms": 24.11
+              }
+            },
+            {
+              "concurrency": 1,
+              "loadgen_procs": 1,
+              "ok": 230,
+              "errors": 0,
+              "window_s": 5.011,
+              "throughput_rps": 45.9,
+              "p50_ms": 21.259,
+              "p95_ms": 24.853,
+              "p99_ms": 25.999,
+              "mean_ms": 21.731,
+              "request_bytes": 405,
+              "payload": "short_b8",
+              "health": {
+                "n": 102,
+                "failures": 0,
+                "p50_ms": 2.2,
+                "p99_ms": 17.45,
+                "max_ms": 18.3
+              }
+            },
+            {
+              "concurrency": 8,
+              "loadgen_procs": 4,
+              "ok": 673,
+              "errors": 0,
+              "window_s": 5.036,
+              "throughput_rps": 133.63,
+              "p50_ms": 59.66,
+              "p95_ms": 67.712,
+              "p99_ms": 76.19,
+              "mean_ms": 59.465,
+              "request_bytes": 405,
+              "payload": "short_b8",
+              "health": {
+                "n": 104,
+                "failures": 0,
+                "p50_ms": 3.38,
+                "p99_ms": 18.95,
+                "max_ms": 20.2
+              }
+            },
+            {
+              "concurrency": 1,
+              "loadgen_procs": 1,
+              "ok": 140,
+              "errors": 0,
+              "window_s": 5.013,
+              "throughput_rps": 27.93,
+              "p50_ms": 35.688,
+              "p95_ms": 39.46,
+              "p99_ms": 43.12,
+              "mean_ms": 35.765,
+              "request_bytes": 807,
+              "payload": "long_b1",
+              "health": {
+                "n": 102,
+                "failures": 0,
+                "p50_ms": 2.2,
+                "p99_ms": 17.89,
+                "max_ms": 24.05
+              }
+            },
+            {
+              "concurrency": 8,
+              "loadgen_procs": 4,
+              "ok": 388,
+              "errors": 0,
+              "window_s": 5.061,
+              "throughput_rps": 76.67,
+              "p50_ms": 103.164,
+              "p95_ms": 115.305,
+              "p99_ms": 131.276,
+              "mean_ms": 102.952,
+              "request_bytes": 807,
+              "payload": "long_b1",
+              "health": {
+                "n": 106,
+                "failures": 0,
+                "p50_ms": 3.06,
+                "p99_ms": 17.06,
+                "max_ms": 17.98
+              }
+            }
+          ]
+        },
+        "downshift_auto_w2": {
+          "ready_s": 47.01,
+          "served_by": {
+            "name": "onnxruntime",
+            "device": "CPUExecutionProvider",
+            "inputs": [
+              {
+                "name": "input_ids",
+                "dtype": "tensor(int64)",
+                "shape": [
+                  "s43",
+                  "s53"
+                ]
+              },
+              {
+                "name": "attention_mask",
+                "dtype": "tensor(int64)",
+                "shape": [
+                  "s43",
+                  "s53"
+                ]
+              }
+            ],
+            "outputs": [
+              {
+                "name": "output_0",
+                "dtype": "tensor(float)",
+                "shape": [
+                  "s43",
+                  384
+                ]
+              }
+            ]
+          },
+          "runs": [
+            {
+              "concurrency": 1,
+              "loadgen_procs": 1,
+              "ok": 850,
+              "errors": 0,
+              "window_s": 5.002,
+              "throughput_rps": 169.93,
+              "p50_ms": 5.584,
+              "p95_ms": 7.067,
+              "p99_ms": 8.233,
+              "mean_ms": 5.865,
+              "request_bytes": 42,
+              "payload": "short_b1",
+              "health": {
+                "n": 96,
+                "failures": 0,
+                "p50_ms": 2.47,
+                "p99_ms": 19.16,
+                "max_ms": 19.16
+              }
+            },
+            {
+              "concurrency": 8,
+              "loadgen_procs": 4,
+              "ok": 1255,
+              "errors": 0,
+              "window_s": 5.026,
+              "throughput_rps": 249.69,
+              "p50_ms": 30.922,
+              "p95_ms": 74.118,
+              "p99_ms": 103.018,
+              "mean_ms": 31.851,
+              "request_bytes": 42,
+              "payload": "short_b1",
+              "health": {
+                "n": 101,
+                "failures": 0,
+                "p50_ms": 2.66,
+                "p99_ms": 17.81,
+                "max_ms": 18.59
+              }
+            },
+            {
+              "concurrency": 1,
+              "loadgen_procs": 1,
+              "ok": 238,
+              "errors": 0,
+              "window_s": 5.011,
+              "throughput_rps": 47.5,
+              "p50_ms": 20.138,
+              "p95_ms": 22.23,
+              "p99_ms": 74.763,
+              "mean_ms": 21.026,
+              "request_bytes": 405,
+              "payload": "short_b8",
+              "health": {
+                "n": 98,
+                "failures": 0,
+                "p50_ms": 2.22,
+                "p99_ms": 18.11,
+                "max_ms": 18.11
+              }
+            },
+            {
+              "concurrency": 8,
+              "loadgen_procs": 4,
+              "ok": 327,
+              "errors": 0,
+              "window_s": 5.074,
+              "throughput_rps": 64.45,
+              "p50_ms": 118.482,
+              "p95_ms": 176.414,
+              "p99_ms": 193.931,
+              "mean_ms": 122.3,
+              "request_bytes": 405,
+              "payload": "short_b8",
+              "health": {
+                "n": 105,
+                "failures": 0,
+                "p50_ms": 2.32,
+                "p99_ms": 17.23,
+                "max_ms": 17.47
+              }
+            },
+            {
+              "concurrency": 1,
+              "loadgen_procs": 1,
+              "ok": 138,
+              "errors": 0,
+              "window_s": 5.001,
+              "throughput_rps": 27.6,
+              "p50_ms": 34.298,
+              "p95_ms": 37.448,
+              "p99_ms": 92.186,
+              "mean_ms": 36.176,
+              "request_bytes": 807,
+              "payload": "long_b1",
+              "health": {
+                "n": 97,
+                "failures": 0,
+                "p50_ms": 2.33,
+                "p99_ms": 18.65,
+                "max_ms": 18.65
+              }
+            },
+            {
+              "concurrency": 8,
+              "loadgen_procs": 4,
+              "ok": 204,
+              "errors": 0,
+              "window_s": 5.148,
+              "throughput_rps": 39.63,
+              "p50_ms": 199.928,
+              "p95_ms": 294.859,
+              "p99_ms": 320.616,
+              "mean_ms": 196.084,
+              "request_bytes": 807,
+              "payload": "long_b1",
+              "health": {
+                "n": 105,
+                "failures": 0,
+                "p50_ms": 2.44,
+                "p99_ms": 18.25,
+                "max_ms": 20.68
+              }
+            }
+          ]
+        }
+      },
+      "vs_downshift_auto_mc4": {
+        "downshift_auto_mc4": {
+          "max_abs_err": 0.0,
+          "shape": [
+            8,
+            384
+          ],
+          "min_cosine": 0.9999999999999998
+        },
+        "downshift_auto_w2": {
+          "max_abs_err": 0.0,
+          "shape": [
+            8,
+            384
+          ],
+          "min_cosine": 0.9999999999999998
+        }
+      }
+    }
+  },
+  "platform": "Windows-11-10.0.26200-SP0"
+}
