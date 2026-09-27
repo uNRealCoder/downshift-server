@@ -46,4 +46,11 @@ tmp/
 # not part of the package or CI, kept out of version control on purpose.
 scripts/validate_pypi_release.py
 scripts/.validation/
-bench/
+
+# Benchmark harness: scripts and the published v0.4.0 report/results are tracked; the
+# downloaded Hugging Face checkpoints (GBs) and scratch results are not. See bench/README.md.
+bench/LLAMA-GUARD/
+bench/all-MiniLM-L6-v2/
+bench/results.json
+bench/summary.json
+bench/REPORT.md
