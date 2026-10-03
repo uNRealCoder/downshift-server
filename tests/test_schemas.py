@@ -91,6 +91,27 @@ def test_axis_info_sampled_defaults_to_none():
     assert AxisInfo.model_validate(info.model_dump()) == info
 
 
+def test_openapi_lists_the_binary_content_types(mlp_client):
+    paths = mlp_client.get("/openapi.json").json()["paths"]
+    for route in ("/predict", "/predict/graph"):
+        op = paths[route]["post"]
+        request = set(op["requestBody"]["content"])
+        assert {
+            "application/json",
+            "application/vnd.safetensors",
+            "application/octet-stream",
+        } <= request
+        response = set(op["responses"]["200"]["content"])
+        assert {"application/json", "application/vnd.safetensors"} <= response
+
+
+def test_server_wide_output_encoding_stays_json_or_base64():
+    from downshift.serve.schemas import OutputEncoding, RequestOutputEncoding
+
+    assert {e.value for e in OutputEncoding} == {"json", "base64"}
+    assert "safetensors" in {e.value for e in RequestOutputEncoding}
+
+
 def test_execution_info_is_a_mode_block():
     from downshift.serve.schemas import ExecutionInfo, MetadataResponse
 

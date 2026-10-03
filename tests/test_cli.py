@@ -334,8 +334,9 @@ def test_serve_no_access_log_disables_it(monkeypatch):
     assert _app_access_log(captured["app"]) is False
 
 
-def test_serve_rejects_unknown_output_encoding():
-    result = run("serve", CLEAN, "--output-encoding", "hex")
+@pytest.mark.parametrize("value", ["hex", "safetensors"])
+def test_serve_rejects_unknown_output_encoding(value):
+    result = run("serve", CLEAN, "--output-encoding", value)
     assert result.exit_code == 2, result.output  # typer usage error: not a choice
 
 

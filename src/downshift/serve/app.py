@@ -10,6 +10,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import asdict
+from functools import partial
 from typing import Any
 
 import orjson
@@ -22,10 +23,18 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 import downshift
 from downshift.core.phase import CURRENT_PROGRESS, LoadProgress
 from downshift.logs import request_id_var
+from downshift.serve.codec import decode_safetensors
 from downshift.serve.engine import ServingState
 from downshift.serve.middleware import load_middleware
 from downshift.serve.options import ExecutionChoice
-from downshift.serve.predict import PREDICT_PATHS, NumpyJSONResponse, as_batch, run_predict
+from downshift.serve.predict import (
+    BINARY_REQUEST_TYPES,
+    PREDICT_PATHS,
+    SAFETENSORS_MEDIA_TYPE,
+    NumpyJSONResponse,
+    as_batch,
+    run_predict,
+)
 from downshift.serve.schemas import (
     GRAPH_INPUTS,
     AxisInfo,
@@ -167,6 +176,59 @@ async def _try_inline(
     return True
 
 
+_UNSUPPORTED_MEDIA_TYPE = (
+    "unsupported Content-Type; send JSON (application/json) or safetensors "
+    f"({SAFETENSORS_MEDIA_TYPE}, or application/octet-stream)"
+)
+_GRAPH_TENSOR_NAMES = frozenset({"x", "edge_index", "edge_attr"})
+
+
+def _content_type(request: Request) -> str:
+    return request.headers.get("content-type", "").split(";")[0].strip().lower()
+
+
+def _as_json_request(request: Request) -> _OrjsonRequest:
+    """A request over the same body whose Content-Type reads application/json: FastAPI only
+    asks for request.json() on a JSON type, and a binary route stashes its placeholder there."""
+    scope = dict(request.scope)
+    scope["headers"] = [
+        (name, b"application/json" if name == b"content-type" else value)
+        for name, value in request.scope["headers"]
+    ]
+    return _OrjsonRequest(scope, request.receive)
+
+
+async def _load_binary(
+    wrapped: _OrjsonRequest, state: ServingState, path: str, body: bytes
+) -> None:
+    """Decode a safetensors body in the prep pool (its time is the request's `parse`) and hand
+    the arrays to the endpoint as request.state.tensors. The JSON the pydantic model validates
+    is a placeholder carrying only what the body's __metadata__ can say (output_encoding)."""
+    parse_start = time.perf_counter()
+    loop = asyncio.get_running_loop()
+    try:
+        arrays, metadata = await loop.run_in_executor(
+            state.prep_executor,
+            partial(decode_safetensors, body, max_input_bytes=state.options.max_input_bytes),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if "text" in metadata:
+        raise HTTPException(400, "text is JSON only; a safetensors body carries tensors")
+    graph = path == "/predict/graph"
+    allowed = _GRAPH_TENSOR_NAMES if graph else frozenset(state.input_names)
+    unknown = [name for name in arrays if name not in allowed]
+    if unknown:
+        raise HTTPException(
+            400, f"unknown tensor name {unknown[0]!r:.64}; this route takes {sorted(allowed)}"
+        )
+    placeholder: dict[str, Any] = {"output_encoding": metadata.get("output_encoding")}
+    placeholder.update({"x": [], "edge_index": []} if graph else {"inputs": {}})
+    wrapped._json = placeholder
+    wrapped.state.tensors = arrays
+    wrapped.state.parse_ms = (time.perf_counter() - parse_start) * 1000
+
+
 class OrjsonRoute(APIRoute):
     """Parse request bodies with orjson: several times faster than stdlib on MiB-scale bodies.
 
@@ -194,7 +256,13 @@ class OrjsonRoute(APIRoute):
             limit = (
                 current.options.max_body_bytes if current is not None else DEFAULT_MAX_BODY_BYTES
             )
-            wrapped = _OrjsonRequest(request.scope, request.receive)
+            content_type = _content_type(request) if is_predict else ""
+            binary = content_type in BINARY_REQUEST_TYPES
+            wrapped = (
+                _as_json_request(request)
+                if binary
+                else _OrjsonRequest(request.scope, request.receive)
+            )
 
             admitted = False
             if is_predict:
@@ -206,6 +274,8 @@ class OrjsonRoute(APIRoute):
                 wrapped.state.admitted_at = time.monotonic()
 
             try:
+                if content_type and not binary and "json" not in content_type:
+                    return JSONResponse({"detail": _UNSUPPORTED_MEDIA_TYPE}, status_code=415)
                 content_length = request.headers.get("content-length")
                 if content_length is not None and content_length.isdigit():
                     if int(content_length) > limit:
@@ -217,7 +287,9 @@ class OrjsonRoute(APIRoute):
                     wrapped._body = result
                 if is_predict:
                     assert current is not None
-                    if not await _try_inline(wrapped, current, content_length):
+                    if binary:
+                        await _load_binary(wrapped, current, self.path, await wrapped.body())
+                    elif not await _try_inline(wrapped, current, content_length):
                         await wrapped.parse_in(current.prep_executor)
                 return await handler(wrapped)
             finally:
@@ -230,9 +302,23 @@ class OrjsonRoute(APIRoute):
 
 # The predict routes: orjson response, and PredictResponse kept in the OpenAPI schema without
 # the response_model re-validation walk over every output.
+_BINARY_BODY = {"schema": {"type": "string", "format": "binary"}}
 _PREDICT_ROUTE: dict[str, Any] = {
     "response_class": NumpyJSONResponse,
-    "responses": {200: {"model": PredictResponse}},
+    "responses": {
+        200: {
+            "model": PredictResponse,
+            "content": {SAFETENSORS_MEDIA_TYPE: _BINARY_BODY},
+        }
+    },
+    "openapi_extra": {
+        "requestBody": {
+            "content": {
+                SAFETENSORS_MEDIA_TYPE: _BINARY_BODY,
+                "application/octet-stream": _BINARY_BODY,
+            }
+        }
+    },
 }
 
 
@@ -260,6 +346,8 @@ def _predict_context(request: Request) -> dict[str, Any]:
         "parse_ms": getattr(request.state, "parse_ms", 0.0),
         "inline": getattr(request.state, "inline", False),
         "timings_ms": timings,
+        "tensors": getattr(request.state, "tensors", None),
+        "accept_safetensors": SAFETENSORS_MEDIA_TYPE in request.headers.get("accept", "").lower(),
     }
 
 
@@ -548,7 +636,7 @@ def build_app(
     @app.post("/predict", **_PREDICT_ROUTE)
     async def predict(
         req: PredictRequest, request: Request, current: ServingState = Depends(require_serving)
-    ) -> NumpyJSONResponse:
+    ) -> Response:
         text = as_batch(req.text) if req.text is not None else None
         return await run_predict(
             current,
@@ -564,7 +652,7 @@ def build_app(
         req: GraphPredictRequest,
         request: Request,
         current: ServingState = Depends(require_serving),
-    ) -> NumpyJSONResponse:
+    ) -> Response:
         if not GRAPH_INPUTS <= set(current.input_names):
             raise HTTPException(
                 400,
@@ -574,7 +662,9 @@ def build_app(
         # No dtype hints needed: to_numpy takes the backend's declared dtype (int64 for
         # edge_index on both backends), and integer lists default to int64 anyway.
         inputs: dict[str, Any] = {"x": req.x, "edge_index": req.edge_index}
-        if req.edge_attr is not None:
+        if getattr(request.state, "tensors", None) is not None:
+            inputs = {}
+        elif req.edge_attr is not None:
             inputs["edge_attr"] = req.edge_attr
         return await run_predict(current, inputs, req.output_encoding, **_predict_context(request))
 

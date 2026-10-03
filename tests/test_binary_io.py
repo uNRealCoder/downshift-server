@@ -1,14 +1,21 @@
+import dataclasses
 import json
 import re
 from pathlib import Path
 
 import numpy as np
 import pytest
+from fastapi.testclient import TestClient
 from safetensors.numpy import load as st_load
 from safetensors.numpy import save as st_save
 
+from downshift.loading import LoadSpec, load_model
 from downshift.serve import codec
+from downshift.serve.app import build_app
 from downshift.serve.codec import decode_safetensors, encode_safetensors
+from downshift.serve.engine import prepare_serving
+from downshift.serve.options import ExecutionChoice
+from tests.models import hf_repo
 
 BIG = 1 << 30
 
@@ -151,3 +158,141 @@ def test_codec_source_has_no_pickle_or_np_load():
     source = Path(codec.__file__).read_text()
     assert "pickle" not in source
     assert not re.search(r"\bnp\.load\b|\bnumpy\.load\b", source)
+
+
+# --- the HTTP routes ---------------------------------------------------------------------------
+
+ST = "application/vnd.safetensors"
+
+
+def _post(client, path, tensors, meta=None, content_type=ST, headers=None):
+    return client.post(
+        path,
+        content=st_save(tensors, metadata=meta),
+        headers={"Content-Type": content_type, **(headers or {})},
+    )
+
+
+def _outputs(resp) -> dict[str, np.ndarray]:
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"] == ST
+    assert "Server-Timing" in resp.headers
+    return st_load(resp.content)
+
+
+def _with(state, **overrides):
+    return dataclasses.replace(state, options=dataclasses.replace(state.options, **overrides))
+
+
+def test_binary_request_matches_json(mlp_client):
+    x = np.random.default_rng(0).standard_normal((3, 16)).astype(np.float32)
+    want = mlp_client.post("/predict", json={"inputs": {"x": x.tolist()}}).json()
+    for ct in (ST, "application/octet-stream; charset=binary"):
+        resp = _post(mlp_client, "/predict", {"x": x}, content_type=ct)
+        assert resp.status_code == 200, resp.text
+        got = resp.json()
+        assert got["shapes"] == want["shapes"]
+        np.testing.assert_allclose(got["outputs"]["output_0"], want["outputs"]["output_0"])
+
+
+def test_binary_request_and_response(mlp_client):
+    x = np.ones((2, 16), dtype=np.float32)
+    want = mlp_client.post("/predict", json={"inputs": {"x": x.tolist()}}).json()
+    got = _outputs(_post(mlp_client, "/predict", {"x": x}, headers={"Accept": ST}))
+    np.testing.assert_allclose(got["output_0"], want["outputs"]["output_0"], rtol=1e-6)
+
+
+def test_output_encoding_in_metadata_and_in_json_body(mlp_client):
+    x = np.ones((1, 16), dtype=np.float32)
+    assert _outputs(_post(mlp_client, "/predict", {"x": x}, {"output_encoding": "safetensors"}))
+    resp = mlp_client.post(
+        "/predict", json={"inputs": {"x": x.tolist()}, "output_encoding": "safetensors"}
+    )
+    assert "output_0" in _outputs(resp)
+    resp = _post(mlp_client, "/predict", {"x": x}, {"output_encoding": "base64"})
+    assert "data" in resp.json()["outputs"]["output_0"]
+
+
+@pytest.mark.parametrize("accept", ["*/*", "application/json", None])
+def test_other_accept_stays_json(mlp_client, accept):
+    headers = {"Accept": accept} if accept else {}
+    resp = mlp_client.post("/predict", json={"inputs": {"x": [[0.0] * 16]}}, headers=headers)
+    assert resp.headers["content-type"] == "application/json"
+
+
+def test_unsupported_content_type_is_415(mlp_client):
+    for path in ("/predict", "/predict/graph"):
+        resp = mlp_client.post(path, content=b"abc", headers={"Content-Type": "application/x-npy"})
+        assert resp.status_code == 415
+        assert ST in resp.json()["detail"] and "JSON" in resp.json()["detail"]
+
+
+def test_malformed_binary_is_400(mlp_client):
+    resp = mlp_client.post("/predict", content=b"abc", headers={"Content-Type": ST})
+    assert resp.status_code == 400 and "shorter" in resp.json()["detail"]
+
+
+def test_unknown_tensor_name_is_400_and_truncated(mlp_client):
+    resp = _post(mlp_client, "/predict", {"y" * 200: np.zeros(1, dtype=np.float32)})
+    assert resp.status_code == 400
+    assert "unknown tensor name" in resp.json()["detail"]
+    assert len(resp.json()["detail"]) < 200
+
+
+def test_missing_tensor_and_wrong_dtype_are_400(mlp_client):
+    assert _post(mlp_client, "/predict", {}).status_code == 400
+    resp = _post(mlp_client, "/predict", {"x": np.zeros((1, 16), dtype=np.float64)})
+    assert resp.status_code == 400 and "float64" in resp.json()["detail"]
+
+
+def test_text_in_metadata_is_400(mlp_client):
+    resp = _post(mlp_client, "/predict", {"x": np.zeros((1, 16), np.float32)}, {"text": "hi"})
+    assert resp.status_code == 400 and "JSON only" in resp.json()["detail"]
+
+
+def test_body_limit_and_max_input_bytes(mlp_state):
+    x = np.zeros((4, 16), dtype=np.float32)
+    body_len = len(st_save({"x": x}))
+    client = TestClient(build_app(_with(mlp_state, max_body_bytes=body_len - 1)))
+    assert _post(client, "/predict", {"x": x}).status_code == 413
+    client = TestClient(build_app(_with(mlp_state, max_input_bytes=255)))
+    resp = _post(client, "/predict", {"x": x})
+    assert resp.status_code == 400 and "input limit" in resp.json()["detail"]
+
+
+def test_binary_never_goes_inline(mlp_state):
+    client = TestClient(build_app(_with(mlp_state, execution=ExecutionChoice.inline)))
+    resp = _post(client, "/predict", {"x": np.zeros((1, 16), np.float32)})
+    assert resp.status_code == 200
+    assert "Server-Timing" in resp.headers
+
+
+def test_graph_route_binary(gcn_client):
+    x = np.random.default_rng(1).standard_normal((5, 8)).astype(np.float32)
+    edge_index = np.array([[0, 1, 2, 3, 4, 0, 2], [1, 2, 3, 4, 0, 3, 4]], dtype=np.int64)
+    want = gcn_client.post(
+        "/predict/graph", json={"x": x.tolist(), "edge_index": edge_index.tolist()}
+    ).json()
+    resp = _post(gcn_client, "/predict/graph", {"x": x, "edge_index": edge_index})
+    np.testing.assert_allclose(resp.json()["outputs"]["output_0"], want["outputs"]["output_0"])
+    accept = {"Accept": ST}
+    got = _outputs(
+        _post(gcn_client, "/predict/graph", {"x": x, "edge_index": edge_index}, headers=accept)
+    )
+    np.testing.assert_allclose(got["output_0"], want["outputs"]["output_0"], rtol=1e-5)
+    bad = _post(gcn_client, "/predict/graph", {"x": x, "nope": edge_index})
+    assert bad.status_code == 400 and "unknown tensor name" in bad.json()["detail"]
+    assert _post(gcn_client, "/predict/graph", {"x": x}).status_code == 400
+
+
+def test_text_request_with_accept_returns_embeddings_as_safetensors(tmp_path):
+    repo = hf_repo.write_encoder_repo(tmp_path)
+    client = TestClient(build_app(prepare_serving(load_model(LoadSpec(repo)))))
+    text = {"text": ["hello world", "hello"]}
+    want = client.post("/predict", json=text).json()
+    resp = client.post("/predict", json=text, headers={"Accept": f"{ST}, application/json;q=0.5"})
+    got = _outputs(resp)
+    name = next(iter(want["outputs"]))
+    np.testing.assert_allclose(got[name], want["outputs"][name], rtol=1e-5, atol=1e-6)
+    meta = decode_safetensors(resp.content, max_input_bytes=BIG)[1]
+    assert json.loads(meta["downshift.embedding"])["pooling"] == "mean"

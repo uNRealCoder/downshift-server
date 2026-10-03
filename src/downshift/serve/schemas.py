@@ -19,13 +19,24 @@ class OutputEncoding(StrEnum):
     base64 = "base64"
 
 
+class RequestOutputEncoding(StrEnum):
+    """What a request's `output_encoding` may name: OutputEncoding plus safetensors, which is a
+    whole-response format (an `Accept` header asks for it too) and so not a server default."""
+
+    json = "json"
+    base64 = "base64"
+    safetensors = "safetensors"
+
+
 OutputEncodingField = Annotated[
-    OutputEncoding | None,
+    RequestOutputEncoding | None,
     Field(
         None,
         description=(
             "How response tensors are encoded: 'json' for nested lists, 'base64' for "
-            '{"data": <base64 little-endian bytes>, "dtype": ..., "shape": [...]} per output. '
+            '{"data": <base64 little-endian bytes>, "dtype": ..., "shape": [...]} per output, '
+            "'safetensors' for an application/vnd.safetensors response body (the same as "
+            "sending Accept: application/vnd.safetensors). "
             "Omit to use the server default (--output-encoding / DOWNSHIFT_OUTPUT_ENCODING)."
         ),
     ),
