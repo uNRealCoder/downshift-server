@@ -67,6 +67,8 @@ class ExportVerdict:
     onnx_path: Path | None = None
     onnx_program: object | None = field(default=None, repr=False)  # torch.onnx.ONNXProgram
     onnx_bytes: bytes = field(default=b"", repr=False)  # serialized once by capture()
+    # Keeps the external-data temp directory (onnx_path lives in it) alive; never serialized.
+    _tmpdir: object | None = field(default=None, repr=False)
     prepared: Prepared | None = field(default=None, repr=False)
     # Debug-only: not JSON-able, excluded from to_dict(); the CLI logs these at --log-level
     # debug when the status is FAILED.
@@ -216,6 +218,7 @@ def build_verdict(
     rtol: float | None = None,
     seed: int = 0,
     timings: dict[str, float] | None = None,
+    _external_data_threshold: int | None = None,
 ) -> ExportVerdict:
     """Capture, then verify. verify_numerics=False is the --no-verify escape hatch: the
     graph is still produced but the verdict is UNVERIFIED, never CLEAN.
@@ -236,6 +239,7 @@ def build_verdict(
         prepared.model,
         safe_capture_inputs(prepared.inputs, prepared.dynamic_shapes),
         prepared.dynamic_shapes,
+        external_data_threshold=_external_data_threshold,
     )
     if timings is not None:
         timings[Phase.export] = time.perf_counter() - capture_start
@@ -261,6 +265,8 @@ def build_verdict(
         warnings=warnings,
         onnx_program=result.onnx_program,
         onnx_bytes=result.onnx_bytes,
+        onnx_path=result.onnx_path,
+        _tmpdir=result.tmpdir,
         prepared=prepared,
         capture_stderr=result.stderr,
         capture_exceptions=capture_exceptions,
@@ -286,7 +292,7 @@ def build_verdict(
     try:
         numerics = verify(
             prepared.model,
-            result.onnx_bytes,
+            result.onnx_bytes or result.onnx_path,
             prepared.inputs,
             prepared.dynamic_shapes,
             vary_fn=prepared.vary_fn,

@@ -9,6 +9,7 @@ from pathlib import Path
 import onnx
 import onnxruntime
 import torch
+from onnx.external_data_helper import ExternalDataInfo, uses_external_data
 
 from downshift.core.verdict import ExportVerdict
 from downshift.sources import hide_paths, path_basename
@@ -54,6 +55,16 @@ def observed_dtype(onnx_path: Path) -> str | None:
     return None
 
 
+def external_data_files(onnx_path: Path) -> list[str]:
+    """Every external-data location the graph's initializers reference, in first-use order."""
+    proto = onnx.load(str(onnx_path), load_external_data=False)
+    locations: dict[str, None] = {}
+    for init in proto.graph.initializer:
+        if uses_external_data(init):
+            locations[ExternalDataInfo(init).location] = None
+    return list(locations)
+
+
 def build_manifest(
     onnx_path: Path, verdict: ExportVerdict, source_path: Path | None, package_version: str
 ) -> dict:
@@ -70,6 +81,10 @@ def build_manifest(
         "created_utc": datetime.now(UTC).isoformat(timespec="seconds"),
         "onnx_file": onnx_path.name,
         "onnx_sha256": _sha256(onnx_path),
+        "external_data": [
+            {"file": location, "sha256": _sha256(onnx_path.parent / location)}
+            for location in external_data_files(onnx_path)
+        ],
         "source_model": path_basename(str(source_path)) if source_path else None,
         "source_sha256": _sha256(source_path) if source_path and source_path.is_file() else None,
         "versions": {

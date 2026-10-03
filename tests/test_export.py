@@ -108,7 +108,7 @@ def test_build_verdict_uses_first_failure_and_mines_unsupported_ops_from_all(mon
     first = RuntimeError("aten.scatter_reduce.two not supported")
     second = RuntimeError("generic export failure mentioning aten.index_put too")
 
-    def fake_capture(model, inputs, dynamic_shapes=None):
+    def fake_capture(model, inputs, dynamic_shapes=None, external_data_threshold=None):
         return CaptureResult(
             success=False,
             capture_strategy=None,

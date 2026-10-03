@@ -108,7 +108,11 @@ def export(
         return verdict
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    verdict.onnx_program.save(str(output))  # type: ignore[attr-defined]
+    # An external-data export (onnx_path is its temp copy) is saved through the program again,
+    # which names the data file after `output` (<name>.onnx.data) and records that location in
+    # the .onnx; the temp pair is never renamed or loaded back into memory.
+    external = verdict.onnx_path is not None
+    verdict.onnx_program.save(str(output), external_data=external or None)  # type: ignore[attr-defined]
     verdict.onnx_path = output
     write_manifest(output, verdict, source_path, __version__)
     return verdict

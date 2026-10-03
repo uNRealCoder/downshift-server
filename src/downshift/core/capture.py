@@ -11,15 +11,21 @@ draft_export step or TorchScript fallback any more.
 import contextlib
 import io
 import logging
+import tempfile
 import threading
 from collections import Counter
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
+import onnx
 import torch
 
 _STRATEGIES: tuple[tuple[str, bool], ...] = (("strict=False", False), ("strict=True", True))
+
+# Weights above this go to an external data file: protobuf caps one message at 2 GiB.
+EXTERNAL_DATA_THRESHOLD = 1_800_000_000
 
 _REGISTRATION_LOGGER = "torch.onnx._internal.exporter._registration"
 
@@ -69,6 +75,9 @@ class CaptureResult:
     capture_strategy: str | None  # a _STRATEGIES name; None when nothing traced
     onnx_program: "torch.onnx.ONNXProgram | None" = None
     onnx_bytes: bytes = field(default=b"", repr=False)  # model_proto.SerializeToString(), once
+    # Set instead of onnx_bytes when the weights went to external data; `tmpdir` owns the files.
+    onnx_path: Path | None = None
+    tmpdir: tempfile.TemporaryDirectory | None = field(default=None, repr=False)
     opset: int | None = None
     op_types: dict[str, int] = field(default_factory=dict)  # count-descending histogram
     exception: Exception | None = None  # the exception build_verdict quotes as the reason
@@ -84,10 +93,16 @@ def op_type_histogram(nodes: Iterable[Any]) -> dict[str, int]:
     return dict(sorted(counts.items(), key=lambda kv: kv[1], reverse=True))
 
 
+def _weights_nbytes(exported_program: "torch.export.ExportedProgram") -> int:
+    tensors = [*exported_program.state_dict.values(), *exported_program.constants.values()]
+    return sum(t.numel() * t.element_size() for t in tensors if isinstance(t, torch.Tensor))
+
+
 def capture(
     model: torch.nn.Module,
     example_inputs: tuple,
     dynamic_shapes: tuple | None = None,
+    external_data_threshold: int | None = None,
 ) -> CaptureResult:
     exported_program = None
     strategy_used: str | None = None
@@ -136,12 +151,27 @@ def capture(
             exception=RuntimeError("torch.onnx.export returned None"),
         )
 
-    proto = onnx_program.model_proto
+    limit = EXTERNAL_DATA_THRESHOLD if external_data_threshold is None else external_data_threshold
+    onnx_bytes = b""
+    onnx_path: Path | None = None
+    tmpdir: tempfile.TemporaryDirectory | None = None
+    if _weights_nbytes(exported_program) > limit:
+        # A single protobuf is capped at 2 GiB: past the threshold the weights go to a data
+        # file beside the .onnx, in a directory the result (then the verdict) keeps alive.
+        tmpdir = tempfile.TemporaryDirectory(prefix="downshift-", ignore_cleanup_errors=True)
+        onnx_path = Path(tmpdir.name) / "model.onnx"
+        onnx_program.save(onnx_path, external_data=True)
+        proto = onnx.load(str(onnx_path), load_external_data=False)
+    else:
+        proto = onnx_program.model_proto
+        onnx_bytes = proto.SerializeToString()
     return CaptureResult(
         success=True,
         capture_strategy=strategy_used,
         onnx_program=onnx_program,
-        onnx_bytes=proto.SerializeToString(),
+        onnx_bytes=onnx_bytes,
+        onnx_path=onnx_path,
+        tmpdir=tmpdir,
         opset=proto.opset_import[0].version if proto.opset_import else None,
         op_types=op_type_histogram(proto.graph.node),
         stderr=captured.getvalue(),
