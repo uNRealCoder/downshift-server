@@ -35,6 +35,7 @@ from downshift.cli.options import (
     AtolOpt,
     AxisMaxOpt,
     DynamicOpt,
+    ExecutionOpt,
     InputsOpt,
     InterOpThreadsOpt,
     IntraOpThreadsOpt,
@@ -76,7 +77,7 @@ from downshift.cli.runtime import (
 # `downshift.cli.main._serve_app_factory` keeps working for tests/callers
 # that reach them through this module instead of downshift.cli.runtime.
 from downshift.cli.runtime import _serve_app_factory as _serve_app_factory
-from downshift.serve.options import BackendChoice
+from downshift.serve.options import BackendChoice, ExecutionChoice
 from downshift.serve.schemas import OutputEncoding
 
 if TYPE_CHECKING:
@@ -347,6 +348,7 @@ def serve_cmd(
     max_input_bytes: MaxInputBytesOpt = settings.MAX_INPUT_BYTES,
     max_body_bytes: MaxBodyBytesOpt = settings.MAX_BODY_BYTES,
     max_concurrency: MaxConcurrencyOpt = settings.MAX_CONCURRENCY,
+    execution: ExecutionOpt = ExecutionChoice(settings.EXECUTION),
     prep_threads: PrepThreadsOpt = settings.PREP_THREADS,
     max_queue: MaxQueueOpt = settings.MAX_QUEUE,
     request_timeout: RequestTimeoutOpt = settings.REQUEST_TIMEOUT,
@@ -397,6 +399,7 @@ def serve_cmd(
             max_input_bytes,
             max_body_bytes,
             max_concurrency,
+            execution,
             prep_threads,
             max_queue,
             request_timeout,

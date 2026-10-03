@@ -1,5 +1,6 @@
 """HTTP contract tests. Each state is exported once per module; export is the slow part."""
 
+import asyncio
 import dataclasses
 import logging
 import threading
@@ -8,6 +9,7 @@ import warnings
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
+import orjson
 import pytest
 from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
@@ -18,6 +20,7 @@ from downshift.serve import app_for
 from downshift.serve import predict as serve_predict
 from downshift.serve.app import build_app
 from downshift.serve.engine import ServeOptions, prepare_serving
+from downshift.serve.options import ExecutionChoice
 from downshift.serve.schemas import OutputEncoding
 from tests.conftest import b64_input, b64_output
 from tests.models import clean_mlp
@@ -761,3 +764,126 @@ def test_axis_max_num_nodes_rejects_a_larger_graph(serve_fixture):
     assert ok.status_code == 200, ok.text
     assert too_big.status_code == 400
     assert "500" in too_big.json()["detail"]
+
+
+def _loop_probe(state, monkeypatch) -> dict[str, list[bool]]:
+    """Which of the three predict stages ran on the event loop (True) or a pool thread."""
+    seen: dict[str, list[bool]] = {"prepare": [], "infer": [], "encode": []}
+
+    def on_loop() -> bool:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return False
+        return True
+
+    def wrap(stage, fn):
+        def probed(*args, **kwargs):
+            seen[stage].append(on_loop())
+            return fn(*args, **kwargs)
+
+        return probed
+
+    monkeypatch.setattr(
+        serve_predict, "_prepare_feeds", wrap("prepare", serve_predict._prepare_feeds)
+    )
+    monkeypatch.setattr(serve_predict, "_infer", wrap("infer", serve_predict._infer))
+    monkeypatch.setattr(
+        serve_predict, "_encode_response", wrap("encode", serve_predict._encode_response)
+    )
+    return seen
+
+
+def _inline_client(mlp_state, execution) -> TestClient:
+    return TestClient(build_app(_with_options(mlp_state, execution=execution)))
+
+
+def test_metadata_reports_the_execution_mode(mlp_client, mlp_state):
+    assert mlp_client.get("/metadata").json()["execution"] == {"mode": "threadpool"}
+    client = _inline_client(mlp_state, ExecutionChoice.inline)
+    assert client.get("/metadata").json()["execution"] == {"mode": "inline"}
+
+
+def test_inline_runs_a_small_json_request_on_the_event_loop(mlp_state, monkeypatch):
+    seen = _loop_probe(mlp_state, monkeypatch)
+    client = _inline_client(mlp_state, ExecutionChoice.inline)
+    resp = client.post("/predict", json=MLP_INPUT)
+    assert resp.status_code == 200, resp.text
+    assert seen == {"prepare": [True], "infer": [True], "encode": [True]}
+    timing = resp.headers["Server-Timing"]
+    assert "prep_wait;dur=0.00" in timing
+    assert "infer_wait;dur=0.00" in timing
+
+
+def test_inline_graph_route_runs_on_the_event_loop(serve_fixture, monkeypatch):
+    seen = _loop_probe(None, monkeypatch)
+    client = TestClient(build_app(serve_fixture("gnn_gcn", execution=ExecutionChoice.inline)))
+    x = np.random.randn(5, 8).tolist()
+    edge_index = [[0, 1, 2, 3, 4], [1, 2, 3, 4, 0]]
+    resp = client.post("/predict/graph", json={"x": x, "edge_index": edge_index})
+    assert resp.status_code == 200, resp.text
+    assert seen == {"prepare": [True], "infer": [True], "encode": [True]}
+
+
+def test_threadpool_never_runs_inline(mlp_state, monkeypatch):
+    seen = _loop_probe(mlp_state, monkeypatch)
+    client = _inline_client(mlp_state, ExecutionChoice.threadpool)
+    assert client.post("/predict", json=MLP_INPUT).status_code == 200
+    assert seen == {"prepare": [False], "infer": [False], "encode": [False]}
+
+
+def test_inline_sends_a_body_over_64_kib_to_the_pools(mlp_state, monkeypatch):
+    seen = _loop_probe(mlp_state, monkeypatch)
+    client = _inline_client(mlp_state, ExecutionChoice.inline)
+    big = {"inputs": {"x": [[0.0] * 16]}, "pad": "x" * (70 * 1024)}
+    assert client.post("/predict", json=big).status_code == 200
+    assert seen == {"prepare": [False], "infer": [False], "encode": [False]}
+
+
+def test_inline_sends_a_chunked_body_to_the_pools(mlp_state, monkeypatch):
+    seen = _loop_probe(mlp_state, monkeypatch)
+    client = _inline_client(mlp_state, ExecutionChoice.inline)
+    body = orjson.dumps(MLP_INPUT)
+    resp = client.post(
+        "/predict",
+        content=(chunk for chunk in (body[:5], body[5:])),
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert seen == {"prepare": [False], "infer": [False], "encode": [False]}
+
+
+def test_inline_sends_a_non_json_content_type_to_the_pools(mlp_state, monkeypatch):
+    seen = _loop_probe(mlp_state, monkeypatch)
+    client = _inline_client(mlp_state, ExecutionChoice.inline)
+    resp = client.post(
+        "/predict", content=orjson.dumps(MLP_INPUT), headers={"Content-Type": "text/plain"}
+    )
+    assert resp.status_code in (200, 415, 422), resp.text
+    assert True not in sum(seen.values(), [])
+
+
+def test_inline_sends_a_text_request_to_the_pools(mlp_state, monkeypatch):
+    """The fixture model has no tokenizer, so the request is a 400 from run_predict; what
+    matters is that no stage ran on the loop and the body was not marked inline."""
+    seen = _loop_probe(mlp_state, monkeypatch)
+    client = _inline_client(mlp_state, ExecutionChoice.inline)
+    resp = client.post("/predict", json={"text": "hello"})
+    assert resp.status_code == 400
+    assert True not in sum(seen.values(), [])
+
+
+def test_inline_errors_and_admission_behave_like_the_pools(mlp_state):
+    state = _with_options(mlp_state, execution=ExecutionChoice.inline)
+    client = TestClient(build_app(state))
+    assert client.post("/predict", json={"inputs": {"x": [[0.0] * 3]}}).status_code == 400
+    assert client.post("/predict", json={"inputs": {}}).status_code == 400
+    assert (
+        client.post(
+            "/predict", content=b"{", headers={"Content-Type": "application/json"}
+        ).status_code
+        == 422
+    )
+    assert state.in_flight == 0
+    assert client.post("/predict", json=MLP_INPUT).status_code == 200
+    assert state.in_flight == 0

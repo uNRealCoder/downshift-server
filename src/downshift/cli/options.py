@@ -9,6 +9,7 @@ from typing import Annotated
 import typer
 
 from downshift.adapters.pooling import PoolingChoice
+from downshift.serve.options import ExecutionChoice
 from downshift.serve.schemas import OutputEncoding
 
 
@@ -143,8 +144,18 @@ MaxConcurrencyOpt = Annotated[
     typer.Option(
         "--max-concurrency",
         min=1,
-        help="Inferences allowed to run at once per worker process; 1 means one at a time "
-        "(ONNX Runtime's own intra-op threads still parallelise inside that one inference)",
+        help="Inferences allowed to run at once per worker process (default 1). Small models "
+        "often serve more requests per second at 2-4, since one inference does not fill every "
+        "core; each extra one holds its own activation memory",
+    ),
+]
+ExecutionOpt = Annotated[
+    ExecutionChoice,
+    typer.Option(
+        "--execution",
+        help="threadpool: every request's parse, inference and encode run on worker threads. "
+        "inline: small JSON bodies run on the event loop; only for models under ~1 ms per "
+        "inference, a slower one stalls /health and /ready",
     ),
 ]
 PrepThreadsOpt = Annotated[

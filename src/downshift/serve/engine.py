@@ -1,5 +1,6 @@
 """From a loaded model to a warmed-up backend. The CLI's `serve` is render(prepare_serving())."""
 
+import gc
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -33,7 +34,7 @@ from downshift.serve.backends import (
     resolve_device,
     verified_provider_for,
 )
-from downshift.serve.options import BackendChoice, ServeOptions
+from downshift.serve.options import BackendChoice, ExecutionChoice, ServeOptions
 from downshift.serve.schemas import normalize_dtype
 
 
@@ -122,6 +123,10 @@ class ServingState:
     def release(self) -> None:
         with self._admission_lock:
             self.in_flight -= 1
+
+    @property
+    def execution(self) -> ExecutionChoice:
+        return self.options.execution
 
     @property
     def backend_auto_selected(self) -> bool:
@@ -439,6 +444,10 @@ def prepare_serving(
         # second copy of the weights and optimized graph, held for the life of the process.
         verdict.numerics.session = None
 
+    axis_bounds = _axis_bounds(verdict)
+    if name == BackendName.onnxruntime and verdict.status == "CLEAN":
+        _release_torch_model(loaded, reference, verdict)
+
     return _new_state(
         loaded.source,
         verdict,
@@ -449,8 +458,24 @@ def prepare_serving(
         timings,
         notes=notes,
         kind=loaded.kind,
+        axis_bounds=axis_bounds,
         hf_source=loaded.source if loaded.kind == HF_REPO_DIR else tokenizer_from,
     )
+
+
+def _release_torch_model(
+    loaded: LoadedModel, reference: LoadedModel | None, verdict: ExportVerdict
+) -> None:
+    """A verified ONNX graph is served by its session alone: drop every reference to the torch
+    model (the loaded one, the --reference one, the exporter's program and the adapter's shim)
+    before warmup, so peak memory is not the weights held twice or three times. The axis
+    bounds and example inputs are already read off the Prepared by then."""
+    loaded.model = None
+    if reference is not None:
+        reference.model = None
+    verdict.prepared = None
+    verdict.onnx_program = None
+    gc.collect()
 
 
 def serving_state_from_artifact(

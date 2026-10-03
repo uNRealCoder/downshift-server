@@ -17,6 +17,7 @@ from downshift import __version__, settings
 from downshift.core.phase import Phase
 from downshift.logs import REPORT_LOGGER
 from downshift.serve.codec import BASE64_CODEC
+from downshift.serve.options import ExecutionChoice
 from downshift.sources import HF_REPO_DIR, IN_PROCESS_MODULE, ONNX_FILE, TORCH_CHECKPOINT
 
 if TYPE_CHECKING:
@@ -171,6 +172,12 @@ def _capacity_text(state: ServingState) -> str:
         f"{opts.max_queue} queued, {timeout}"
         "  (--max-concurrency, --prep-threads, --max-queue, --request-timeout)"
     )
+
+
+def _execution_text(state: ServingState) -> str:
+    if state.execution == ExecutionChoice.inline:
+        return "inline for small JSON bodies  (--execution inline)"
+    return "threadpool  (--execution)"
 
 
 def _boot_text(state: ServingState) -> str | None:
@@ -367,6 +374,12 @@ def print_banner(state: ServingState, host: str, port: int, workers: int = 1) ->
         f"{state.options.output_encoding.value}  (clients override with output_encoding)",
     )
     rows.add("Capacity", _capacity_text(state))
+    rows.add("Execution", _execution_text(state))
+    if state.execution == ExecutionChoice.inline:
+        rows.note(
+            f"{_WARN} --execution inline only helps very fast models (under ~1 ms per "
+            "inference); a slow model stalls the event loop, including /health and /ready"
+        )
     if BASE64_CODEC == "stdlib":
         rows.add("Tip", "pip install 'downshift-server[fast]' for ~10x faster base64 tensor I/O")
     rows.add("Endpoint", _endpoint_text(host, port))

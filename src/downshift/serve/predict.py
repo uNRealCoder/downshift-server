@@ -66,13 +66,34 @@ def as_batch(value: str | list[str]) -> list[str]:
     return [value] if isinstance(value, str) else list(value)
 
 
+def resolve_prompt(state: ServingState, prompt_name: str | None, has_text: bool) -> str:
+    """The prompt text to put before every row: the named one, else the repo's default, else
+    none. A name the repo does not define (or one sent without `text`) is a 400 that lists the
+    names there are; the client's own value is echoed only as a truncated repr."""
+    recipe = state.embedding
+    prompts = recipe.prompts if recipe is not None else {}
+    if prompt_name is None:
+        default = recipe.default_prompt if recipe is not None else None
+        return prompts[default] if has_text and default is not None else ""
+    if not has_text:
+        raise HTTPException(400, "'prompt_name' applies to a 'text' request; none was sent")
+    if prompt_name not in prompts:
+        available = sorted(prompts)
+        raise HTTPException(
+            400,
+            f"unknown prompt_name {prompt_name!r:.64}; "
+            + (f"this model has: {available}" if available else "this model has no named prompts"),
+        )
+    return prompts[prompt_name]
+
+
 def _text_feeds(
-    state: ServingState, text: list[str], declared: dict[str, str | None]
+    state: ServingState, text: list[str], declared: dict[str, str | None], prompt: str = ""
 ) -> dict[str, np.ndarray]:
-    """Tokenize a `text` request into the graph's own inputs. ValueError means the client's
-    text was unusable."""
+    """Tokenize a `text` request into the graph's own inputs, each row after `prompt`.
+    ValueError means the client's text was unusable."""
     assert state.text is not None  # run_predict refuses a text request without one
-    encoded = state.text.encode(text)
+    encoded = state.text.encode([prompt + row for row in text] if prompt else text)
     missing = [n for n in state.input_names if n not in encoded]
     if missing:
         raise ValueError(f"the tokenizer does not produce the model's inputs {missing}")
@@ -145,7 +166,7 @@ def _check_timeout(state: ServingState, admitted_at: float) -> None:
 
 
 def _prepare_feeds(
-    state: ServingState, inputs: dict[str, Any], text: list[str] | None
+    state: ServingState, inputs: dict[str, Any], text: list[str] | None, prompt: str = ""
 ) -> tuple[dict[str, np.ndarray], float]:
     """Request body to the graph's own input arrays (base64 decode, to_numpy, tokenize) and
     the checks that need them: vocab, edge index, axis bounds. Runs in state.prep_executor.
@@ -158,7 +179,7 @@ def _prepare_feeds(
     start = time.perf_counter()
     try:
         if text is not None:
-            feeds = _text_feeds(state, text, declared)
+            feeds = _text_feeds(state, text, declared, prompt)
         else:
             feeds = {
                 n: to_numpy(n, inputs[n], declared.get(n), max_bytes=max_bytes)
@@ -231,7 +252,7 @@ def _encode_response(
 
 
 async def _run_in(
-    executor: Executor,
+    executor: Executor | None,
     wait_key: str,
     timings_ms: dict[str, float],
     fn: Callable[..., Any],
@@ -239,7 +260,11 @@ async def _run_in(
 ) -> Any:
     """fn(*args) in `executor`, carrying contextvars (run_in_executor does not; without this,
     log lines from the executor thread would lose the request id). The time from submit to
-    start is added to timings_ms[wait_key]."""
+    start is added to timings_ms[wait_key]. `executor` None (--execution inline) calls fn
+    right here on the event loop, with no wait."""
+    if executor is None:
+        timings_ms.setdefault(wait_key, 0.0)
+        return fn(*args)
     submitted = time.perf_counter()
 
     def call() -> Any:
@@ -256,10 +281,12 @@ async def run_predict(
     inputs: dict[str, Any],
     encoding: OutputEncoding | None,
     text: list[str] | None = None,
+    prompt_name: str | None = None,
     *,
     admitted_at: float,
     parse_ms: float,
     timings_ms: dict[str, float],
+    inline: bool = False,
 ) -> NumpyJSONResponse:
     """Missing-input check happens here, on the loop; the rest is three stages so only the
     middle one holds an inference thread: _prepare_feeds (prep pool), _infer (inference
@@ -271,7 +298,12 @@ async def run_predict(
 
     `timings_ms` collects the per-stage milliseconds (parse, prep_wait, prep, infer_wait,
     infer, encode) for Server-Timing and the request log line (U1).
+
+    `inline` (--execution inline, a small JSON body; see OrjsonRoute) runs all three stages
+    on the event loop instead, with zero waits.
     """
+    prep_pool = None if inline else state.prep_executor
+    infer_pool = None if inline else state.executor
     if text is not None:
         if state.text is None:
             raise HTTPException(
@@ -284,9 +316,11 @@ async def run_predict(
         if missing:
             raise HTTPException(400, f"missing inputs: {missing}")
 
+    prompt = resolve_prompt(state, prompt_name, text is not None)
+
     timings_ms["parse"] = round(parse_ms, 2)
     feeds, prep_ms = await _run_in(
-        state.prep_executor, "prep_wait", timings_ms, _prepare_feeds, state, inputs, text
+        prep_pool, "prep_wait", timings_ms, _prepare_feeds, state, inputs, text, prompt
     )
     timings_ms["prep"] = round(prep_ms, 2)
 
@@ -297,11 +331,11 @@ async def run_predict(
         _check_timeout(state, admitted_at)
         return _infer(state, feeds)
 
-    outputs, infer_ms = await _run_in(state.executor, "infer_wait", timings_ms, infer)
+    outputs, infer_ms = await _run_in(infer_pool, "infer_wait", timings_ms, infer)
     timings_ms["infer"] = round(infer_ms, 2)
 
     response: NumpyJSONResponse = await _run_in(
-        state.prep_executor,
+        prep_pool,
         "prep_wait",
         timings_ms,
         _encode_response,

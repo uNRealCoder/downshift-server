@@ -15,6 +15,7 @@ from downshift.core.verdict import ExportVerdict
 from downshift.core.verify import NumericsReport, WorstMismatch
 from downshift.serve.backends import BackendMeta
 from downshift.serve.engine import ServeOptions, ServingState, WarmupStats
+from downshift.serve.options import ExecutionChoice
 from downshift.serve.schemas import OutputEncoding
 
 
@@ -525,3 +526,19 @@ def test_print_banner_shows_prep_threads_in_the_capacity_row(caplog):
     state = _serving_state(_verdict(), options=ServeOptions(prep_threads=3))
     render.print_banner(state, "127.0.0.1", 8000)
     assert "3 prep threads" in caplog.text
+
+
+def test_print_banner_execution_row_threadpool(caplog):
+    render.print_banner(_serving_state(_verdict()), "127.0.0.1", 8000)
+    assert "Execution" in caplog.text
+    assert "threadpool" in caplog.text
+    assert "event loop" not in caplog.text
+
+
+def test_print_banner_inline_execution_warns(caplog):
+    state = _serving_state(_verdict(), options=ServeOptions(execution=ExecutionChoice.inline))
+    render.print_banner(state, "127.0.0.1", 8000)
+    out = caplog.text
+    assert "inline for small JSON bodies" in out
+    assert "under ~1 ms" in out
+    assert "/health and /ready" in out

@@ -630,3 +630,35 @@ def test_serve_passes_prep_threads(monkeypatch):
     result, captured = _serve_captured(monkeypatch, "--prep-threads", "3")
     assert captured["app"].state.serving.options.prep_threads == 3
     assert "3 prep threads" in result.output
+
+
+def test_serve_execution_defaults_to_threadpool(monkeypatch):
+    _, captured = _serve_captured(monkeypatch)
+    assert captured["app"].state.serving.options.execution == "threadpool"
+
+
+def test_serve_passes_execution_inline(monkeypatch):
+    result, captured = _serve_captured(monkeypatch, "--execution", "inline")
+    assert captured["app"].state.serving.options.execution == "inline"
+    assert "Execution" in result.output
+    assert "event loop" in result.output
+
+
+def test_serve_rejects_an_unknown_execution_mode(monkeypatch):
+    result = run("serve", CLEAN, "--execution", "auto")
+    assert result.exit_code == 2, result.output
+
+
+def test_serve_execution_round_trips_through_serve_args():
+    from downshift.cli.runtime import ServeArgs
+    from downshift.serve.options import ExecutionChoice
+
+    args = ServeArgs(
+        load=LoadSpec(CLEAN),
+        options=ServeOptions(execution=ExecutionChoice.inline),
+        reference=None,
+        middleware=None,
+        log_level="warning",
+    )
+    restored = ServeArgs.from_json(args.to_json()).options.execution
+    assert restored is ExecutionChoice.inline

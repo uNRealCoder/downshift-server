@@ -61,6 +61,12 @@ def _env_float(name: str, default: float) -> float:
     return _env_cast(name, default, float, "float")
 
 
+def _execution(raw: str) -> str:
+    if raw not in ("threadpool", "inline"):
+        raise ValueError(raw)
+    return raw
+
+
 def parse_axis_max(items: Iterable[str]) -> dict[str, int]:
     """ "seq=4096,num_nodes=500" (or one NAME=N per item, as --axis-max repeats) into
     {name: N}. ValueError on anything else, so the CLI reports it as a usage error."""
@@ -101,9 +107,15 @@ MAX_INPUT_BYTES = _env_int("DOWNSHIFT_MAX_INPUT_BYTES", DEFAULT_MAX_INPUT_BYTES)
 # Largest request body the server will read before parsing it as JSON; bigger ones get a 413.
 MAX_BODY_BYTES = _env_int("DOWNSHIFT_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES)
 
-# Inferences allowed to run at once per worker process; ONNX Runtime and torch already use
-# every core for one inference, so raising this oversubscribes rather than adding throughput.
+# Inferences allowed to run at once per worker process. Measured on all-MiniLM-L6-v2, batch 8,
+# 8 concurrent clients: 52 req/s at 1, 134 req/s at 4. Small encoders usually gain from 2-4,
+# because one small inference does not fill every core; a large model that already does gains
+# nothing. Each extra concurrent inference holds its own activation memory.
 MAX_CONCURRENCY = _env_int("DOWNSHIFT_MAX_CONCURRENCY", 1)
+
+# "threadpool" runs every request's parse, inference and encode on worker threads; "inline"
+# runs small JSON bodies on the event loop itself, which only pays off for very fast models.
+EXECUTION = _env_cast("DOWNSHIFT_EXECUTION", "threadpool", _execution, "execution mode")
 
 # Largest size to serve per named axis ("seq=4096,num_nodes=500"); the names are the ones the
 # boot banner and /schema list. Empty means each axis keeps the bound the adapter exported.

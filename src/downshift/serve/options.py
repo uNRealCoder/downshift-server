@@ -8,7 +8,7 @@ from enum import StrEnum
 from downshift import settings
 from downshift.serve.schemas import OutputEncoding
 
-__all__ = ["BackendChoice", "ServeOptions"]
+__all__ = ["BackendChoice", "ExecutionChoice", "ServeOptions"]
 
 
 class BackendChoice(StrEnum):
@@ -17,6 +17,13 @@ class BackendChoice(StrEnum):
     auto = "auto"
     onnxruntime = "onnxruntime"
     torch = "torch"
+
+
+class ExecutionChoice(StrEnum):
+    """Where a predict's parse, inference and encode run."""
+
+    threadpool = "threadpool"
+    inline = "inline"
 
 
 @dataclass
@@ -40,6 +47,7 @@ class ServeOptions:
     max_input_bytes: int = settings.MAX_INPUT_BYTES  # cap on one decoded base64 tensor input
     max_body_bytes: int = settings.MAX_BODY_BYTES  # cap on the whole request body
     max_concurrency: int = settings.MAX_CONCURRENCY  # inferences allowed to run at once per worker
+    execution: ExecutionChoice = ExecutionChoice(settings.EXECUTION)
     prep_threads: int = settings.PREP_THREADS  # request decode/encode threads, not inference
     max_queue: int = settings.MAX_QUEUE  # admitted predicts allowed to wait past max_concurrency
     request_timeout: float = settings.REQUEST_TIMEOUT  # seconds queued before a 503; 0 = no limit

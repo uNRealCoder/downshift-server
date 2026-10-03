@@ -24,11 +24,13 @@ from downshift.core.phase import CURRENT_PROGRESS, LoadProgress
 from downshift.logs import request_id_var
 from downshift.serve.engine import ServingState
 from downshift.serve.middleware import load_middleware
+from downshift.serve.options import ExecutionChoice
 from downshift.serve.predict import PREDICT_PATHS, NumpyJSONResponse, as_batch, run_predict
 from downshift.serve.schemas import (
     GRAPH_INPUTS,
     AxisInfo,
     BackendInfo,
+    ExecutionInfo,
     GraphPredictRequest,
     HealthResponse,
     MetadataResponse,
@@ -133,6 +135,38 @@ async def _read_body_limited(request: Request, limit: int) -> bytes | JSONRespon
     return b"".join(chunks)
 
 
+# Largest declared body --execution inline will parse on the event loop.
+INLINE_MAX_BODY_BYTES = 64 * 1024
+
+
+async def _try_inline(
+    wrapped: _OrjsonRequest, state: ServingState, content_length: str | None
+) -> bool:
+    """--execution inline: parse a small JSON tensor body right here on the loop and mark the
+    request so run_predict prepares, infers and encodes it on the loop too. A chunked body
+    (no Content-Length), a larger one, a non-JSON content type or a `text` request returns
+    False and takes the pools; the body is already buffered by then, so nothing is re-read."""
+    if (
+        state.execution != ExecutionChoice.inline
+        or content_length is None
+        or not content_length.isdigit()
+        or int(content_length) > INLINE_MAX_BODY_BYTES
+        or "json" not in wrapped.headers.get("content-type", "").lower()
+    ):
+        return False
+    parse_start = time.perf_counter()
+    try:
+        parsed = orjson.loads(await wrapped.body())
+    except ValueError:
+        return False
+    if not isinstance(parsed, dict) or parsed.get("text") is not None:
+        return False
+    wrapped._json = parsed
+    wrapped.state.parse_ms = (time.perf_counter() - parse_start) * 1000
+    wrapped.state.inline = True
+    return True
+
+
 class OrjsonRoute(APIRoute):
     """Parse request bodies with orjson: several times faster than stdlib on MiB-scale bodies.
 
@@ -183,7 +217,8 @@ class OrjsonRoute(APIRoute):
                     wrapped._body = result
                 if is_predict:
                     assert current is not None
-                    await wrapped.parse_in(current.prep_executor)
+                    if not await _try_inline(wrapped, current, content_length):
+                        await wrapped.parse_in(current.prep_executor)
                 return await handler(wrapped)
             finally:
                 if admitted:
@@ -223,6 +258,7 @@ def _predict_context(request: Request) -> dict[str, Any]:
     return {
         "admitted_at": request.state.admitted_at,
         "parse_ms": getattr(request.state, "parse_ms", 0.0),
+        "inline": getattr(request.state, "inline", False),
         "timings_ms": timings,
     }
 
@@ -491,6 +527,7 @@ def build_app(
                 "max_queue": current.options.max_queue,
                 "request_timeout": current.options.request_timeout,
             },
+            execution=ExecutionInfo(mode=current.execution.value),
             boot=dict(current.timings),
             warmup=asdict(current.warmup_stats) if current.warmup_stats is not None else None,
         )
@@ -514,7 +551,12 @@ def build_app(
     ) -> NumpyJSONResponse:
         text = as_batch(req.text) if req.text is not None else None
         return await run_predict(
-            current, req.inputs, req.output_encoding, text, **_predict_context(request)
+            current,
+            req.inputs,
+            req.output_encoding,
+            text,
+            req.prompt_name,
+            **_predict_context(request),
         )
 
     @app.post("/predict/graph", **_PREDICT_ROUTE)

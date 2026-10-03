@@ -89,3 +89,12 @@ def test_axis_info_sampled_defaults_to_none():
 
     assert info.sampled_min is None and info.sampled_max is None
     assert AxisInfo.model_validate(info.model_dump()) == info
+
+
+def test_execution_info_is_a_mode_block():
+    from downshift.serve.schemas import ExecutionInfo, MetadataResponse
+
+    assert ExecutionInfo(mode="inline").model_dump() == {"mode": "inline"}
+    assert MetadataResponse.model_fields["execution"].default_factory() == ExecutionInfo(  # type: ignore[call-arg]
+        mode="threadpool"
+    )

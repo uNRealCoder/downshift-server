@@ -130,3 +130,19 @@ def test_prep_threads_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DOWNSHIFT_PREP_THREADS", "7")
     importlib.reload(settings)
     assert settings.PREP_THREADS == 7
+
+
+def test_execution_defaults_to_threadpool(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DOWNSHIFT_EXECUTION", raising=False)
+    assert importlib.reload(settings).EXECUTION == "threadpool"
+
+
+def test_execution_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DOWNSHIFT_EXECUTION", "inline")
+    assert importlib.reload(settings).EXECUTION == "inline"
+
+
+def test_bad_execution_env_var_raises_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DOWNSHIFT_EXECUTION", "auto")
+    with pytest.raises(ValueError, match="DOWNSHIFT_EXECUTION.*auto.*execution mode"):
+        importlib.reload(settings)

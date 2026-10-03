@@ -86,6 +86,9 @@ class PredictRequest(BaseModel):
 
     inputs: dict[str, Any] = Field(default_factory=dict)
     text: str | list[str] | None = None
+    # One of the repo's named prompts (config_sentence_transformers.json), put before each
+    # text row; only meaningful with `text`.
+    prompt_name: str | None = None
     output_encoding: OutputEncodingField = None
 
     @model_validator(mode="after")
@@ -197,6 +200,10 @@ class AxisInfo(BaseModel):
     sampled_max: int | None = None
 
 
+class ExecutionInfo(BaseModel):
+    mode: str  # "threadpool" or "inline" (--execution)
+
+
 class MetadataResponse(BaseModel):
     model: str
     family: str
@@ -207,6 +214,7 @@ class MetadataResponse(BaseModel):
     notes: list[str] = Field(default_factory=list)
     version: str
     limits: dict = Field(default_factory=dict)
+    execution: ExecutionInfo = Field(default_factory=lambda: ExecutionInfo(mode="threadpool"))
     boot: dict[str, float] = Field(default_factory=dict)
     warmup: dict | None = None
 
@@ -277,6 +285,10 @@ class EmbeddingInfo(BaseModel):
     dimension: int | None
     max_seq_length: int | None
     origin: str = Field(alias="from")
+    # Named prompts a /predict `text` request may select with `prompt_name`, and the one that
+    # applies when it names none.
+    prompts: dict[str, str] = Field(default_factory=dict)
+    default_prompt: str | None = None
 
 
 class SchemaLimits(BaseModel):

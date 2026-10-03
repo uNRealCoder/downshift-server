@@ -24,7 +24,7 @@ from downshift.cli import render
 from downshift.cli.options import LogLevel
 from downshift.core.phase import Phase
 from downshift.logs import setup_logging
-from downshift.serve.options import BackendChoice, ServeOptions
+from downshift.serve.options import BackendChoice, ExecutionChoice, ServeOptions
 from downshift.serve.schemas import OutputEncoding
 from downshift.sources import UNKNOWN_SOURCE
 
@@ -107,6 +107,7 @@ class ServeArgs:
         options = data["options"]
         options["backend"] = BackendChoice(options["backend"])
         options["output_encoding"] = OutputEncoding(options["output_encoding"])
+        options["execution"] = ExecutionChoice(options["execution"])
         data["options"] = ServeOptions(**options)
         if data.get("artifact") is not None:
             data["artifact"] = ArtifactHandoff(**data["artifact"])
@@ -133,6 +134,7 @@ def _collect_serve_args(
     max_input_bytes: int,
     max_body_bytes: int,
     max_concurrency: int,
+    execution: ExecutionChoice,
     prep_threads: int,
     max_queue: int,
     request_timeout: float,
@@ -170,6 +172,7 @@ def _collect_serve_args(
         max_input_bytes=max_input_bytes,
         max_body_bytes=max_body_bytes,
         max_concurrency=max_concurrency,
+        execution=execution,
         prep_threads=prep_threads,
         max_queue=max_queue,
         request_timeout=request_timeout,
