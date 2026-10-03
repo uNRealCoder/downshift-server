@@ -36,6 +36,7 @@ from downshift.cli.options import (
     AxisMaxOpt,
     DynamicOpt,
     ExecutionOpt,
+    ExportCacheDirOpt,
     InputsOpt,
     InterOpThreadsOpt,
     IntraOpThreadsOpt,
@@ -274,6 +275,7 @@ def export_cmd(
     vary: VaryOpt = None,
     pooling: PoolingOpt = None,
     normalize: NormalizeOpt = None,
+    export_cache_dir: ExportCacheDirOpt = settings.EXPORT_CACHE_DIR,
     log_level: LogLevelOpt = LogLevel.warning,
 ) -> None:
     """Export to DIR/NAME.onnx with a NAME.manifest.json sidecar. Nothing is written if FAILED."""
@@ -283,6 +285,10 @@ def export_cmd(
 
     _setup_logging(log_level, stderr=json_out)
     with _exit_on_error(log_level is LogLevel.debug):
+        if export_cache_dir:
+            from downshift.core.export_cache import check_dir
+
+            check_dir(export_cache_dir)
         spec = LoadSpec(model, inputs, model_class, unsafe_load, pooling, normalize)
         loaded = _load(spec)
         if loaded.model is None:
@@ -305,6 +311,7 @@ def export_cmd(
             seed=seed,
             vary=vary,
             axis_max=_axis_max(axis_max),
+            export_cache_dir=export_cache_dir,
         )
         _log_capture_failure(verdict, log_level)
         manifest = manifest_path_for(onnx_path) if verdict.onnx_path else None
@@ -312,6 +319,28 @@ def export_cmd(
         if not json_out:
             render.print_artifacts(verdict.onnx_path, manifest)
         raise typer.Exit(verdict.exit_code)
+
+
+def _worker_metrics_dir() -> str | None:
+    """A fresh 0700 directory for the workers' shared metric files, put in the env they are
+    spawned with. prometheus_client reads PROMETHEUS_MULTIPROC_DIR once, at import, so this
+    must run before any worker starts; whatever was inherited is overridden (a stale
+    directory would leak other runs' series). The caller removes the directory afterwards.
+    If no temp directory can be made, the workers keep their own counters and /metrics
+    answers per worker."""
+    import tempfile
+
+    os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
+    try:
+        metrics_dir = tempfile.mkdtemp(prefix="downshift-metrics-")
+    except OSError as exc:
+        render.warn(
+            f"no writable temp directory ({exc}): /metrics reports one worker's own counts, "
+            "not the total across --workers"
+        )
+        return None
+    os.environ["PROMETHEUS_MULTIPROC_DIR"] = metrics_dir
+    return metrics_dir
 
 
 @app.command("serve")
@@ -353,6 +382,7 @@ def serve_cmd(
     max_queue: MaxQueueOpt = settings.MAX_QUEUE,
     request_timeout: RequestTimeoutOpt = settings.REQUEST_TIMEOUT,
     workers: WorkersOpt = settings.WORKERS,
+    export_cache_dir: ExportCacheDirOpt = settings.EXPORT_CACHE_DIR,
     atol: AtolOpt = None,
     rtol: RtolOpt = None,
     seed: SeedOpt = 0,
@@ -369,7 +399,14 @@ def serve_cmd(
     import uvicorn
 
     _setup_logging(log_level)
+    if workers <= 1:
+        # One process never uses prometheus_client's multiprocess mode, whatever the env says.
+        os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
     with _exit_on_error(log_level is LogLevel.debug):
+        if export_cache_dir:
+            from downshift.core.export_cache import check_dir
+
+            check_dir(export_cache_dir)
         resolved_tokenizer_from = None
         if tokenizer_from is not None:
             from downshift.loading import resolve_tokenizer_source
@@ -408,6 +445,7 @@ def serve_cmd(
             seed,
             vary,
             _axis_max(axis_max),
+            export_cache_dir,
         )
         args = ServeArgs(
             load=load,
@@ -499,6 +537,7 @@ def serve_cmd(
             gc.collect()
             args = replace(args, artifact=artifact)
             os.environ[_SERVE_ARGS_ENV] = args.to_json()
+            metrics_dir = _worker_metrics_dir()
             try:
                 uvicorn.run(
                     "downshift.cli.runtime:_serve_app_factory",
@@ -511,6 +550,9 @@ def serve_cmd(
                     factory=True,
                 )
             finally:
+                if metrics_dir is not None:
+                    os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
+                    shutil.rmtree(metrics_dir, ignore_errors=True)
                 if temp_dir is not None:
                     shutil.rmtree(temp_dir, ignore_errors=True)
 

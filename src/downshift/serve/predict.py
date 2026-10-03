@@ -166,13 +166,18 @@ def _bound_violation(state: ServingState, feeds: dict[str, np.ndarray]) -> str |
     return None
 
 
+class QueueTimeout(HTTPException):
+    """The 503 for a request that waited past --request-timeout; its own type so the route
+    can count it as a rejection."""
+
+
 def _check_timeout(state: ServingState, admitted_at: float) -> None:
     request_timeout = state.options.request_timeout
     if request_timeout > 0:
         waited = time.monotonic() - admitted_at
         if waited > request_timeout:
             # Only ever raised before infer() has begun: a request that sat in a queue.
-            raise HTTPException(
+            raise QueueTimeout(
                 503,
                 f"request waited {waited:.1f}s in queue, past the {request_timeout:.1f}s "
                 "--request-timeout",
@@ -456,6 +461,7 @@ async def run_predict(
     accept_safetensors: bool = False,
     graphs: list[dict[str, Any]] | None = None,
     graph_stats: dict[str, int] | None = None,
+    on_infer_start: Callable[[], None] | None = None,
 ) -> Response:
     """Missing-input check happens here, on the loop; the rest is three stages so only the
     middle one holds an inference thread: _prepare_feeds (prep pool), _infer (inference
@@ -477,7 +483,9 @@ async def run_predict(
     `graphs` is a /predict/graph batch (a list of {x, edge_index, edge_attr?} JSON values; a
     `tensors` body with num_nodes/num_edges is one too). It is batched in the prep pool, run
     as one inference and split in the encode stage; its graph/node/edge counts land in
-    `graph_stats` for whoever wants them (metrics).
+    `graph_stats` for whoever wants them (metrics), which also gets `rows`, axis 0 of the
+    first feed, for every request. `on_infer_start` is called as inference begins, before
+    the timeout re-check: the moment the request stops waiting for a slot.
     """
     prep_pool = None if inline else state.prep_executor
     infer_pool = None if inline else state.executor
@@ -510,10 +518,15 @@ async def run_predict(
         graph_stats,
     )
     timings_ms["prep"] = round(prep_ms, 2)
+    if graph_stats is not None:
+        first = next(iter(feeds.values()), None)
+        graph_stats["rows"] = int(first.shape[0]) if first is not None and first.ndim else 1
 
     _check_timeout(state, admitted_at)
 
     def infer() -> tuple[dict[str, np.ndarray], float]:
+        if on_infer_start is not None:
+            on_infer_start()
         # Re-checked at start: the request may have queued behind a running inference.
         _check_timeout(state, admitted_at)
         return _infer(state, feeds)

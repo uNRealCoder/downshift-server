@@ -9,8 +9,11 @@ All notable changes to this project are documented here. Format follows
 
 - `--execution threadpool|inline` / `DOWNSHIFT_EXECUTION` (default `threadpool`). `inline` parses, infers and encodes small JSON bodies (Content-Length up to 64 KiB, no `text`) on the event loop, with no thread hop; it only helps models under about 1 ms per inference, and a slow model stalls `/health` and `/ready`. The banner has an `Execution` row and `/metadata` an `execution` block.
 
+- `GET /metrics`, Prometheus text format, always on and behind the API key when one is set. Request counts and latency by route template and status, per-stage latency, rejections by reason, queue depth, batch sizes and boot phases. Under `--workers N` the series are summed across workers.
+
 ### Changed
 
+- `prometheus_client` is now a core dependency.
 - The `--max-concurrency` help and README no longer say raising it does not help: small encoders usually gain from 2-4 (all-MiniLM-L6-v2, batch 8, 8 clients: 52 req/s at 1, 134 at 4).
 - `--max-body-bytes` defaults to 32 MiB (was 64 MiB).
 - Breaking for third-party adapters: `Adapter.prepare(model, example_inputs)` is now `prepare(model, example_inputs, axis_max=None)`. Add the parameter; to support `--axis-max`, lower the named `torch.export.Dim`s with `downshift.core.shapes.lower_axis_max` and pin verification sample 1 at those sizes (`pin_vary_fn`). An adapter that ignores it just serves its own bounds.

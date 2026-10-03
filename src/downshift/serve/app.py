@@ -21,10 +21,11 @@ from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 import downshift
-from downshift.core.phase import CURRENT_PROGRESS, LoadProgress
+from downshift.core.phase import CURRENT_PROGRESS, LoadProgress, Phase
 from downshift.logs import request_id_var
 from downshift.serve.codec import decode_safetensors
 from downshift.serve.engine import ServingState
+from downshift.serve.metrics import Metrics
 from downshift.serve.middleware import load_middleware
 from downshift.serve.options import ExecutionChoice
 from downshift.serve.predict import (
@@ -32,6 +33,7 @@ from downshift.serve.predict import (
     PREDICT_PATHS,
     SAFETENSORS_MEDIA_TYPE,
     NumpyJSONResponse,
+    QueueTimeout,
     as_batch,
     run_predict,
 )
@@ -59,6 +61,50 @@ NOT_READY_RETRY_AFTER = 2  # seconds a client should wait before asking again
 
 # Probes: exempt from the API key, and logged at DEBUG so they don't flood the default output.
 _PROBE_PATHS = frozenset({"/health", "/ready"})
+# Not logged per request: a scraper hits /metrics every few seconds. Unlike the probes it
+# stays behind the API key.
+_UNLOGGED_PATHS = _PROBE_PATHS | {"/metrics"}
+
+
+class _QueueSlot:
+    """One request's share of the `queued` gauge: counted from admission until inference
+    starts (or the request ends first), and left exactly once whichever comes first."""
+
+    def __init__(self, gauge: Any) -> None:
+        self._gauge = gauge
+        self._lock = threading.Lock()
+        self._waiting = True
+        gauge.inc()
+
+    def leave(self) -> None:
+        with self._lock:
+            if not self._waiting:
+                return
+            self._waiting = False
+        self._gauge.dec()
+
+
+def _reject(request: Request, reason: str) -> None:
+    request.app.state.metrics.reject(reason)
+
+
+def _publish_state(metrics: Metrics, current: ServingState) -> None:
+    """What `ready`, `info`, `boot_seconds` and `concurrency` say once a model is serving."""
+    adapter = current.verdict.model_family
+    metrics.set_info(
+        version=downshift.__version__,
+        source=current.source,
+        backend=current.backend.name,
+        verdict=str(current.verdict.status),
+        execution=current.execution.value,
+        adapter=adapter,
+    )
+    for phase in Phase:
+        seconds = current.timings.get(phase)
+        if seconds is not None:
+            metrics.boot_seconds.labels(phase.value).set(seconds)
+    metrics.concurrency.set(current.options.max_concurrency)
+    metrics.ready.set(1 if current.ready else 0)
 
 
 def _route_path(scope: Scope) -> str:
@@ -264,14 +310,21 @@ class OrjsonRoute(APIRoute):
                 else _OrjsonRequest(request.scope, request.receive)
             )
 
+            metrics: Metrics = request.app.state.metrics
             admitted = False
+            slot: _QueueSlot | None = None
             if is_predict:
                 if current is None:
+                    metrics.reject("not_ready")
                     raise _not_ready_error()
                 if not current.try_admit():
+                    metrics.reject("capacity")
                     raise _capacity_error(current)
                 admitted = True
+                metrics.in_flight.inc()
+                slot = _QueueSlot(metrics.queued)
                 wrapped.state.admitted_at = time.monotonic()
+                wrapped.state.on_infer_start = slot.leave
 
             try:
                 if content_type and not binary and "json" not in content_type:
@@ -279,10 +332,12 @@ class OrjsonRoute(APIRoute):
                 content_length = request.headers.get("content-length")
                 if content_length is not None and content_length.isdigit():
                     if int(content_length) > limit:
+                        metrics.reject("body_too_large")
                         return _body_too_large(int(content_length), limit)
                 else:
                     result = await _read_body_limited(request, limit)
                     if isinstance(result, JSONResponse):
+                        metrics.reject("body_too_large")
                         return result
                     wrapped._body = result
                 if is_predict:
@@ -292,9 +347,14 @@ class OrjsonRoute(APIRoute):
                     elif not await _try_inline(wrapped, current, content_length):
                         await wrapped.parse_in(current.prep_executor)
                 return await handler(wrapped)
+            except QueueTimeout:
+                metrics.reject("timeout")
+                raise
             finally:
                 if admitted:
-                    assert current is not None
+                    assert current is not None and slot is not None
+                    slot.leave()
+                    metrics.in_flight.dec()
                     current.release()
 
         return route_handler
@@ -331,6 +391,7 @@ def require_serving(request: Request) -> ServingState:
     """
     current: ServingState | None = request.app.state.serving
     if current is None:
+        _reject(request, "not_ready")
         raise _not_ready_error()
     return current
 
@@ -341,10 +402,11 @@ def _predict_context(request: Request) -> dict[str, Any]:
     line (U1)."""
     timings: dict[str, float] = {}
     request.state.timings_ms = timings
-    # Filled by a graph batch with graphs/nodes/edges; a metrics step reads it from here.
+    # Filled by a graph batch with graphs/nodes/edges, and with `rows` for every request.
     graph_stats: dict[str, int] = {}
     request.state.graph_stats = graph_stats
     return {
+        "on_infer_start": getattr(request.state, "on_infer_start", None),
         "admitted_at": request.state.admitted_at,
         "parse_ms": getattr(request.state, "parse_ms", 0.0),
         "inline": getattr(request.state, "inline", False),
@@ -353,6 +415,17 @@ def _predict_context(request: Request) -> dict[str, Any]:
         "accept_safetensors": SAFETENSORS_MEDIA_TYPE in request.headers.get("accept", "").lower(),
         "graph_stats": graph_stats,
     }
+
+
+def _observe_predict(request: Request, graph: bool = False) -> None:
+    """The stage split and batch sizes of a predict that succeeded."""
+    metrics: Metrics = request.app.state.metrics
+    metrics.observe_stages(request.state.timings_ms)
+    stats = request.state.graph_stats
+    if "rows" in stats:
+        metrics.batch_size.observe(stats["rows"])
+    if graph:
+        metrics.graphs_per_request.observe(stats.get("graphs", 1))
 
 
 class RequestIdMiddleware:
@@ -369,9 +442,12 @@ class RequestIdMiddleware:
     INFO otherwise.
     """
 
-    def __init__(self, app: ASGIApp, access_log: bool = True) -> None:
+    def __init__(
+        self, app: ASGIApp, access_log: bool = True, metrics: Metrics | None = None
+    ) -> None:
         self.app = app
         self.access_log = access_log
+        self.metrics = metrics
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -401,6 +477,11 @@ class RequestIdMiddleware:
             raise
         finally:
             try:
+                if self.metrics is not None and status is not None:
+                    # scope["route"] is set by routing: the template, never the client's path,
+                    # so a scanner's random URLs cannot mint series.
+                    route = getattr(scope.get("route"), "path", None) or "unmatched"
+                    self.metrics.observe_request(route, status, time.perf_counter() - start)
                 if self.access_log and status is not None:
                     self._log(scope, status, (time.perf_counter() - start) * 1000, state)
             finally:
@@ -409,7 +490,7 @@ class RequestIdMiddleware:
     @staticmethod
     def _log(scope: Scope, status: int, duration_ms: float, state: dict[str, Any]) -> None:
         path = scope["path"]
-        if _route_path(scope) in _PROBE_PATHS:
+        if _route_path(scope) in _UNLOGGED_PATHS:
             level = logging.DEBUG
         elif status >= 400:
             level = logging.WARNING
@@ -438,9 +519,10 @@ class ApiKeyMiddleware:
     probe never needs the key.
     """
 
-    def __init__(self, app: ASGIApp, api_key: str | None) -> None:
+    def __init__(self, app: ASGIApp, api_key: str | None, metrics: Metrics | None = None) -> None:
         self.app = app
         self.api_key = api_key
+        self.metrics = metrics
         self._key_bytes = api_key.encode("utf-8") if api_key is not None else b""
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -455,6 +537,8 @@ class ApiKeyMiddleware:
         if scheme.lower() != "bearer" or not hmac.compare_digest(
             token.encode("latin-1"), self._key_bytes
         ):
+            if self.metrics is not None:
+                self.metrics.reject("auth")
             response = JSONResponse(
                 {"detail": "Authorization header is not set or incorrect"},
                 status_code=401,
@@ -487,7 +571,9 @@ def _loader_lifespan(
             # through every builder and the CLI's own loader closure.
             CURRENT_PROGRESS.set(progress)
             try:
-                app.state.serving = loader()
+                loaded = loader()
+                _publish_state(app.state.metrics, loaded)
+                app.state.serving = loaded
             except Exception:
                 # Not logged at error/exception level: a caller with a reporting path of its
                 # own (serve_cmd re-raises this on the main thread) would otherwise print the
@@ -533,8 +619,9 @@ def build_app(
     api_key = api_key or None
     if api_key is None:
         logger.warning(
-            "DOWNSHIFT_SERVER_API_KEY is not set, so the endpoints are unauthenticated. Set "
-            "it to require a fixed API key, or add your own authentication middleware."
+            "DOWNSHIFT_SERVER_API_KEY is not set, so the endpoints (including /metadata and "
+            "/metrics) are unauthenticated. Set it to require a fixed API key, or add your own "
+            "authentication middleware."
         )
 
     app = FastAPI(
@@ -544,14 +631,18 @@ def build_app(
     )
     app.router.route_class = OrjsonRoute
     app.state.serving = state
+    metrics = Metrics()
+    app.state.metrics = metrics
+    if state is not None:
+        _publish_state(metrics, state)
     # Starlette makes the *last*-registered middleware the outermost layer, so registration
     # order here is back to front: load_middleware's user middleware goes on first (innermost,
     # right next to the routes, so it only ever sees authenticated traffic), ApiKeyMiddleware
     # next (the gate), and RequestIdMiddleware last (outermost, so access logging and the
     # X-Request-Id header still cover 401s and everything else uniformly).
     load_middleware(app, middleware)
-    app.add_middleware(ApiKeyMiddleware, api_key=api_key)
-    app.add_middleware(RequestIdMiddleware, access_log=access_log)
+    app.add_middleware(ApiKeyMiddleware, api_key=api_key, metrics=metrics)
+    app.add_middleware(RequestIdMiddleware, access_log=access_log, metrics=metrics)
 
     @app.exception_handler(Exception)
     async def _unhandled_exception(request: Request, exc: Exception) -> JSONResponse:
@@ -593,6 +684,12 @@ def build_app(
             return JSONResponse({"ready": False, "phase": phase}, status_code=503)
         status = 200 if current.ready else 503
         return JSONResponse({"ready": current.ready}, status_code=status)
+
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics_endpoint(request: Request) -> Response:
+        # Served before the model is ready and never admission-controlled; behind the API key.
+        body, content_type = request.app.state.metrics.render()
+        return Response(body, media_type=content_type)
 
     @app.get("/metadata", response_model=MetadataResponse)
     async def metadata(current: ServingState = Depends(require_serving)) -> MetadataResponse:
@@ -642,7 +739,7 @@ def build_app(
         req: PredictRequest, request: Request, current: ServingState = Depends(require_serving)
     ) -> Response:
         text = as_batch(req.text) if req.text is not None else None
-        return await run_predict(
+        response = await run_predict(
             current,
             req.inputs,
             req.output_encoding,
@@ -650,6 +747,8 @@ def build_app(
             req.prompt_name,
             **_predict_context(request),
         )
+        _observe_predict(request)
+        return response
 
     @app.post("/predict/graph", **_PREDICT_ROUTE)
     async def predict_graph(
@@ -676,8 +775,10 @@ def build_app(
             inputs = {}
         elif req.edge_attr is not None:
             inputs["edge_attr"] = req.edge_attr
-        return await run_predict(
+        response = await run_predict(
             current, inputs, req.output_encoding, graphs=graphs, **_predict_context(request)
         )
+        _observe_predict(request, graph=True)
+        return response
 
     return app
