@@ -51,6 +51,11 @@ def _reference(path: str, texts: list[str], max_length: int, mode: str, normaliz
             vec = tokens[0]
         elif mode == "max":
             vec = tokens.max(0).values
+        elif mode == "lasttoken":
+            vec = tokens[-1]
+        elif mode == "weightedmean":
+            weights = torch.arange(1, len(tokens) + 1, dtype=tokens.dtype).unsqueeze(-1)
+            vec = (tokens * weights).sum(0) / weights.sum()
         else:
             vec = tokens.sum(0) / len(tokens) ** 0.5
         out.append(torch.nn.functional.normalize(vec, dim=0) if normalize else vec)
@@ -90,13 +95,18 @@ def test_repo_without_modules_json_has_no_recipe(tmp_path):
     assert resolve_recipe(path, None, None, has_head=False) is None
 
 
-@pytest.mark.parametrize("flag", ["pooling_mode_lasttoken", "pooling_mode_weightedmean_tokens"])
-def test_a_pooling_mode_we_do_not_apply_is_refused(tmp_path, flag):
+@pytest.mark.parametrize(
+    ("flag", "mode"),
+    [("pooling_mode_lasttoken", "lasttoken"), ("pooling_mode_weightedmean_tokens", "weightedmean")],
+)
+def test_last_token_and_weighted_mean_flags_are_read_from_the_recipe(tmp_path, flag, mode):
     pooling = {**hf_repo.MEAN_POOLING, "pooling_mode_mean_tokens": False, flag: True}
     path = hf_repo.write_encoder_repo(tmp_path, pooling=pooling)
 
-    with pytest.raises(LoadError, match=flag):
-        load_model(LoadSpec(path))
+    recipe = read_recipe(Path(path))
+
+    assert recipe is not None
+    assert recipe.pooling == mode
 
 
 def test_two_pooling_modes_at_once_are_refused(tmp_path):
@@ -185,7 +195,7 @@ def test_schema_says_what_kind_of_vector_this_is(client):
 # --- overrides ----------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("mode", ["cls", "max", "mean_sqrt_len"])
+@pytest.mark.parametrize("mode", ["cls", "max", "mean_sqrt_len", "lasttoken", "weightedmean"])
 def test_pooling_override_changes_the_served_pooling(repo, mode):
     loaded = load_model(LoadSpec(repo, pooling=mode, normalize=False))
     client = TestClient(
@@ -277,6 +287,56 @@ def test_mean_sqrt_len_divides_by_the_root_of_the_real_length():
     assert pool(hidden, mask, "mean_sqrt_len")[0].tolist() == pytest.approx(
         [4.0 / 2**0.5, 6.0 / 2**0.5]
     )
+
+
+def test_last_token_is_the_last_attended_position_under_either_padding():
+    row = torch.tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+    pad = torch.tensor([[100.0, -100.0]])
+    right = torch.cat([row, pad])[None]
+    left = torch.cat([pad, row])[None]
+    right_mask = torch.tensor([[1, 1, 1, 0]])
+    left_mask = torch.tensor([[0, 1, 1, 1]])
+
+    assert pool(right, right_mask, "lasttoken").tolist() == [[5.0, 6.0]]
+    assert pool(left, left_mask, "lasttoken").tolist() == [[5.0, 6.0]]
+
+
+def test_last_token_in_a_mixed_batch():
+    hidden = torch.arange(24, dtype=torch.float32).reshape(3, 4, 2)
+    mask = torch.tensor([[1, 1, 0, 0], [0, 0, 1, 1], [1, 1, 1, 1]])
+
+    assert pool(hidden, mask, "lasttoken").tolist() == [[2.0, 3.0], [14.0, 15.0], [22.0, 23.0]]
+
+
+def test_weighted_mean_matches_the_reference_formula():
+    hidden, mask = _padded()
+
+    def reference(tokens):
+        weights = [i + 1 for i in range(len(tokens))]
+        return [
+            sum(w * t[d] for w, t in zip(weights, tokens, strict=True)) / sum(weights)
+            for d in range(2)
+        ]
+
+    got = pool(hidden, mask, "weightedmean")
+
+    assert got[0].tolist() == pytest.approx(reference([[1.0, 2.0], [3.0, 4.0]]))
+    assert got[1].tolist() == pytest.approx(reference([[5.0, 6.0], [7.0, 8.0], [9.0, 10.0]]))
+
+
+@pytest.mark.needs_torch_26
+@pytest.mark.parametrize("mode", ["lasttoken", "weightedmean"])
+def test_last_token_and_weighted_mean_export_on_a_repo_without_a_recipe(tmp_path, mode):
+    path = hf_repo.write_encoder_repo(tmp_path, modules=None, pooling=None, max_seq_length=None)
+    loaded = load_model(LoadSpec(path, pooling=mode))
+    state = prepare_serving(loaded, ServeOptions(pooling=mode))
+
+    assert state.verdict.status == "CLEAN", state.verdict.reason
+    assert state.embedding is not None
+    assert state.embedding.origin == "--pooling"
+    client = TestClient(build_app(state))
+    got = np.array(client.post("/predict", json={"text": TEXTS}).json()["outputs"]["output_0"])
+    assert got == pytest.approx(_reference(path, TEXTS, 32, mode, normalize=False), abs=1e-5)
 
 
 # --- the CLI flags ------------------------------------------------------------------------
@@ -378,7 +438,7 @@ def test_check_reports_an_unusable_recipe_as_a_usage_error(tmp_path):
     result = _cli("check", path)
 
     assert result.exit_code == main.EXIT_USAGE
-    assert "pooling_mode_lasttoken" in result.output
+    assert "2 pooling modes" in result.output
 
 
 @pytest.mark.parametrize("command", ["check", "export", "serve"])

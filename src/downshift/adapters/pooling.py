@@ -12,4 +12,6 @@ class PoolingChoice(StrEnum):
     cls = "cls"
     maximum = "max"  # not `max`: that would shadow the builtin inside the class body
     mean_sqrt_len = "mean_sqrt_len"
+    lasttoken = "lasttoken"
+    weightedmean = "weightedmean"
     none = "none"

@@ -177,7 +177,8 @@ PoolingOpt = Annotated[
     typer.Option(
         "--pooling",
         help="Hugging Face encoder repos: override the pooling the repo declares "
-        "(modules.json), or set one when it declares none. 'none' serves token vectors",
+        "(modules.json), or set one when it declares none: mean, cls, max, mean_sqrt_len, "
+        "lasttoken, weightedmean. 'none' serves token vectors",
     ),
 ]
 NormalizeOpt = Annotated[

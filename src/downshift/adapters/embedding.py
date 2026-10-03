@@ -7,8 +7,8 @@ the model was trained at, often shorter than its position embeddings). This modu
 those, and PoolingHead applies the result inside the exported graph, so verification
 compares the finished embedding and ONNX Runtime runs the pooling too.
 
-Anything the recipe asks for that is not applied here (a Dense module, last-token or weighted
-pooling, several poolings concatenated) is refused rather than approximated: a model served
+Anything the recipe asks for that is not applied here (a Dense module, several poolings
+concatenated) is refused rather than approximated: a model served
 with the wrong pooling still returns plausible vectors, just worse ones.
 """
 
@@ -31,8 +31,9 @@ _POOLING_FLAGS = {
     "pooling_mode_mean_tokens": PoolingChoice.mean,
     "pooling_mode_max_tokens": PoolingChoice.maximum,
     "pooling_mode_mean_sqrt_len_tokens": PoolingChoice.mean_sqrt_len,
+    "pooling_mode_lasttoken": PoolingChoice.lasttoken,
+    "pooling_mode_weightedmean_tokens": PoolingChoice.weightedmean,
 }
-_UNAPPLIED_FLAGS = ("pooling_mode_lasttoken", "pooling_mode_weightedmean_tokens")
 _MASKED_OUT = -1e9  # what sentence-transformers fills padding with before a max
 
 
@@ -73,11 +74,6 @@ def _pooling_mode(directory: Path) -> str:
     config = _read_json(directory / "config.json")
     if not isinstance(config, dict):
         raise RecipeError(f"modules.json names a Pooling module but {directory} has no config.json")
-    unapplied = [flag for flag in _UNAPPLIED_FLAGS if config.get(flag)]
-    if unapplied:
-        raise RecipeError(
-            f"{directory.name}/config.json enables {unapplied}, which downshift does not apply"
-        )
     modes = [mode for flag, mode in _POOLING_FLAGS.items() if config.get(flag)]
     if len(modes) != 1:
         raise RecipeError(
@@ -170,9 +166,19 @@ def pool(hidden: torch.Tensor, mask: torch.Tensor, mode: str) -> torch.Tensor:
     """[batch, seq, hidden] token vectors -> [batch, hidden], padding excluded."""
     if mode == PoolingChoice.cls:
         return hidden[:, 0]
+    if mode == PoolingChoice.lasttoken:
+        # the last attended position, so left and right padding both work
+        positions = torch.arange(mask.shape[1], device=mask.device)
+        last = (mask.to(positions.dtype) * positions).argmax(dim=1)
+        return hidden[torch.arange(hidden.shape[0], device=hidden.device), last]
     keep = mask.unsqueeze(-1).to(hidden.dtype)
     if mode == PoolingChoice.maximum:
         return hidden.masked_fill(keep == 0, _MASKED_OUT).max(dim=1).values
+    if mode == PoolingChoice.weightedmean:
+        # later tokens weigh more: position 1..S, as sentence-transformers does
+        weights = torch.arange(1, hidden.shape[1] + 1, device=hidden.device).to(hidden.dtype)
+        weights = weights.unsqueeze(0).unsqueeze(-1) * keep
+        return (hidden * weights).sum(dim=1) / weights.sum(dim=1).clamp(min=1e-9)
     total = (hidden * keep).sum(dim=1)
     count = keep.sum(dim=1).clamp(min=1e-9)
     return total / count if mode == PoolingChoice.mean else total / count.sqrt()
