@@ -43,7 +43,7 @@ def test_defaults_with_no_env_set(monkeypatch: pytest.MonkeyPatch) -> None:
         8,
         "json",
         256 * 1024 * 1024,
-        64 * 1024 * 1024,
+        32 * 1024 * 1024,
         1,
         64,
         30.0,

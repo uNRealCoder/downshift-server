@@ -3,6 +3,18 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.5.0 - Unreleased
+
+### Added
+
+### Changed
+
+- `--max-body-bytes` defaults to 32 MiB (was 64 MiB).
+
+### Fixed
+
+### Removed
+
 ## 0.4.0 - 2026-09-26
 
 ### Fixed

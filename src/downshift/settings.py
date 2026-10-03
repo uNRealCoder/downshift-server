@@ -13,7 +13,7 @@ from collections.abc import Callable
 DEFAULT_MAX_INPUT_BYTES = 256 * 1024 * 1024
 
 # Total request body size the server will read before parsing it as JSON.
-DEFAULT_MAX_BODY_BYTES = 64 * 1024 * 1024
+DEFAULT_MAX_BODY_BYTES = 32 * 1024 * 1024
 
 # Verification samples for check()/export()/intake()/build_verdict() and ServeOptions.k.
 DEFAULT_SAMPLES = 8

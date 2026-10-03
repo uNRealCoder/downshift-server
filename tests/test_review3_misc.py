@@ -253,7 +253,7 @@ def test_off_thread_capture_still_collects_torch_logging():
 
 
 def test_the_body_and_timeout_defaults():
-    assert settings.DEFAULT_MAX_BODY_BYTES == 64 * 1024 * 1024
+    assert settings.DEFAULT_MAX_BODY_BYTES == 32 * 1024 * 1024
     assert settings.DEFAULT_REQUEST_TIMEOUT == 30.0
 
 
@@ -275,7 +275,7 @@ def _serve_options_in_a_child(**env: str) -> dict:
 
 def test_serve_options_pick_up_the_new_defaults():
     assert _serve_options_in_a_child() == {
-        "max_body_bytes": 64 * 1024 * 1024,
+        "max_body_bytes": 32 * 1024 * 1024,
         "request_timeout": 30.0,
     }
 
