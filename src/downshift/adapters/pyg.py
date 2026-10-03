@@ -123,6 +123,11 @@ def make_vary_fn(
         else:
             n = pick_size(n_candidates) if n_candidates else base_n
             e = pick_size(e_candidates) if e_candidates else base_e
+            # N != E lets verify() tell node-level outputs from edge-level ones.
+            for _ in range(8):
+                if e != n or not e_candidates:
+                    break
+                e = pick_size(e_candidates)
 
         sample: list = [None] * len(field_names)
         sample[x_idx] = torch.randn(n, in_channels, dtype=base_x.dtype)

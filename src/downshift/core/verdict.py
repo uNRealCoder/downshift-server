@@ -18,8 +18,8 @@ import torch
 
 from downshift._imports import import_object
 from downshift.adapters import registry
-from downshift.adapters.base import Adapter, Prepared, VaryFn
-from downshift.core.axes import AxisFact, axis_facts
+from downshift.adapters.base import Adapter, Family, Prepared, VaryFn
+from downshift.core.axes import AxisFact, axis_facts, classify_outputs
 from downshift.core.capture import capture
 from downshift.core.inputs import synthesize
 from downshift.core.phase import Phase, report
@@ -62,6 +62,7 @@ class ExportVerdict:
     input_names: tuple[str, ...] = ()
     dynamic_dims: dict[str, list[int]] = field(default_factory=dict)
     axes: list[AxisFact] = field(default_factory=list)
+    output_axes: list[str] = field(default_factory=list)  # PyG only: node/edge/fixed/unknown
     unsupported_ops: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     onnx_path: Path | None = None
@@ -104,6 +105,7 @@ class ExportVerdict:
             "input_names": list(self.input_names),
             "dynamic_dims": self.dynamic_dims,
             "axes": [fact.to_dict() for fact in self.axes],
+            "output_axes": list(self.output_axes),
             "unsupported_ops": self.unsupported_ops,
             "warnings": self.warnings,
             "onnx_path": str(self.onnx_path) if self.onnx_path else None,
@@ -132,6 +134,7 @@ class ExportVerdict:
             input_names=tuple(data.get("input_names", ())),
             dynamic_dims=dict(data.get("dynamic_dims", {})),
             axes=[AxisFact.from_dict(fact) for fact in data.get("axes", [])],
+            output_axes=list(data.get("output_axes", [])),
             unsupported_ops=list(data.get("unsupported_ops", [])),
             warnings=list(data.get("warnings", [])),
             onnx_path=Path(onnx_path) if onnx_path else None,
@@ -315,6 +318,13 @@ def build_verdict(
 
     verdict.numerics = numerics
     verdict.axes = axes_for(prepared, numerics)
+    if prepared.family == Family.pyg:
+        verdict.output_axes = classify_outputs(
+            numerics.sample_shapes,
+            numerics.output_shapes,
+            prepared.input_names.index("x"),
+            prepared.input_names.index("edge_index"),
+        )
     verdict.status, verdict.recommended_backend, verdict.reason = numerics_outcome(
         numerics,
         f"exported via {result.capture_strategy}; numerics ok",

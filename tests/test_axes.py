@@ -3,7 +3,7 @@
 import pytest
 
 import downshift
-from downshift.core.axes import AxisFact, axis_facts
+from downshift.core.axes import AxisFact, axis_facts, classify_outputs
 from downshift.core.verdict import ExportVerdict
 from tests.models import clean_mlp, gnn_gcn, tiny_bert
 
@@ -86,3 +86,28 @@ def test_a_verdict_without_prepared_has_no_axes_and_survives_from_dict() -> None
     }
 
     assert ExportVerdict.from_dict(data).axes == []
+
+
+def test_classify_outputs_node_edge_fixed() -> None:
+    samples = [[(6, 8), (2, 10)], [(12, 8), (2, 4)], [(3, 8), (2, 9)]]
+    outputs = [[(6, 4), (10, 1), (1, 4)], [(12, 4), (4, 1), (1, 4)], [(3, 4), (9, 1), (1, 4)]]
+
+    assert classify_outputs(samples, outputs, 0, 1) == ["node", "edge", "fixed"]
+
+
+def test_classify_outputs_is_unknown_without_two_samples_where_n_differs_from_e() -> None:
+    samples = [[(6, 8), (2, 10)], [(7, 8), (2, 7)], [(5, 8), (2, 5)]]
+    outputs = [[(6, 4)], [(7, 4)], [(5, 4)]]
+
+    assert classify_outputs(samples, outputs, 0, 1) == ["unknown"]
+
+
+def test_classify_outputs_unknown_for_scalar_or_unrelated_sizes() -> None:
+    samples = [[(6, 8), (2, 10)], [(12, 8), (2, 4)]]
+    outputs = [[(), (3,)], [(), (5,)]]
+
+    assert classify_outputs(samples, outputs, 0, 1) == ["unknown", "unknown"]
+
+
+def test_classify_outputs_without_output_shapes_is_empty() -> None:
+    assert classify_outputs([[(6, 8), (2, 10)]], [], 0, 1) == []

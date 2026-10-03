@@ -47,6 +47,38 @@ class AxisFact:
         )
 
 
+def classify_outputs(
+    sample_shapes: Sequence[Sequence[Sequence[int]]],
+    output_shapes: Sequence[Sequence[Sequence[int]]],
+    x_index: int,
+    edge_index_index: int,
+) -> list[str]:
+    """Per output: "node" (axis 0 follows x's node count across samples), "edge" (follows
+    edge_index's edge count), "fixed" (axis 0 never changes) or "unknown". Telling node from
+    edge needs at least two samples where N != E; with fewer, everything is "unknown"."""
+    if not output_shapes or len(sample_shapes) != len(output_shapes):
+        return []
+    n_outputs = len(output_shapes[0])
+    counts = [(shapes[x_index][0], shapes[edge_index_index][1]) for shapes in sample_shapes]
+    if sum(n != e for n, e in counts) < 2:
+        return ["unknown"] * n_outputs
+    kinds: list[str] = []
+    for out in range(n_outputs):
+        if any(len(outs) <= out or not outs[out] for outs in output_shapes):
+            kinds.append("unknown")
+            continue
+        sizes = [outs[out][0] for outs in output_shapes]
+        tracks_node = all(size == n for size, (n, _) in zip(sizes, counts, strict=True))
+        tracks_edge = all(size == e for size, (_, e) in zip(sizes, counts, strict=True))
+        if tracks_node != tracks_edge:
+            kinds.append("node" if tracks_node else "edge")
+        elif len(set(sizes)) == 1:
+            kinds.append("fixed")
+        else:
+            kinds.append("unknown")
+    return kinds
+
+
 def axis_facts(
     bounds: AxisBounds,
     input_names: Sequence[str],

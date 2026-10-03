@@ -5,6 +5,7 @@ least some samples have shapes the exporter never saw. That's what catches a gra
 traced fine but froze a shape or specialised a data-dependent branch.
 """
 
+import logging
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
@@ -14,7 +15,10 @@ import torch
 
 from downshift.adapters.base import VaryFn
 from downshift.core.shapes import alternative_sizes, dim_bounds, pick_size
+from downshift.logs import REPORT_LOGGER
 from downshift.settings import DEFAULT_SAMPLES, TOLERANCES
+
+report_logger = logging.getLogger(REPORT_LOGGER)
 
 
 class OnnxRuntimeError(RuntimeError):
@@ -56,6 +60,7 @@ class NumericsReport:
     baseline_failed: bool = False
     worst: WorstMismatch | None = None
     sample_shapes: list[list[tuple[int, ...]]] = field(default_factory=list)
+    output_shapes: list[list[tuple[int, ...]]] = field(default_factory=list)  # [sample][output]
     seed: int = 0
     notes: list[str] = field(default_factory=list)
     # The session verify() built (or was given) to run the samples; not JSON-able, so it's
@@ -104,6 +109,9 @@ class NumericsReport:
             worst=worst,
             sample_shapes=[
                 [tuple(shape) for shape in sample] for sample in data.get("sample_shapes", [])
+            ],
+            output_shapes=[
+                [tuple(shape) for shape in sample] for sample in data.get("output_shapes", [])
             ],
             seed=data.get("seed", 0),
             notes=list(data.get("notes", [])),
@@ -342,6 +350,7 @@ def verify(
     baseline_failed = False
     notes: list[str] = []
     sample_shapes: list[list[tuple[int, ...]]] = []
+    output_shapes: list[list[tuple[int, ...]]] = []
     worst: WorstMismatch | None = None
     worst_abs = -1.0
 
@@ -354,6 +363,15 @@ def verify(
                 tuple(t.shape) if isinstance(t, torch.Tensor) else () for t in sample
             ]
             sample_shapes.append(shapes_this_sample)
+            report_logger.info(
+                "verify: sample %d/%d, %s",
+                i + 1,
+                k,
+                ", ".join(
+                    f"{name} {list(shape)}"
+                    for name, shape in zip(input_names, shapes_this_sample, strict=False)
+                ),
+            )
             try:
                 with torch.inference_mode():
                     raw_output = model(*sample)
@@ -377,6 +395,7 @@ def verify(
                     "how verification samples are generated."
                 ) from exc
             torch_outs = _as_tensor_list(raw_output)
+            output_shapes.append([tuple(t.shape) for t in torch_outs])
 
             try:
                 # A bfloat16 input tensor has no numpy equivalent either; letting that
@@ -429,6 +448,7 @@ def verify(
         baseline_failed=baseline_failed,
         worst=worst,
         sample_shapes=sample_shapes,
+        output_shapes=output_shapes,
         seed=seed,
         notes=notes,
         session=session,
