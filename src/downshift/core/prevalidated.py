@@ -43,6 +43,7 @@ def intake(
     rtol: float | None = None,
     seed: int = 0,
     vary: VaryFn | str | None = None,
+    axis_max: dict[str, int] | None = None,
     timings: dict[str, float] | None = None,
 ) -> ExportVerdict:
     """`timings`, when given, gets Phase.verify added to it (there is no export phase for a
@@ -64,7 +65,9 @@ def intake(
             onnx_path=onnx_path,
         )
 
-    prepared = prepare_model(reference, example_inputs, adapter, dynamic, vary=vary)
+    prepared = prepare_model(
+        reference, example_inputs, adapter, dynamic, vary=vary, axis_max=axis_max
+    )
     report(Phase.verify)
     verify_start = time.perf_counter()
     try:

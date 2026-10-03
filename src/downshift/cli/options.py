@@ -64,6 +64,16 @@ DynamicOpt = Annotated[
         help='Dynamic axes, e.g. "x:0,edge_index:1". Default: axis 0 of every input.',
     ),
 ]
+AxisMaxOpt = Annotated[
+    list[str] | None,
+    typer.Option(
+        "--axis-max",
+        metavar="NAME=N",
+        help="Serve at most N along the named axis; repeatable. The banner and /schema list the "
+        "names: dim0 or <input>_<axis> (--dynamic) for generic models, batch and seq for Hugging "
+        "Face, num_nodes and num_edges for PyG. Default: the bound the export chose",
+    ),
+]
 ReferenceOpt = Annotated[
     str | None,
     typer.Option(

@@ -25,7 +25,9 @@ class Adapter(Protocol):
 
     def matches(self, model: nn.Module, example_inputs: tuple | None) -> bool: ...
     def example_inputs(self, model: nn.Module) -> tuple | None: ...
-    def prepare(self, model: nn.Module, example_inputs: tuple) -> Prepared: ...
+    def prepare(
+        self, model: nn.Module, example_inputs: tuple, axis_max: dict[str, int] | None = None
+    ) -> Prepared: ...
 ```
 
 It's a `typing.Protocol` marked `@runtime_checkable`, so `isinstance(obj, Adapter)` works
@@ -212,7 +214,9 @@ class PointCloudAdapter:
         n = 50
         return torch.randn(n, coord_dim), torch.randn(n, in_features - coord_dim)
 
-    def prepare(self, model: nn.Module, example_inputs: tuple) -> Prepared:
+    def prepare(
+        self, model: nn.Module, example_inputs: tuple, axis_max: dict[str, int] | None = None
+    ) -> Prepared:
         point_dim = torch.export.Dim("num_points", min=1, max=1 << 16)
         return Prepared(
             model=model,

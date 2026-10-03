@@ -2,7 +2,7 @@
 and `--output-encoding` without paying torch's import cost just to print `--help`.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from downshift import settings
@@ -32,6 +32,8 @@ class ServeOptions:
     k: int = settings.SAMPLES
     adapter: str | None = None
     dynamic: dict[str, list[int]] | None = None
+    # --axis-max: {axis name: largest size to serve}; DOWNSHIFT_AXIS_MAX when not given
+    axis_max: dict[str, int] | None = field(default_factory=lambda: dict(settings.AXIS_MAX) or None)
     intra_op_threads: int = settings.INTRA_OP_THREADS  # ORT SessionOptions; 0 = let ORT choose
     inter_op_threads: int = settings.INTER_OP_THREADS
     output_encoding: OutputEncoding = OutputEncoding(settings.OUTPUT_ENCODING)  # per-call override

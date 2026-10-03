@@ -7,7 +7,7 @@ time, so setting an env var means restarting the process (or CLI invocation) tha
 """
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 # Decoded size a single base64 tensor input may reach; the server passes its own limit.
 DEFAULT_MAX_INPUT_BYTES = 256 * 1024 * 1024
@@ -41,6 +41,25 @@ def _env_float(name: str, default: float) -> float:
     return _env_cast(name, default, float, "float")
 
 
+def parse_axis_max(items: Iterable[str]) -> dict[str, int]:
+    """ "seq=4096,num_nodes=500" (or one NAME=N per item, as --axis-max repeats) into
+    {name: N}. ValueError on anything else, so the CLI reports it as a usage error."""
+    result: dict[str, int] = {}
+    for item in items:
+        for entry in filter(None, (e.strip() for e in item.split(","))):
+            name, _, value = entry.partition("=")
+            if not name.strip() or not value.strip().isdecimal() or int(value) < 1:
+                raise ValueError(
+                    f"bad axis max {entry!r}; expected NAME=N with N a positive integer"
+                )
+            result[name.strip()] = int(value)
+    return result
+
+
+def _env_axis_max(name: str, default: dict[str, int]) -> dict[str, int]:
+    return _env_cast(name, default, lambda raw: parse_axis_max([raw]), "list of NAME=N")
+
+
 HOST = _env_str("DOWNSHIFT_HOST", "127.0.0.1")
 PORT = _env_int("DOWNSHIFT_PORT", 8000)
 DEVICE = _env_str("DOWNSHIFT_DEVICE", "auto")
@@ -65,6 +84,10 @@ MAX_BODY_BYTES = _env_int("DOWNSHIFT_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES)
 # Inferences allowed to run at once per worker process; ONNX Runtime and torch already use
 # every core for one inference, so raising this oversubscribes rather than adding throughput.
 MAX_CONCURRENCY = _env_int("DOWNSHIFT_MAX_CONCURRENCY", 1)
+
+# Largest size to serve per named axis ("seq=4096,num_nodes=500"); the names are the ones the
+# boot banner and /schema list. Empty means each axis keeps the bound the adapter exported.
+AXIS_MAX = _env_axis_max("DOWNSHIFT_AXIS_MAX", {})
 
 # Predicts allowed to wait past max_concurrency before a new one gets a fast 503 instead of
 # joining the queue.

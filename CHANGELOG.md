@@ -10,6 +10,7 @@ All notable changes to this project are documented here. Format follows
 ### Changed
 
 - `--max-body-bytes` defaults to 32 MiB (was 64 MiB).
+- Breaking for third-party adapters: `Adapter.prepare(model, example_inputs)` is now `prepare(model, example_inputs, axis_max=None)`. Add the parameter; to support `--axis-max`, lower the named `torch.export.Dim`s with `downshift.core.shapes.lower_axis_max` and pin verification sample 1 at those sizes (`pin_vary_fn`). An adapter that ignores it just serves its own bounds.
 
 ### Fixed
 

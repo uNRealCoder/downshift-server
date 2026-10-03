@@ -40,3 +40,15 @@ def test_gnn_verdict_survives_node_edge_count_mismatch() -> None:
     verdict = downshift.check(model, inputs, k=8)
 
     assert verdict.status == "CLEAN"
+
+
+@pytest.mark.needs_torch_26
+def test_axis_max_num_nodes_pins_a_sample_at_that_size() -> None:
+    verdict = downshift.check(
+        gnn_gcn.make_model(), gnn_gcn.make_inputs(), axis_max={"num_nodes": 500}, k=4
+    )
+
+    assert verdict.status == "CLEAN", verdict.reason
+    assert {fact.name: fact.served_max for fact in verdict.axes}["num_nodes"] == 500
+    assert verdict.numerics is not None
+    assert verdict.numerics.sample_shapes[1][0][0] == 500

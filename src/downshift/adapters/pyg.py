@@ -14,7 +14,7 @@ from torch_geometric.nn import MessagePassing
 
 from downshift.adapters._flatten import build_shim_class
 from downshift.adapters.base import Family, Prepared, VaryFn
-from downshift.core.shapes import alternative_sizes, dim_bounds, pick_size
+from downshift.core.shapes import alternative_sizes, dim_bounds, lower_axis_max, pick_size
 
 BASE_FIELD_NAMES = ("x", "edge_index")  # edge_attr appended when present on the input Data
 _GUESS_NODES = 8
@@ -57,7 +57,9 @@ class PyGAdapter:
         edge_index = torch.randint(0, _GUESS_NODES, (2, _GUESS_EDGES))
         return (Data(x=x, edge_index=edge_index),)
 
-    def prepare(self, model: nn.Module, example_inputs: tuple) -> Prepared:
+    def prepare(
+        self, model: nn.Module, example_inputs: tuple, axis_max: dict[str, int] | None = None
+    ) -> Prepared:
         (data,) = example_inputs
         names: tuple[str, ...] = BASE_FIELD_NAMES
         if getattr(data, "edge_attr", None) is not None:
@@ -69,25 +71,30 @@ class PyGAdapter:
         n_dim = torch.export.Dim("num_nodes", min=1, max=1 << 16)
         e_dim = torch.export.Dim("num_edges", min=1, max=1 << 16)
         axis_by_field = {"x": {0: n_dim}, "edge_index": {1: e_dim}, "edge_attr": {0: e_dim}}
-        dynamic_shapes = tuple(axis_by_field[n] for n in names)
+        dynamic_shapes = lower_axis_max(tuple(axis_by_field[n] for n in names), axis_max)
 
         return Prepared(
             model=shim,
             inputs=inputs,
             input_names=names,
             dynamic_shapes=dynamic_shapes,
-            vary_fn=make_vary_fn(inputs, names, dynamic_shapes),
+            vary_fn=make_vary_fn(inputs, names, dynamic_shapes, axis_max),
             family=self.family,
         )
 
 
 def make_vary_fn(
-    base_inputs: tuple, field_names: tuple[str, ...], dynamic_shapes: tuple | None = None
+    base_inputs: tuple,
+    field_names: tuple[str, ...],
+    dynamic_shapes: tuple | None = None,
+    axis_max: dict[str, int] | None = None,
 ) -> VaryFn:
     """Regenerate (x, edge_index[, edge_attr]) with independently varied N and E.
 
     edge_index is redrawn against the sample's own node count, not the original tensor's
-    value range, so a shrunken graph never references nodes it doesn't have.
+    value range, so a shrunken graph never references nodes it doesn't have. With --axis-max,
+    sample 1 sits exactly at the pinned `num_nodes` / `num_edges` (the other keeps the
+    example's size).
     """
     x_idx = field_names.index("x")
     ei_idx = field_names.index("edge_index")
@@ -104,11 +111,18 @@ def make_vary_fn(
     n_candidates = alternative_sizes(base_n, n_lo, n_hi)
     e_candidates = alternative_sizes(base_e, e_lo, e_hi)
 
+    pins = axis_max or {}
+    pinned = "num_nodes" in pins or "num_edges" in pins
+
     def vary(i: int) -> tuple:
         if i == 0:
             return base_inputs
-        n = pick_size(n_candidates) if n_candidates else base_n
-        e = pick_size(e_candidates) if e_candidates else base_e
+        if i == 1 and pinned:
+            n = pins.get("num_nodes", base_n)
+            e = pins.get("num_edges", base_e)
+        else:
+            n = pick_size(n_candidates) if n_candidates else base_n
+            e = pick_size(e_candidates) if e_candidates else base_e
 
         sample: list = [None] * len(field_names)
         sample[x_idx] = torch.randn(n, in_channels, dtype=base_x.dtype)

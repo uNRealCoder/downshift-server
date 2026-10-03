@@ -557,3 +557,33 @@ def test_help_still_works_with_no_args_is_help():
     assert result.exit_code == 0
     assert "check" in result.output
     assert "serve" in result.output
+
+
+def test_check_axis_max_lowers_the_served_bound():
+    result = run("check", CLEAN, "--axis-max", "dim0=20", "--json")
+    assert result.exit_code == 0, result.output
+    assert parse(result)["axes"][0]["served_max"] == 20
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["seq=4", "dim0=999999", "dim0", "dim0=abc", "dim0=0"],
+    ids=["unknown-name", "above-ceiling", "no-value", "non-int", "zero"],
+)
+def test_check_bad_axis_max_is_usage_error(value):
+    result = run("check", CLEAN, "--axis-max", value, "--json")
+    assert result.exit_code == 4, result.output
+    assert result.stdout == ""
+
+
+def test_serve_axis_max_round_trips_through_serve_args():
+    from downshift.cli.runtime import ServeArgs
+
+    args = ServeArgs(
+        load=LoadSpec(CLEAN),
+        options=ServeOptions(axis_max={"dim0": 20}),
+        reference=None,
+        middleware=None,
+        log_level="warning",
+    )
+    assert ServeArgs.from_json(args.to_json()).options.axis_max == {"dim0": 20}

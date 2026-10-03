@@ -8,6 +8,8 @@ from typing import Any
 
 import torch
 
+from downshift.adapters.base import VaryFn
+
 
 def alternative_sizes(base_size: int, lo: int = 1, hi: int | None = None) -> list[int]:
     """Sizes to exercise a dynamic axis with, excluding the export-time size.
@@ -99,6 +101,92 @@ def apply_dynamic_override(
             {axis: torch.export.Dim(f"{name}_{axis}", min=1, max=1 << 16) for axis in axes}
         )
     return tuple(shapes)
+
+
+def _dim_name(dim: Any, axis: int) -> str:
+    return getattr(dim, "__name__", str(axis))
+
+
+def lower_axis_max(dynamic_shapes: tuple, axis_max: dict[str, int] | None) -> tuple:
+    """Rebuild each named Dim in `dynamic_shapes` with the same name and min and the max
+    lowered to `axis_max[name]`; Dims shared by several inputs stay shared.
+
+    An unknown name or a value outside the Dim's own [min, max] raises ValueError, which the
+    CLI reports as a usage error. The ceiling is whatever the adapter set (for Hugging Face
+    the model's position limit), so --axis-max can only narrow a bound, never widen it.
+    """
+    if not axis_max:
+        return dynamic_shapes
+    bounds: dict[str, tuple[int, int]] = {}
+    for spec in dynamic_shapes:
+        for axis, dim in (spec or {}).items():
+            bounds[_dim_name(dim, axis)] = dim_bounds(spec, axis)
+    unknown = sorted(set(axis_max) - set(bounds))
+    if unknown:
+        raise ValueError(
+            f"--axis-max names {unknown} are not axes of this model; its axes are {sorted(bounds)}"
+        )
+    for name, n in axis_max.items():
+        lo, hi = bounds[name]
+        if n > hi:
+            raise ValueError(f"--axis-max {name}={n} is above the limit of {hi} for that axis")
+        if n < lo:
+            raise ValueError(f"--axis-max {name}={n} is below the minimum of {lo} for that axis")
+    lowered = {
+        name: torch.export.Dim(name, min=bounds[name][0], max=n) for name, n in axis_max.items()
+    }
+    return tuple(
+        None
+        if spec is None
+        else {axis: lowered.get(_dim_name(dim, axis), dim) for axis, dim in spec.items()}
+        for spec in dynamic_shapes
+    )
+
+
+def _resize_axis(tensor: torch.Tensor, axis: int, size: int) -> torch.Tensor:
+    """Tile or slice `axis` to `size`: floats get noise scaled to the example's spread,
+    integers stay inside the observed value range."""
+    if tensor.shape[axis] == size:
+        return tensor
+    moved = tensor.movedim(axis, 0)
+    if moved.is_floating_point():
+        reps = -(-size // moved.shape[0])
+        tiled = moved.repeat(reps, *([1] * (moved.ndim - 1)))[:size]
+        resized = tiled + 0.1 * moved.std(unbiased=False) * torch.randn(
+            tiled.shape, dtype=moved.dtype
+        )
+    else:
+        lo = int(moved.min().item())
+        hi = max(int(moved.max().item()) + 1, lo + 1)
+        resized = torch.randint(lo, hi, (size, *moved.shape[1:]), dtype=moved.dtype)
+    return resized.movedim(0, axis)
+
+
+def pin_vary_fn(
+    inputs: tuple, dynamic_shapes: tuple, axis_max: dict[str, int], inner: VaryFn | None = None
+) -> VaryFn:
+    """Verification sampler whose sample 1 sits exactly at the --axis-max values: every
+    dynamic axis whose Dim is named in `axis_max` is resized to it, the rest keep the example's
+    size. Other samples come from `inner`, or from the default shared-axis-0 sampler."""
+    if inner is None:
+        from downshift.core.verify import make_shared_axis0_vary_fn
+
+        inner = make_shared_axis0_vary_fn(inputs, dynamic_shapes)
+
+    def vary(i: int) -> tuple:
+        if i != 1:
+            return inner(i)
+        sample = []
+        for tensor, spec in zip(inputs, dynamic_shapes, strict=True):
+            if isinstance(tensor, torch.Tensor) and spec:
+                for axis, dim in spec.items():
+                    pinned = axis_max.get(_dim_name(dim, axis))
+                    if pinned is not None:
+                        tensor = _resize_axis(tensor, axis, pinned)
+            sample.append(tensor)
+        return tuple(sample)
+
+    return vary
 
 
 def safe_capture_inputs(inputs: tuple, dynamic_shapes: tuple) -> tuple:

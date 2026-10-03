@@ -55,7 +55,7 @@ class _FakeAdapter:
     def example_inputs(self, model):
         return None
 
-    def prepare(self, model, example_inputs):
+    def prepare(self, model, example_inputs, axis_max=None):
         raise NotImplementedError
 
 
@@ -122,7 +122,7 @@ class MyAdapter:
     def example_inputs(self, model):
         return None
 
-    def prepare(self, model, example_inputs):
+    def prepare(self, model, example_inputs, axis_max=None):
         return Prepared(
             model=model,
             inputs=example_inputs,

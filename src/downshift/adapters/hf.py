@@ -14,7 +14,7 @@ from transformers import PreTrainedModel
 
 from downshift.adapters.base import Family, Prepared, VaryFn
 from downshift.adapters.embedding import EMBEDDING_ATTR, EmbeddingRecipe, PoolingHead
-from downshift.core.shapes import alternative_sizes, pick_size
+from downshift.core.shapes import alternative_sizes, lower_axis_max, pick_size
 from downshift.hf_repo import position_limit
 
 INPUT_NAMES = ("input_ids", "attention_mask")
@@ -52,7 +52,9 @@ class HFAdapter:
         input_ids = torch.randint(0, vocab, (_GUESS_BATCH, _GUESS_SEQ))
         return input_ids, torch.ones_like(input_ids)
 
-    def prepare(self, model: nn.Module, example_inputs: tuple) -> Prepared:
+    def prepare(
+        self, model: nn.Module, example_inputs: tuple, axis_max: dict[str, int] | None = None
+    ) -> Prepared:
         input_ids, attention_mask = example_inputs
         # getattr, not model.config: nn.Module's typeshed makes attribute access resolve to
         # Tensor | Module, losing the actual PretrainedConfig type getattr(..., str) keeps as Any.
@@ -63,20 +65,25 @@ class HFAdapter:
         batch = torch.export.Dim("batch", min=1, max=1 << 12)
         seq = torch.export.Dim("seq", min=1, max=max_seq)
         spec = {0: batch, 1: seq}
+        dynamic_shapes = lower_axis_max((spec, spec), axis_max)
         vocab = int(config.vocab_size)
         inputs = (input_ids, attention_mask)
         return Prepared(
             model=_FirstOutputShim(model, getattr(model, EMBEDDING_ATTR, None)),
             inputs=inputs,
             input_names=INPUT_NAMES,
-            dynamic_shapes=(spec, spec),
-            vary_fn=make_vary_fn(inputs, vocab, max_seq, longest),
+            dynamic_shapes=dynamic_shapes,
+            vary_fn=make_vary_fn(inputs, vocab, max_seq, longest, axis_max),
             family=self.family,
         )
 
 
 def make_vary_fn(
-    base_inputs: tuple, vocab_size: int, max_seq: int = 1 << 12, longest: int | None = None
+    base_inputs: tuple,
+    vocab_size: int,
+    max_seq: int = 1 << 12,
+    longest: int | None = None,
+    axis_max: dict[str, int] | None = None,
 ) -> VaryFn:
     """Verification samples after the first vary batch and sequence length, and pad: each
     row gets its own random length in [1, s] with the mask zeroed beyond it (and at least
@@ -86,17 +93,24 @@ def make_vary_fn(
     When set, sample 1 is one full-length row at exactly that length, so a graph that only
     diverges at long sequences cannot pass on short samples alone. The other sizes stay near
     the example and cannot guarantee that.
+
+    `axis_max` is --axis-max: it caps the sampled sizes, and a pinned `seq` (or `batch`) makes
+    sample 1 sit exactly at that size instead, taking over the full-length sample's slot.
     """
     input_ids, _ = base_inputs
     base_batch, base_seq = input_ids.shape
-    batch_candidates = alternative_sizes(base_batch)
-    seq_candidates = alternative_sizes(base_seq, 1, max_seq)
+    pins = axis_max or {}
+    batch_candidates = alternative_sizes(base_batch, 1, pins.get("batch"))
+    seq_candidates = alternative_sizes(base_seq, 1, min(max_seq, pins.get("seq", max_seq)))
+    pinned_seq = pins.get("seq", longest)
+    pinned_batch = pins.get("batch")
 
     def vary(i: int) -> tuple:
         if i == 0:
             return base_inputs
-        if i == 1 and longest is not None:
-            ids = torch.randint(0, vocab_size, (1, longest), dtype=input_ids.dtype)
+        if i == 1 and (pinned_seq is not None or pinned_batch is not None):
+            shape = (pinned_batch or 1, pinned_seq or base_seq)
+            ids = torch.randint(0, vocab_size, shape, dtype=input_ids.dtype)
             return ids, torch.ones_like(ids)
         b = pick_size(batch_candidates) if batch_candidates else base_batch
         s = pick_size(seq_candidates) if seq_candidates else base_seq

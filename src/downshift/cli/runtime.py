@@ -139,6 +139,7 @@ def _collect_serve_args(
     rtol: float | None,
     seed: int,
     vary: str | None,
+    axis_max: dict[str, int] | None,
 ) -> tuple[LoadSpec, ServeOptions]:
     """serve_cmd's typer parameters, collected into the LoadSpec/ServeOptions pair ServeArgs
     carries. A new serve option is one field here, one on ServeOptions, and one typer
@@ -174,6 +175,7 @@ def _collect_serve_args(
         rtol=rtol,
         seed=seed,
         vary=vary,
+        axis_max=axis_max,
         pooling=pooling,
         normalize=normalize,
     )

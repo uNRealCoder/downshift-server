@@ -86,3 +86,20 @@ def test_per_dtype_tolerance_override(monkeypatch: pytest.MonkeyPatch) -> None:
     assert mod.TOLERANCES["float16"] == (0.05, 1e-2)
     # Untouched dtypes keep their defaults.
     assert mod.TOLERANCES["float32"] == (1e-4, 1e-3)
+
+
+def test_axis_max_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DOWNSHIFT_AXIS_MAX", "seq=4096, num_nodes=500")
+    assert importlib.reload(settings).AXIS_MAX == {"seq": 4096, "num_nodes": 500}
+
+
+def test_axis_max_defaults_to_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DOWNSHIFT_AXIS_MAX", raising=False)
+    assert importlib.reload(settings).AXIS_MAX == {}
+
+
+@pytest.mark.parametrize("raw", ["seq", "seq=", "=4", "seq=x", "seq=0", "seq=-1"])
+def test_bad_axis_max_env_var_raises_clear_error(monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
+    monkeypatch.setenv("DOWNSHIFT_AXIS_MAX", raw)
+    with pytest.raises(ValueError, match="DOWNSHIFT_AXIS_MAX"):
+        importlib.reload(settings)

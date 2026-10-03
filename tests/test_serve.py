@@ -746,3 +746,19 @@ def test_health_stays_fast_while_predicts_are_queued(mlp_state, monkeypatch):
     # Generously below the 5+ second stalls a shared sync threadpool used to cause; the
     # point is "never blocks behind the predict queue", not a tight latency bound.
     assert elapsed < 1.0
+
+
+def test_axis_max_num_nodes_rejects_a_larger_graph(serve_fixture):
+    client = TestClient(build_app(serve_fixture("gnn_gcn", axis_max={"num_nodes": 500})))
+    edge_index = [[0, 1], [1, 0]]
+
+    ok = client.post(
+        "/predict/graph", json={"x": np.random.randn(500, 8).tolist(), "edge_index": edge_index}
+    )
+    too_big = client.post(
+        "/predict/graph", json={"x": np.random.randn(501, 8).tolist(), "edge_index": edge_index}
+    )
+
+    assert ok.status_code == 200, ok.text
+    assert too_big.status_code == 400
+    assert "500" in too_big.json()["detail"]

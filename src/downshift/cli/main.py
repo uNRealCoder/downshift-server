@@ -33,6 +33,7 @@ from downshift.cli.options import (
     AccessLogOpt,
     AdapterOpt,
     AtolOpt,
+    AxisMaxOpt,
     DynamicOpt,
     InputsOpt,
     InterOpThreadsOpt,
@@ -142,6 +143,12 @@ def _exit_on_error(debug: bool) -> Iterator[None]:
         raise typer.Exit(EXIT_CRASH) from exc
 
 
+def _axis_max(values: list[str] | None) -> dict[str, int] | None:
+    """--axis-max NAME=N (repeatable) as {name: N}; without the flag, DOWNSHIFT_AXIS_MAX."""
+    parsed = settings.parse_axis_max(values) if values else dict(settings.AXIS_MAX)
+    return parsed or None
+
+
 def slug(spec: str) -> str:
     """tests.models.clean_mlp:make_model -> clean_mlp; ./gat_v3.pt -> gat_v3; hf/bert/ -> bert."""
     from downshift.loading import is_import_spec
@@ -183,6 +190,7 @@ def check_cmd(
     adapter: AdapterOpt = None,
     k: SamplesOpt = settings.SAMPLES,
     dynamic: DynamicOpt = None,
+    axis_max: AxisMaxOpt = None,
     atol: AtolOpt = None,
     rtol: RtolOpt = None,
     seed: SeedOpt = 0,
@@ -200,6 +208,7 @@ def check_cmd(
         spec = LoadSpec(model, inputs, model_class, unsafe_load, pooling, normalize)
         loaded = _load(spec)
         dynamic_spec = parse_dynamic_spec(dynamic) if dynamic else None
+        axis_max_spec = _axis_max(axis_max)
         if loaded.onnx_path is not None:
             # --reference shares --pooling/--normalize with MODEL: the two only agree on
             # numerics if the reference model's embedding recipe matches the exported one.
@@ -215,6 +224,7 @@ def check_cmd(
                 rtol=rtol,
                 seed=seed,
                 vary=vary,
+                axis_max=axis_max_spec,
             )
         else:
             assert loaded.model is not None
@@ -228,6 +238,7 @@ def check_cmd(
                 rtol=rtol,
                 seed=seed,
                 vary=vary,
+                axis_max=axis_max_spec,
             )
         _log_capture_failure(verdict, log_level)
         _emit(verdict, model, json_out)
@@ -254,6 +265,7 @@ def export_cmd(
     adapter: AdapterOpt = None,
     k: SamplesOpt = settings.SAMPLES,
     dynamic: DynamicOpt = None,
+    axis_max: AxisMaxOpt = None,
     atol: AtolOpt = None,
     rtol: RtolOpt = None,
     seed: SeedOpt = 0,
@@ -290,6 +302,7 @@ def export_cmd(
             rtol=rtol,
             seed=seed,
             vary=vary,
+            axis_max=_axis_max(axis_max),
         )
         _log_capture_failure(verdict, log_level)
         manifest = manifest_path_for(onnx_path) if verdict.onnx_path else None
@@ -326,6 +339,7 @@ def serve_cmd(
     adapter: AdapterOpt = None,
     k: SamplesOpt = settings.SAMPLES,
     dynamic: DynamicOpt = None,
+    axis_max: AxisMaxOpt = None,
     intra_op_threads: IntraOpThreadsOpt = settings.INTRA_OP_THREADS,
     inter_op_threads: InterOpThreadsOpt = settings.INTER_OP_THREADS,
     output_encoding: OutputEncodingOpt = OutputEncoding(settings.OUTPUT_ENCODING),
@@ -387,6 +401,7 @@ def serve_cmd(
             rtol,
             seed,
             vary,
+            _axis_max(axis_max),
         )
         args = ServeArgs(
             load=load,

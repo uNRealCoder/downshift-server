@@ -8,6 +8,7 @@ from downshift.core.shapes import (
     alternative_sizes,
     apply_dynamic_override,
     dim_bounds,
+    lower_axis_max,
     parse_dynamic_spec,
     safe_capture_inputs,
 )
@@ -91,3 +92,61 @@ def test_check_with_dynamic_override_is_still_clean():
     verdict = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(), dynamic={"x": [0]})
     assert verdict.status == "CLEAN", verdict.reason
     assert verdict.dynamic_dims == {"x": [0]}
+
+
+def test_lower_axis_max_keeps_name_and_min_and_shares_dims():
+    batch = torch.export.Dim("batch", min=2, max=64)
+    seq = torch.export.Dim("seq", min=1, max=128)
+    spec = {0: batch, 1: seq}
+
+    shapes = lower_axis_max((spec, spec, None), {"seq": 32})
+
+    assert shapes[2] is None
+    assert shapes[0][1] is shapes[1][1]
+    assert dim_bounds(shapes[0], 1) == (1, 32)
+    assert shapes[0][1].__name__ == "seq"
+    assert shapes[0][0] is batch
+    assert lower_axis_max((spec,), None) == (spec,)
+
+
+def test_lower_axis_max_rejects_unknown_name_listing_the_axes():
+    spec = {0: torch.export.Dim("batch", min=1, max=64)}
+    with pytest.raises(ValueError, match=r"\['nodes'\].*\['batch'\]"):
+        lower_axis_max((spec,), {"nodes": 5})
+
+
+def test_lower_axis_max_rejects_a_value_above_the_ceiling():
+    spec = {0: torch.export.Dim("seq", min=1, max=64)}
+    with pytest.raises(ValueError, match="seq=65 is above the limit of 64"):
+        lower_axis_max((spec,), {"seq": 65})
+
+
+def test_generic_axis_max_lowers_dim0_and_pins_sample_one():
+    verdict = downshift.check(
+        clean_mlp.make_model(), clean_mlp.make_inputs(), axis_max={"dim0": 20}, k=3
+    )
+
+    assert verdict.status == "CLEAN", verdict.reason
+    (fact,) = verdict.axes
+    assert fact.served_max == 20
+    assert [shapes[0][0] for shapes in verdict.numerics.sample_shapes][1] == 20
+
+
+def test_axis_max_applies_to_dynamic_override_axes():
+    verdict = downshift.check(
+        clean_mlp.make_model(),
+        clean_mlp.make_inputs(),
+        dynamic={"x": [0]},
+        axis_max={"x_0": 12},
+        k=3,
+    )
+
+    assert verdict.status == "CLEAN", verdict.reason
+    assert verdict.axes[0].name == "x_0"
+    assert verdict.axes[0].served_max == 12
+    assert verdict.numerics.sample_shapes[1][0][0] == 12
+
+
+def test_axis_max_unknown_name_is_a_value_error():
+    with pytest.raises(ValueError, match="dim0"):
+        downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(), axis_max={"seq": 4})

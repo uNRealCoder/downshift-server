@@ -141,6 +141,7 @@ def _prepare(loaded: LoadedModel, opts: ServeOptions) -> Prepared:
         opts.adapter or loaded.adapter_hint,
         opts.dynamic,
         vary=opts.vary,
+        axis_max=opts.axis_max,
     )
 
 
@@ -164,6 +165,7 @@ def _verdict_for(
             rtol=opts.rtol,
             seed=opts.seed,
             vary=opts.vary,
+            axis_max=opts.axis_max,
             timings=timings,
         )
     prepared = _prepare(loaded, opts)

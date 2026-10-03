@@ -80,6 +80,7 @@ def export(
     rtol: float | None = None,
     seed: int = 0,
     vary: VaryFn | str | None = None,
+    axis_max: dict[str, int] | None = None,
 ) -> ExportVerdict:
     """check() plus writing the .onnx and its manifest. `output` is the .onnx path.
 
@@ -101,6 +102,7 @@ def export(
         rtol=rtol,
         seed=seed,
         vary=vary,
+        axis_max=axis_max,
     )
     if verdict.onnx_program is None:
         return verdict

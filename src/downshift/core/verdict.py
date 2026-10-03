@@ -23,7 +23,13 @@ from downshift.core.axes import AxisFact, axis_facts
 from downshift.core.capture import capture
 from downshift.core.inputs import synthesize
 from downshift.core.phase import Phase, report
-from downshift.core.shapes import apply_dynamic_override, dynamic_bounds, safe_capture_inputs
+from downshift.core.shapes import (
+    apply_dynamic_override,
+    dynamic_bounds,
+    lower_axis_max,
+    pin_vary_fn,
+    safe_capture_inputs,
+)
 from downshift.core.verify import NumericsReport, OnnxRuntimeError, verify
 from downshift.settings import DEFAULT_SAMPLES
 
@@ -171,22 +177,32 @@ def prepare_model(
     adapter: Adapter | str | None = None,
     dynamic: dict[str, list[int]] | None = None,
     vary: VaryFn | str | None = None,
+    axis_max: dict[str, int] | None = None,
 ) -> Prepared:
     """Pick an adapter, synthesise inputs if needed, and flatten into export form.
 
     vary overrides the adapter's own vary_fn: a spec string is imported like --adapter's
     custom-file form (fn(i) -> inputs; fn(0) should return the example).
+
+    axis_max ({axis name: largest size to serve}, --axis-max) lowers the named Dims' max and
+    pins verification sample 1 at those sizes. The adapter does it for its own axes; with
+    `dynamic` the adapter's axes are replaced by `<input>_<axis>` ones, so it is applied to
+    those here instead.
     """
     if isinstance(adapter, str):
         adapter = registry.get(adapter)
     if adapter is None:
         adapter = registry.detect(model, example_inputs)
     example_inputs = synthesize(model, adapter, example_inputs)
-    prepared = adapter.prepare(model, example_inputs)
+    prepared = adapter.prepare(model, example_inputs, axis_max=None if dynamic else axis_max)
     if dynamic:
-        prepared.dynamic_shapes = apply_dynamic_override(
-            prepared.input_names, prepared.inputs, dynamic
+        prepared.dynamic_shapes = lower_axis_max(
+            apply_dynamic_override(prepared.input_names, prepared.inputs, dynamic), axis_max
         )
+        if axis_max:
+            prepared.vary_fn = pin_vary_fn(
+                prepared.inputs, prepared.dynamic_shapes, axis_max, prepared.vary_fn
+            )
     if vary is not None:
         prepared.vary_fn = import_object(vary) if isinstance(vary, str) else vary
     return prepared
@@ -313,6 +329,7 @@ def check(
     rtol: float | None = None,
     seed: int = 0,
     vary: VaryFn | str | None = None,
+    axis_max: dict[str, int] | None = None,
 ) -> ExportVerdict:
     """Export in memory, verify, and return the verdict. Writes nothing to disk.
 
@@ -325,7 +342,7 @@ def check(
 
     atol/rtol default to None, meaning "pick by the model's floating dtype" (see
     verify.default_tolerances). seed makes the verification samples reproducible. vary
-    overrides the adapter's own vary_fn; see prepare_model.
+    overrides the adapter's own vary_fn; see prepare_model, which also says what axis_max does.
     """
     if fp16:
         model = copy.deepcopy(model).half()
@@ -334,7 +351,7 @@ def check(
                 t.half() if isinstance(t, torch.Tensor) and t.is_floating_point() else t
                 for t in example_inputs
             )
-    prepared = prepare_model(model, example_inputs, adapter, dynamic, vary=vary)
+    prepared = prepare_model(model, example_inputs, adapter, dynamic, vary=vary, axis_max=axis_max)
     return build_verdict(
         prepared, k=k, verify_numerics=verify_numerics, atol=atol, rtol=rtol, seed=seed
     )

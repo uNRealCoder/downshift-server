@@ -14,7 +14,7 @@ from torch import nn
 
 from downshift.adapters._flatten import build_shim_class
 from downshift.adapters.base import Family, Prepared
-from downshift.core.shapes import infer_dynamic_shapes
+from downshift.core.shapes import infer_dynamic_shapes, lower_axis_max, pin_vary_fn
 
 _GUESS_SPATIAL = 32
 
@@ -56,7 +56,9 @@ class GenericAdapter:
         guess = _guess_single_tensor_input(model)
         return (guess,) if guess is not None else None
 
-    def prepare(self, model: nn.Module, example_inputs: tuple) -> Prepared:
+    def prepare(
+        self, model: nn.Module, example_inputs: tuple, axis_max: dict[str, int] | None = None
+    ) -> Prepared:
         flattened = _flatten_dataclass(model, example_inputs)
         if flattened is not None:
             model, inputs, names = flattened
@@ -66,12 +68,13 @@ class GenericAdapter:
             names = tuple(
                 param_names[i] if i < len(param_names) else f"input_{i}" for i in range(len(inputs))
             )
+        dynamic_shapes = lower_axis_max(infer_dynamic_shapes(inputs), axis_max)
         return Prepared(
             model=model,
             inputs=inputs,
             input_names=names,
-            dynamic_shapes=infer_dynamic_shapes(inputs),
-            vary_fn=None,
+            dynamic_shapes=dynamic_shapes,
+            vary_fn=pin_vary_fn(inputs, dynamic_shapes, axis_max) if axis_max else None,
             family=self.family,
         )
 

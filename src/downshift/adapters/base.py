@@ -53,4 +53,10 @@ class Adapter(Protocol):
         """Adapter-derived example inputs, used when the user gave none. None means no guess."""
         ...
 
-    def prepare(self, model: nn.Module, example_inputs: tuple) -> Prepared: ...
+    def prepare(
+        self, model: nn.Module, example_inputs: tuple, axis_max: dict[str, int] | None = None
+    ) -> Prepared:
+        """`axis_max` is --axis-max: {Dim name: largest size to serve}. Lower the named Dims'
+        max (core.shapes.lower_axis_max validates names and ceilings) and make verification
+        sample 1 sit exactly at those sizes (core.shapes.pin_vary_fn for the generic case)."""
+        ...
