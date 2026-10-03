@@ -6,6 +6,7 @@ Exporting the loaded model is the hf adapter's job (adapters/hf.py); this module
 the repo. Only imported when transformers is installed.
 """
 
+import json
 from pathlib import Path
 
 from transformers import (
@@ -19,6 +20,7 @@ from transformers import (
 )
 
 from downshift.adapters.embedding import EMBEDDING_ATTR, EmbeddingRecipe, resolve_recipe
+from downshift.adapters.pooling import PoolingChoice
 from downshift.adapters.text import SIGMOID, SOFTMAX, TextIO
 
 # Task heads whose first output is the logits: a repo that ships one is loaded with it, not
@@ -28,6 +30,8 @@ _TASK_HEADS = {
     "ForSequenceClassification": AutoModelForSequenceClassification,
     "ForTokenClassification": AutoModelForTokenClassification,
 }
+# Class-name suffixes of models that generate text; without an embedding recipe they are refused.
+_TEXT_GENERATING_SUFFIXES = ("ForCausalLM", "ForConditionalGeneration", "LMHeadModel")
 _UNBOUNDED_LENGTH = 1 << 20  # tokenizers report "no limit" as a huge sentinel
 # A tokenizer is only real if one of these is next to config.json.
 _VOCAB_FILES = (
@@ -60,10 +64,40 @@ def position_limit(config: PretrainedConfig) -> int | None:
     return max(usable, _MIN_USABLE_POSITIONS)
 
 
+class RemoteCodeError(ValueError):
+    """The repo's config or tokenizer config names code to download and run (auto_map)."""
+
+
+class TextGenerationModelError(ValueError):
+    """The repo is a text generator with no embedding recipe; downshift serves embedders."""
+
+
+def _refuse_remote_code(root: Path) -> None:
+    for name in ("config.json", "tokenizer_config.json"):
+        try:
+            data = json.loads((root / name).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue  # a missing or unreadable file is the loaders' to report
+        if isinstance(data, dict) and data.get("auto_map"):
+            raise RemoteCodeError(
+                f"{name} has an auto_map, so loading it would run Python code from the repo. "
+                "downshift never runs a repo's own code (no trust_remote_code)"
+            )
+
+
 def load_config(path: str) -> PretrainedConfig:
-    """The repo's config.json, read from this machine only (local_files_only)."""
+    """The repo's config.json, read from this machine only (local_files_only). Raises
+    RemoteCodeError for a repo that names its own code."""
+    _refuse_remote_code(Path(path))
     config: PretrainedConfig = AutoConfig.from_pretrained(path, local_files_only=True)
     return config
+
+
+def _text_generator(config: PretrainedConfig) -> str | None:
+    for architecture in getattr(config, "architectures", None) or ():
+        if str(architecture).endswith(_TEXT_GENERATING_SUFFIXES):
+            return str(architecture)
+    return None
 
 
 def _task_head(config: PretrainedConfig) -> str | None:
@@ -104,9 +138,20 @@ def load_pretrained(
     """
     config = load_config(path)
     recipe = embedding_recipe(path, config, pooling, normalize)  # before the weights: fail fast
+    generator = _text_generator(config)
+    if generator is not None and (recipe is None or pooling == PoolingChoice.none):
+        raise TextGenerationModelError(
+            f"{generator}: this model generates text; downshift serves text embedding models; "
+            "pass --pooling lasttoken if this checkpoint is an embedder"
+        )
     head = _task_head(config)
     auto_class = _TASK_HEADS[head] if head is not None else AutoModel
-    model: PreTrainedModel = auto_class.from_pretrained(path, local_files_only=True)
+    # A safetensors file is plain tensors; without this, transformers may fall back to a
+    # pickled pytorch_model.bin next to it.
+    safetensors = any(Path(path).glob("*.safetensors"))
+    model: PreTrainedModel = auto_class.from_pretrained(
+        path, local_files_only=True, **({"use_safetensors": True} if safetensors else {})
+    )
     setattr(model, EMBEDDING_ATTR, recipe)
     return model
 

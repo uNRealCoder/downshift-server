@@ -216,7 +216,11 @@ def _load_hf(
         ) from exc
     try:
         model = hf_repo.load_pretrained(spec, pooling, normalize)
-    except RecipeError as exc:  # about the flags or the recipe, not the download
+    except (
+        RecipeError,
+        hf_repo.RemoteCodeError,
+        hf_repo.TextGenerationModelError,
+    ) as exc:  # about the flags, the recipe or what the repo is, not the download
         raise LoadError(f"{spec}: {exc}") from exc
     except (OSError, ValueError) as exc:  # a bad or incomplete download surfaces as either
         raise LoadError(
