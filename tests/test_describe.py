@@ -211,3 +211,22 @@ def test_describe_has_no_axes_for_a_verdict_without_them(mlp_state, monkeypatch)
     monkeypatch.setattr(mlp_state.verdict, "axes", [])
 
     assert describe(mlp_state, "http://testserver/predict").axes == []
+
+
+def test_embedding_block_lists_the_named_prompts_and_the_default():
+    from types import SimpleNamespace
+
+    from downshift.adapters.embedding import EmbeddingRecipe
+    from downshift.serve import describe as describe_mod
+
+    recipe = EmbeddingRecipe(
+        "lasttoken", True, None, "modules.json", {"query": "Q: ", "document": ""}, "query"
+    )
+    outputs = [describe_mod.TensorSchema(name="output_0", dtype="float32", shape=["batch", 32])]
+
+    info = describe_mod._embedding(SimpleNamespace(embedding=recipe), outputs)
+
+    assert info is not None
+    assert info.prompts == {"query": "Q: ", "document": ""}
+    assert info.default_prompt == "query"
+    assert info.dimension == 32

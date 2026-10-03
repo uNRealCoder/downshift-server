@@ -13,7 +13,12 @@ from torch import nn
 from transformers import PreTrainedModel
 
 from downshift.adapters.base import Family, Prepared, VaryFn
-from downshift.adapters.embedding import EMBEDDING_ATTR, EmbeddingRecipe, PoolingHead
+from downshift.adapters.embedding import (
+    EMBEDDING_ATTR,
+    PADDING_SIDE_ATTR,
+    EmbeddingRecipe,
+    PoolingHead,
+)
 from downshift.core.shapes import alternative_sizes, lower_axis_max, pick_size
 from downshift.hf_repo import position_limit
 
@@ -73,7 +78,14 @@ class HFAdapter:
             inputs=inputs,
             input_names=INPUT_NAMES,
             dynamic_shapes=dynamic_shapes,
-            vary_fn=make_vary_fn(inputs, vocab, max_seq, longest, axis_max),
+            vary_fn=make_vary_fn(
+                inputs,
+                vocab,
+                max_seq,
+                longest,
+                axis_max,
+                getattr(model, PADDING_SIDE_ATTR, "right"),
+            ),
             family=self.family,
         )
 
@@ -84,10 +96,13 @@ def make_vary_fn(
     max_seq: int = 1 << 12,
     longest: int | None = None,
     axis_max: dict[str, int] | None = None,
+    padding_side: str = "right",
 ) -> VaryFn:
     """Verification samples after the first vary batch and sequence length, and pad: each
     row gets its own random length in [1, s] with the mask zeroed beyond it (and at least
     one attended position), so padding is actually exercised rather than always-full masks.
+    With `padding_side` "left" the zeros sit at the start of each row instead, as the
+    tokenizer of a decoder embedder will pad at serve time.
 
     `longest` is the longest sequence the model itself declares (its position embeddings).
     When set, sample 1 is one full-length row at exactly that length, so a graph that only
@@ -116,7 +131,11 @@ def make_vary_fn(
         s = pick_size(seq_candidates) if seq_candidates else base_seq
         ids = torch.randint(0, vocab_size, (b, s), dtype=input_ids.dtype)
         lengths = torch.randint(1, s + 1, (b,))
-        mask = (torch.arange(s).unsqueeze(0) < lengths.unsqueeze(1)).to(input_ids.dtype)
-        return ids, mask
+        positions = torch.arange(s).unsqueeze(0)
+        if padding_side == "left":
+            attended = positions >= (s - lengths).unsqueeze(1)
+        else:
+            attended = positions < lengths.unsqueeze(1)
+        return ids, attended.to(input_ids.dtype)
 
     return vary

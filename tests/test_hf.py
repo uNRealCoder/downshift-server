@@ -171,3 +171,85 @@ def test_a_pickle_only_repo_does_not_run_its_payload(tmp_path):
         pass
 
     assert not marker.exists()
+
+
+# --- a decoder embedder: export, left padding, releasing the torch model ---------------------
+
+
+def _decoder_prepared(path: str):
+    from downshift.core.verdict import prepare_model
+
+    loaded = load_model(LoadSpec(path))
+    return loaded, prepare_model(loaded.model, loaded.example_inputs, None, None)
+
+
+@pytest.mark.needs_torch_26
+def test_decoder_embedder_exports_clean_on_onnxruntime(tmp_path):
+    path = hf_repo.write_decoder_repo(tmp_path, recipe="lasttoken")
+    loaded = load_model(LoadSpec(path))
+
+    verdict = downshift.check(loaded.model, loaded.example_inputs)
+
+    assert verdict.status == "CLEAN", verdict.reason
+    assert verdict.recommended_backend == "onnxruntime"
+    assert verdict.numerics is not None and verdict.numerics.shape_generalization is True
+
+
+def test_the_padding_side_is_read_from_the_tokenizer_config(tmp_path):
+    from downshift.adapters.embedding import PADDING_SIDE_ATTR
+
+    left = hf_repo.write_decoder_repo(tmp_path / "l", recipe="lasttoken", padding_side="left")
+    right = hf_repo.write_decoder_repo(tmp_path / "r", recipe="lasttoken", padding_side="right")
+
+    assert getattr(load_model(LoadSpec(left)).model, PADDING_SIDE_ATTR) == "left"
+    assert getattr(load_model(LoadSpec(right)).model, PADDING_SIDE_ATTR) == "right"
+
+
+def test_a_verify_sample_has_leading_mask_zeros_under_left_padding(tmp_path):
+    (tmp_path / "l").mkdir()
+    (tmp_path / "r").mkdir()
+    left = hf_repo.write_decoder_repo(tmp_path / "l", recipe="lasttoken", padding_side="left")
+    right = hf_repo.write_decoder_repo(tmp_path / "r", recipe="lasttoken", padding_side="right")
+
+    _, prepared = _decoder_prepared(left)
+    masks = [prepared.vary_fn(i)[1] for i in range(2, 12)]  # type: ignore[misc]
+    assert any(m[:, 0].eq(0).any() for m in masks)
+    assert all(m[:, -1].eq(1).all() for m in masks)  # an attended token always ends the row
+
+    _, prepared = _decoder_prepared(right)
+    masks = [prepared.vary_fn(i)[1] for i in range(2, 12)]  # type: ignore[misc]
+    assert all(m[:, 0].eq(1).all() for m in masks)
+    assert any(m[:, -1].eq(0).any() for m in masks)
+
+
+@pytest.mark.needs_torch_26
+def test_the_torch_model_is_released_after_a_clean_onnx_verdict(tmp_path):
+    import gc
+    import weakref
+
+    from downshift.serve.engine import prepare_serving
+
+    path = hf_repo.write_decoder_repo(tmp_path, recipe="lasttoken")
+    loaded = load_model(LoadSpec(path))
+    ref = weakref.ref(loaded.model)
+
+    state = prepare_serving(loaded)
+    gc.collect()
+
+    assert state.backend.name == "onnxruntime"
+    assert ref() is None
+    assert loaded.model is None
+    assert state.verdict.prepared is None
+    assert state.axis_bounds  # read off the Prepared before it was dropped
+    assert state.verdict.numerics is not None and state.verdict.numerics.session is not None
+
+
+def test_the_torch_backend_keeps_its_model(tmp_path):
+    from downshift.serve.engine import ServeOptions, prepare_serving
+
+    path = hf_repo.write_decoder_repo(tmp_path, recipe="lasttoken")
+
+    state = prepare_serving(load_model(LoadSpec(path)), ServeOptions(backend="torch"))
+
+    assert state.backend.name == "torch"
+    assert state.verdict.prepared is not None

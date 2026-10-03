@@ -451,3 +451,18 @@ def test_check_leaves_global_rng_alone():
 
     assert not torch.equal(first.net[0].weight, second.net[0].weight)
     assert not torch.equal(before, torch.get_rng_state())  # the RNG advanced, wasn't reset
+
+
+def test_verify_logs_one_progress_line_per_sample_with_every_input_shape(caplog):
+    import logging
+
+    from downshift.logs import REPORT_LOGGER
+
+    with caplog.at_level(logging.INFO, logger=REPORT_LOGGER):
+        verdict = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(), k=3)
+
+    lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("verify:")]
+    assert verdict.numerics is not None
+    assert len(lines) == 3
+    for i, line in enumerate(lines, start=1):
+        assert line.startswith(f"verify: sample {i}/3, x [")

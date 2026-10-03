@@ -188,6 +188,8 @@ def test_schema_says_what_kind_of_vector_this_is(client):
         "dimension": hf_repo.HIDDEN,
         "max_seq_length": 16,
         "from": "modules.json",
+        "prompts": {},
+        "default_prompt": None,
     }
     assert schema["text_input"]["max_length"] == 16
 
@@ -528,3 +530,55 @@ def test_worker_args_carry_the_overrides(monkeypatch, repo):
 
     schema = worker.get("/schema").json()["embedding"]
     assert (schema["pooling"], schema["normalized"]) == ("cls", False)
+
+
+def test_the_recipe_reads_named_prompts_and_the_default_prompt_name(tmp_path):
+    path = hf_repo.write_encoder_repo(tmp_path)
+    (tmp_path / "config_sentence_transformers.json").write_text(
+        json.dumps(
+            {"prompts": {"query": "Q: ", "document": "", "bad": 3}, "default_prompt_name": "query"}
+        )
+    )
+
+    recipe = read_recipe(Path(path))
+
+    assert recipe is not None
+    assert recipe.prompts == {"query": "Q: ", "document": ""}  # non-string values are dropped
+    assert recipe.default_prompt == "query"
+
+
+def test_a_default_prompt_name_with_no_such_prompt_is_ignored(tmp_path):
+    path = hf_repo.write_encoder_repo(tmp_path)
+    (tmp_path / "config_sentence_transformers.json").write_text(
+        json.dumps({"prompts": {"query": "Q: "}, "default_prompt_name": "nope"})
+    )
+
+    recipe = read_recipe(Path(path))
+
+    assert recipe is not None and recipe.default_prompt is None
+
+
+def test_a_repo_without_the_file_has_no_prompts(tmp_path):
+    recipe = read_recipe(Path(hf_repo.write_encoder_repo(tmp_path)))
+
+    assert recipe is not None and recipe.prompts == {} and recipe.default_prompt is None
+
+
+def test_pooling_flag_on_a_bare_repo_still_reads_the_prompts(tmp_path):
+    path = hf_repo.write_encoder_repo(tmp_path, modules=None, pooling=None)
+    (tmp_path / "config_sentence_transformers.json").write_text(
+        json.dumps({"prompts": {"query": "Q: "}})
+    )
+
+    recipe = resolve_recipe(path, "lasttoken", None, has_head=False)
+
+    assert recipe is not None and recipe.prompts == {"query": "Q: "}
+
+
+def test_the_pooled_output_is_float32_whatever_the_hidden_dtype():
+    from downshift.adapters.embedding import EmbeddingRecipe, PoolingHead
+
+    head = PoolingHead(EmbeddingRecipe("lasttoken", True, None, "--pooling"))
+    hidden = torch.randn(2, 5, 8).bfloat16()
+
+    assert head(hidden, torch.ones(2, 5, dtype=torch.long)).dtype == torch.float32

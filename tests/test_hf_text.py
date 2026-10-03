@@ -381,3 +381,98 @@ def test_app_for_takes_tokenizer_from_independent_of_reference(embedding_onnx, e
 
     body = client.post("/predict", json={"text": ["hello world"]}).json()
     assert body["shapes"]["output_0"] == [1, hf_repo.HIDDEN]
+
+
+# --- decoder embedder: left and right padding, named prompts (0.5.0 E3, E5) -------------------
+
+import json  # noqa: E402
+
+TEXTS = ["hello", "the capital hello world", "world the"]
+
+
+def _decoder_state(path):
+    return prepare_serving(load_model(LoadSpec(str(path))), ServeOptions(warmup=0))
+
+
+def _embed(client: TestClient, **body) -> np.ndarray:
+    response = client.post("/predict", json=body)
+    assert response.status_code == 200, response.text
+    return np.asarray(response.json()["outputs"]["output_0"])
+
+
+@pytest.mark.needs_torch_26
+def test_decoder_text_gives_one_vector_per_row_equal_under_either_padding(tmp_path):
+    (tmp_path / "left").mkdir()
+    (tmp_path / "right").mkdir()
+    left = hf_repo.write_decoder_repo(tmp_path / "left", recipe="lasttoken", padding_side="left")
+    right = hf_repo.write_decoder_repo(tmp_path / "right", recipe="lasttoken", padding_side="right")
+    left_state = _decoder_state(left)
+    right_state = _decoder_state(right)
+    assert left_state.backend.name == right_state.backend.name == "onnxruntime"
+    assert left_state.text is not None and left_state.text.tokenizer.padding_side == "left"
+    assert right_state.text is not None and right_state.text.tokenizer.padding_side == "right"
+
+    on_left = _embed(TestClient(build_app(left_state)), text=TEXTS)
+    on_right = _embed(TestClient(build_app(right_state)), text=TEXTS)
+
+    assert on_left.shape == (len(TEXTS), hf_repo.DECODER_HIDDEN)
+    assert np.allclose(on_left, on_right, atol=1e-4)
+    assert np.allclose(np.linalg.norm(on_left, axis=1), 1.0, atol=1e-4)  # the recipe normalises
+
+
+@pytest.fixture(scope="module")
+def prompted_client(tmp_path_factory) -> TestClient:
+    path = tmp_path_factory.mktemp("prompted")
+    hf_repo.write_decoder_repo(
+        path, recipe="lasttoken", prompts={"query": "the ", "document": "world "}
+    )
+    return TestClient(build_app(_decoder_state(path)))
+
+
+@pytest.mark.needs_torch_26
+def test_prompt_name_prepends_the_named_prompt_before_tokenizing(prompted_client):
+    named = _embed(prompted_client, text=["capital"], prompt_name="query")
+    typed = _embed(prompted_client, text=["the capital"])
+    plain = _embed(prompted_client, text=["capital"])
+
+    assert np.allclose(named, typed, atol=1e-6)
+    assert not np.array_equal(named, plain)
+
+
+@pytest.mark.needs_torch_26
+def test_unknown_prompt_name_is_a_400_listing_the_names_with_a_cut_echo(prompted_client):
+    response = prompted_client.post("/predict", json={"text": ["hi"], "prompt_name": "x" * 500})
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert "['document', 'query']" in detail
+    assert "x" * 64 not in detail  # the repr, quotes included, is cut at 64 characters
+    assert len(detail) < 200
+
+
+@pytest.mark.needs_torch_26
+def test_prompt_name_without_text_is_a_400(prompted_client):
+    response = prompted_client.post(
+        "/predict",
+        json={"inputs": {"input_ids": [[1]], "attention_mask": [[1]]}, "prompt_name": "query"},
+    )
+
+    assert response.status_code == 400
+    assert "text" in response.json()["detail"]
+
+
+@pytest.mark.needs_torch_26
+def test_default_prompt_name_applies_when_a_request_names_none(tmp_path):
+    path = hf_repo.write_decoder_repo(tmp_path, recipe="lasttoken", prompts={"query": "the "})
+    config_file = tmp_path / "config_sentence_transformers.json"
+    config = json.loads(config_file.read_text())
+    config["default_prompt_name"] = "query"
+    config_file.write_text(json.dumps(config))
+    client = TestClient(build_app(_decoder_state(path)))
+
+    schema = client.get("/schema").json()["embedding"]
+    assert schema["prompts"] == {"query": "the "}
+    assert schema["default_prompt"] == "query"
+    assert np.allclose(
+        _embed(client, text=["capital"]), _embed(client, text=["capital"], prompt_name="query")
+    )

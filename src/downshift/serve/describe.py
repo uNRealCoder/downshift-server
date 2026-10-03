@@ -204,6 +204,8 @@ def _embedding(state: ServingState, outputs: list[TensorSchema]) -> EmbeddingInf
             "dimension": last if isinstance(last, int) else None,
             "max_seq_length": recipe.max_seq_length,
             "from": recipe.origin,
+            "prompts": recipe.prompts,
+            "default_prompt": recipe.default_prompt,
         }
     )
 

@@ -13,7 +13,7 @@ with the wrong pooling still returns plausible vectors, just worse ones.
 """
 
 import json
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +25,9 @@ from downshift.adapters.pooling import PoolingChoice
 
 # Set on the loaded model by hf_repo.load_pretrained; the hf adapter reads it in prepare().
 EMBEDDING_ATTR = "downshift_embedding"
+# The tokenizer's padding side ("left" or "right"), set beside EMBEDDING_ATTR; the verify
+# sampler pads the same way the tokenizer will at serve time.
+PADDING_SIDE_ATTR = "downshift_padding_side"
 
 _POOLING_FLAGS = {
     "pooling_mode_cls_token": PoolingChoice.cls,
@@ -48,6 +51,8 @@ class EmbeddingRecipe:
     normalize: bool
     max_seq_length: int | None  # what the model was trained at; None when the repo does not say
     origin: str  # "modules.json", or which flag overrode it
+    prompts: dict[str, str] = field(default_factory=dict)  # name -> text a request may prepend
+    default_prompt: str | None = None  # the name applied when a request names none
 
     def describe(self) -> str:
         return f"{self.pooling} pooling" + (", L2-normalised" if self.normalize else "")
@@ -68,6 +73,19 @@ def _max_seq_length(*dirs: Path) -> int | None:
         if isinstance(config, dict) and isinstance(config.get("max_seq_length"), int):
             return int(config["max_seq_length"])
     return None
+
+
+def _prompts(root: Path) -> tuple[dict[str, str], str | None]:
+    """The named prompts and default_prompt_name from config_sentence_transformers.json."""
+    config = _read_json(root / "config_sentence_transformers.json")
+    if not isinstance(config, dict):
+        return {}, None
+    raw = config.get("prompts")
+    prompts = (
+        {str(k): v for k, v in raw.items() if isinstance(v, str)} if isinstance(raw, dict) else {}
+    )
+    default = config.get("default_prompt_name")
+    return prompts, default if isinstance(default, str) and default in prompts else None
 
 
 def _pooling_mode(directory: Path) -> str:
@@ -113,8 +131,14 @@ def read_recipe(path: Path) -> EmbeddingRecipe | None:
             )
     if pooling is None:
         raise RecipeError("modules.json has no Pooling module")
+    prompts, default_prompt = _prompts(path)
     return EmbeddingRecipe(
-        pooling, normalize, _max_seq_length(transformer_dir, path), "modules.json"
+        pooling,
+        normalize,
+        _max_seq_length(transformer_dir, path),
+        "modules.json",
+        prompts,
+        default_prompt,
     )
 
 
@@ -153,7 +177,10 @@ def resolve_recipe(
         return replace(
             detected, normalize=bool(normalize), origin=f"{detected.origin}, --normalize changed"
         )
-    base = detected or EmbeddingRecipe(pooling, False, _max_seq_length(root), "--pooling")
+    prompts, default_prompt = _prompts(root)
+    base = detected or EmbeddingRecipe(
+        pooling, False, _max_seq_length(root), "--pooling", prompts, default_prompt
+    )
     return replace(
         base,
         pooling=str(pooling),
@@ -191,5 +218,6 @@ class PoolingHead(nn.Module):
         self.normalize = recipe.normalize
 
     def forward(self, hidden: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        pooled = pool(hidden, mask, self.mode)
+        # float32 on the wire whatever the checkpoint's dtype; a no-op for float32 models
+        pooled = pool(hidden, mask, self.mode).float()
         return F.normalize(pooled, p=2.0, dim=1) if self.normalize else pooled

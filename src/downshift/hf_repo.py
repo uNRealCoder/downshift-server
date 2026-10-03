@@ -7,6 +7,7 @@ the repo. Only imported when transformers is installed.
 """
 
 import json
+import logging
 from pathlib import Path
 
 from transformers import (
@@ -19,9 +20,16 @@ from transformers import (
     PreTrainedModel,
 )
 
-from downshift.adapters.embedding import EMBEDDING_ATTR, EmbeddingRecipe, resolve_recipe
+from downshift.adapters.embedding import (
+    EMBEDDING_ATTR,
+    PADDING_SIDE_ATTR,
+    EmbeddingRecipe,
+    resolve_recipe,
+)
 from downshift.adapters.pooling import PoolingChoice
 from downshift.adapters.text import SIGMOID, SOFTMAX, TextIO
+
+logger = logging.getLogger("downshift.hf_repo")
 
 # Task heads whose first output is the logits: a repo that ships one is loaded with it, not
 # as the bare encoder (AutoModel silently drops the head's weights). Keyed by the suffix of
@@ -149,11 +157,47 @@ def load_pretrained(
     # A safetensors file is plain tensors; without this, transformers may fall back to a
     # pickled pytorch_model.bin next to it.
     safetensors = any(Path(path).glob("*.safetensors"))
-    model: PreTrainedModel = auto_class.from_pretrained(
-        path, local_files_only=True, **({"use_safetensors": True} if safetensors else {})
-    )
+    kwargs = {"use_safetensors": True} if safetensors else {}
+    model: PreTrainedModel
+    if generator is None:
+        model = auto_class.from_pretrained(path, local_files_only=True, **kwargs)
+    else:
+        model = _load_backbone(path, **kwargs)
     setattr(model, EMBEDDING_ATTR, recipe)
+    setattr(model, PADDING_SIDE_ATTR, _padding_side(Path(path)))
     return model
+
+
+def _load_backbone(path: str, **kwargs: bool) -> PreTrainedModel:
+    """The backbone of a text-generating repo, loaded to embed. Its lm_head weight is left
+    unread on purpose, so transformers' own load report (which lists it as UNEXPECTED) is
+    silenced for this call and anything else it says is re-logged at warning."""
+    hf_logger = logging.getLogger("transformers")
+    previous = hf_logger.level
+    hf_logger.setLevel(logging.ERROR)
+    try:
+        model, info = AutoModel.from_pretrained(
+            path, local_files_only=True, output_loading_info=True, **kwargs
+        )
+    finally:
+        hf_logger.setLevel(previous)
+    for kind in ("unexpected_keys", "missing_keys"):
+        keys = sorted(k for k in info.get(kind, ()) if not k.startswith("lm_head."))
+        if keys:
+            logger.warning("%s: %s %s", path, kind.replace("_", " "), keys)
+    model.config.use_cache = False  # no KV cache in the exported graph
+    loaded: PreTrainedModel = model
+    return loaded
+
+
+def _padding_side(root: Path) -> str:
+    """The side the repo's tokenizer pads on; a decoder embedder usually pads left."""
+    try:
+        data = json.loads((root / "tokenizer_config.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "right"
+    side = data.get("padding_side") if isinstance(data, dict) else None
+    return "left" if side == "left" else "right"
 
 
 def load_text_io(

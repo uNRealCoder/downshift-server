@@ -103,6 +103,19 @@ LASTTOKEN_POOLING = {
 }
 
 
+DECODER_VOCAB = 300  # the 256 byte tokens, then the pad token
+
+
+def decoder_tokenizer():
+    """A byte-level BPE with no merges: every character is one token, so texts of different
+    lengths pad. AutoTokenizer builds a Qwen2Tokenizer for this repo whatever tokenizer_class
+    says, so the fixture ships what that class reads."""
+    from transformers import Qwen2Tokenizer
+
+    vocab = {c: i for i, c in enumerate(sorted(pre_tokenizers.ByteLevel.alphabet()))}
+    return Qwen2Tokenizer(vocab=vocab, merges=[], pad_token="<|pad|>")
+
+
 def write_decoder_repo(
     path: Path,
     *,
@@ -117,7 +130,7 @@ def write_decoder_repo(
     config_sentence_transformers.json; auto_map adds an auto_map to config.json."""
     torch.manual_seed(0)
     cfg = Qwen2Config(
-        vocab_size=100,
+        vocab_size=DECODER_VOCAB,
         hidden_size=DECODER_HIDDEN,
         num_hidden_layers=2,
         num_attention_heads=2,
@@ -128,7 +141,7 @@ def write_decoder_repo(
         architectures=["Qwen2ForCausalLM"],
     )
     Qwen2ForCausalLM(cfg).eval().save_pretrained(path)
-    tokenizer().save_pretrained(path)
+    decoder_tokenizer().save_pretrained(path)
     token_config = path / "tokenizer_config.json"
     data = json.loads(token_config.read_text())
     data["padding_side"] = padding_side
