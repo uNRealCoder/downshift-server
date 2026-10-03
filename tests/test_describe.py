@@ -189,3 +189,25 @@ def test_app_for_still_honours_an_explicit_source_label():
         app_for(clean_mlp.make_model(), clean_mlp.make_inputs(), source="tutorial", warmup=1)
     )
     assert client.get("/schema").json()["source"]["spec"] == "tutorial"
+
+
+def test_schema_and_metadata_report_the_axes(mlp_client, mlp_state):
+    (fact,) = mlp_state.verdict.axes
+    expected = {
+        "input": "x",
+        "axis": 0,
+        "name": fact.name,
+        "served_min": fact.served_min,
+        "served_max": fact.served_max,
+        "sampled_min": fact.sampled_min,
+        "sampled_max": fact.sampled_max,
+    }
+
+    assert mlp_client.get("/schema").json()["axes"] == [expected]
+    assert mlp_client.get("/metadata").json()["axes"] == [expected]
+
+
+def test_describe_has_no_axes_for_a_verdict_without_them(mlp_state, monkeypatch):
+    monkeypatch.setattr(mlp_state.verdict, "axes", [])
+
+    assert describe(mlp_state, "http://testserver/predict").axes == []

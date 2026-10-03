@@ -125,12 +125,33 @@ def _samples_text(verdict: ExportVerdict) -> str | None:
     return "\n".join(lines)
 
 
-def _dynamic_text(verdict: ExportVerdict) -> str:
-    if not verdict.dynamic_dims:
-        return "-"
-    return ", ".join(
-        f"{name}[{axis}]" for name, axes in verdict.dynamic_dims.items() for axis in axes
-    )
+def _axes_text(verdict: ExportVerdict) -> str:
+    """One line per dynamic axis: its Dim name (what --axis-max takes), the sizes verify ran,
+    and the sizes the server accepts. The batch axis never warns: rows are independent."""
+    if not verdict.axes:
+        if not verdict.dynamic_dims:
+            return "-"
+        return ", ".join(
+            f"{name}[{axis}]" for name, axes in verdict.dynamic_dims.items() for axis in axes
+        )
+    lines = []
+    for fact in verdict.axes:
+        if fact.sampled_min is None or fact.sampled_max is None:
+            sampled = "not verified"
+        else:
+            sampled = f"sampled {fact.sampled_min}-{fact.sampled_max}"
+        line = (
+            f"`{fact.name}` ({fact.input}[{fact.axis}])  {sampled}, "
+            f"serves {fact.served_min}-{fact.served_max}"
+        )
+        if (
+            fact.name != "batch"
+            and fact.sampled_max is not None
+            and fact.served_max > 2 * fact.sampled_max
+        ):
+            line += f"  {_WARN} unverified above {fact.sampled_max}"
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def _warmup_text(state: ServingState) -> str | None:
@@ -196,7 +217,7 @@ def print_verdict(verdict: ExportVerdict, model_name: str) -> None:
     rows.add("Numerics", _numerics_text(verdict))
     _add_numerics_rows(rows, verdict)
     rows.add("Shape-general", _shape_text(verdict))
-    rows.add("Dynamic dims", _dynamic_text(verdict))
+    rows.add("Dynamic dims", _axes_text(verdict))
     if verdict.unsupported_ops:
         rows.add("Unsupported ops", ", ".join(verdict.unsupported_ops))
     if verdict.warnings:
@@ -338,7 +359,7 @@ def print_banner(state: ServingState, host: str, port: int, workers: int = 1) ->
             "Text input",
             f'"text" accepted, up to {state.text.max_length} tokens a row  (longer rows are refused)',
         )
-    rows.add("Dynamic dims", _dynamic_text(verdict))
+    rows.add("Dynamic dims", _axes_text(verdict))
     for warning in verdict.warnings:
         rows.note(f"{_WARN} {warning}")
     rows.add(

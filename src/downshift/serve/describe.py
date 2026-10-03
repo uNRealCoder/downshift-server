@@ -24,6 +24,7 @@ from downshift.serve.engine import DimBound, ServingState
 from downshift.serve.schemas import (
     GRAPH_INPUTS,
     AxisBound,
+    AxisInfo,
     EmbeddingInfo,
     InputFormat,
     OutputEncoding,
@@ -207,6 +208,10 @@ def _embedding(state: ServingState, outputs: list[TensorSchema]) -> EmbeddingInf
     )
 
 
+def axes_info(state: ServingState) -> list[AxisInfo]:
+    return [AxisInfo.model_validate(fact.to_dict()) for fact in state.verdict.axes]
+
+
 def describe(state: ServingState, predict_url: str) -> SchemaResponse:
     """Build the /schema body. `predict_url` is this server's own /predict URL, taken from
     the request, so the example curl is one the caller can actually run."""
@@ -255,6 +260,7 @@ def describe(state: ServingState, predict_url: str) -> SchemaResponse:
         graph_endpoint="/predict/graph" if GRAPH_INPUTS <= set(state.input_names) else None,
         inputs=inputs,
         outputs=outputs,
+        axes=axes_info(state),
         example_request=body,
         example_curl=_curl(predict_url, body) if body is not None else None,
         text_input=_text_input(state),

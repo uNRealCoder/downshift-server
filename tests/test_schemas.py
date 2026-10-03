@@ -80,3 +80,12 @@ def test_to_numpy_base64_respects_max_bytes_keyword():
 def test_to_numpy_base64_big_endian_is_rejected_before_decoding():
     with pytest.raises(ValueError, match=r"'x'.*little-endian"):
         to_numpy("x", {"data": "definitely not base64", "dtype": ">i4", "shape": [1]})
+
+
+def test_axis_info_sampled_defaults_to_none():
+    from downshift.serve.schemas import AxisInfo
+
+    info = AxisInfo(input="x", axis=0, name="dim0", served_min=1, served_max=9)
+
+    assert info.sampled_min is None and info.sampled_max is None
+    assert AxisInfo.model_validate(info.model_dump()) == info

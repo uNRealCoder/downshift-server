@@ -50,6 +50,21 @@ def dim_bounds(spec: dict[int, Any] | None, axis: int) -> tuple[int, int]:
     return lo, hi
 
 
+def dynamic_bounds(
+    input_names: tuple[str, ...], dynamic_shapes: tuple
+) -> dict[str, dict[int, tuple[str, int, int]]]:
+    """Per input, per dynamic axis: (Dim name, min, max) as the export traced it. The served
+    bounds that core/axes.py reports and the request check enforces."""
+    bounds: dict[str, dict[int, tuple[str, int, int]]] = {}
+    for name, spec in zip(input_names, dynamic_shapes, strict=True):
+        if spec:
+            bounds[name] = {
+                axis: (getattr(dim, "__name__", str(axis)), *dim_bounds(spec, axis))
+                for axis, dim in spec.items()
+            }
+    return bounds
+
+
 def infer_dynamic_shapes(inputs: tuple) -> tuple:
     dim0 = torch.export.Dim("dim0", min=1, max=1 << 16)
     return tuple({0: dim0} if isinstance(t, torch.Tensor) and t.ndim > 0 else None for t in inputs)

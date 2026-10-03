@@ -27,6 +27,7 @@ from downshift.serve.middleware import load_middleware
 from downshift.serve.predict import PREDICT_PATHS, NumpyJSONResponse, as_batch, run_predict
 from downshift.serve.schemas import (
     GRAPH_INPUTS,
+    AxisInfo,
     BackendInfo,
     GraphPredictRequest,
     HealthResponse,
@@ -478,6 +479,7 @@ def build_app(
             model=display_source(current.source, current.source_kind),
             family=current.verdict.model_family,
             verdict=VerdictInfo.model_validate(verdict),
+            axes=[AxisInfo.model_validate(fact.to_dict()) for fact in current.verdict.axes],
             backend=BackendInfo.model_validate(current.backend.metadata().to_dict()),
             input_names=list(current.input_names),
             notes=[hide_paths(note, paths) for note in current.notes],

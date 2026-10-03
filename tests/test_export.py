@@ -159,3 +159,12 @@ def test_verdict_round_trips_through_dict(module, status: str) -> None:
     rebuilt = verdict_mod.ExportVerdict.from_dict(verdict.to_dict())
 
     assert rebuilt.to_dict() == verdict.to_dict()
+
+
+def test_axes_survive_the_dict_round_trip() -> None:
+    verdict = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(), k=4)
+    assert verdict.axes
+
+    rebuilt = verdict_mod.ExportVerdict.from_dict(verdict.to_dict())
+
+    assert rebuilt.axes == verdict.axes

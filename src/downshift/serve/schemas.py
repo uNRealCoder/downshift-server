@@ -183,10 +183,25 @@ class BackendInfo(BaseModel):
     outputs: list[IOSpecInfo] = Field(default_factory=list)
 
 
+class AxisInfo(BaseModel):
+    """One dynamic axis: what the server accepts (`served_*`, the export Dim's bounds) next to
+    what verification ran (`sampled_*`, None when verify never ran). `name` is the Dim name
+    `--axis-max` takes. See downshift.core.axes."""
+
+    input: str
+    axis: int
+    name: str
+    served_min: int
+    served_max: int
+    sampled_min: int | None = None
+    sampled_max: int | None = None
+
+
 class MetadataResponse(BaseModel):
     model: str
     family: str
     verdict: VerdictInfo
+    axes: list[AxisInfo] = Field(default_factory=list)
     backend: BackendInfo
     input_names: list[str]
     notes: list[str] = Field(default_factory=list)
@@ -281,6 +296,7 @@ class SchemaResponse(BaseModel):
     graph_endpoint: str | None = None
     inputs: list[TensorSchema] = Field(default_factory=list)
     outputs: list[TensorSchema] = Field(default_factory=list)
+    axes: list[AxisInfo] = Field(default_factory=list)
     example_request: dict | None = None
     example_curl: str | None = None
     text_input: TextInputInfo | None = None

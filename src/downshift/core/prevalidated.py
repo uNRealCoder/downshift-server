@@ -13,7 +13,13 @@ import torch
 from downshift.adapters.base import Adapter, VaryFn
 from downshift.core.capture import op_type_histogram
 from downshift.core.phase import Phase, report
-from downshift.core.verdict import BackendName, ExportVerdict, numerics_outcome, prepare_model
+from downshift.core.verdict import (
+    BackendName,
+    ExportVerdict,
+    axes_for,
+    numerics_outcome,
+    prepare_model,
+)
 from downshift.core.verify import OnnxRuntimeError, verify
 from downshift.settings import DEFAULT_SAMPLES
 
@@ -86,6 +92,7 @@ def intake(
             reason=f"pre-built ONNX cannot run in ONNX Runtime: {message}",
             input_names=prepared.input_names,
             dynamic_dims=prepared.dynamic_dims,
+            axes=axes_for(prepared, None),
             warnings=[message],
             onnx_path=onnx_path,
             prepared=prepared,
@@ -108,6 +115,7 @@ def intake(
         reason=reason,
         input_names=prepared.input_names,
         dynamic_dims=prepared.dynamic_dims,
+        axes=axes_for(prepared, numerics),
         onnx_path=onnx_path,
         prepared=prepared,
     )

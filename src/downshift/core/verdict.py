@@ -19,10 +19,11 @@ import torch
 from downshift._imports import import_object
 from downshift.adapters import registry
 from downshift.adapters.base import Adapter, Prepared, VaryFn
+from downshift.core.axes import AxisFact, axis_facts
 from downshift.core.capture import capture
 from downshift.core.inputs import synthesize
 from downshift.core.phase import Phase, report
-from downshift.core.shapes import apply_dynamic_override, safe_capture_inputs
+from downshift.core.shapes import apply_dynamic_override, dynamic_bounds, safe_capture_inputs
 from downshift.core.verify import NumericsReport, OnnxRuntimeError, verify
 from downshift.settings import DEFAULT_SAMPLES
 
@@ -54,6 +55,7 @@ class ExportVerdict:
     reason: str
     input_names: tuple[str, ...] = ()
     dynamic_dims: dict[str, list[int]] = field(default_factory=dict)
+    axes: list[AxisFact] = field(default_factory=list)
     unsupported_ops: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     onnx_path: Path | None = None
@@ -93,6 +95,7 @@ class ExportVerdict:
             "reason": self.reason,
             "input_names": list(self.input_names),
             "dynamic_dims": self.dynamic_dims,
+            "axes": [fact.to_dict() for fact in self.axes],
             "unsupported_ops": self.unsupported_ops,
             "warnings": self.warnings,
             "onnx_path": str(self.onnx_path) if self.onnx_path else None,
@@ -120,10 +123,21 @@ class ExportVerdict:
             reason=data.get("reason", ""),
             input_names=tuple(data.get("input_names", ())),
             dynamic_dims=dict(data.get("dynamic_dims", {})),
+            axes=[AxisFact.from_dict(fact) for fact in data.get("axes", [])],
             unsupported_ops=list(data.get("unsupported_ops", [])),
             warnings=list(data.get("warnings", [])),
             onnx_path=Path(onnx_path) if onnx_path else None,
         )
+
+
+def axes_for(prepared: Prepared, numerics: NumericsReport | None) -> list[AxisFact]:
+    """The served bounds from the export's dynamic_shapes next to what verify sampled
+    (None when `numerics` is None)."""
+    return axis_facts(
+        dynamic_bounds(prepared.input_names, prepared.dynamic_shapes),
+        prepared.input_names,
+        numerics.sample_shapes if numerics is not None else None,
+    )
 
 
 def numerics_outcome(
@@ -227,6 +241,7 @@ def build_verdict(
         reason="",
         input_names=prepared.input_names,
         dynamic_dims=prepared.dynamic_dims,
+        axes=axes_for(prepared, None),
         warnings=warnings,
         onnx_program=result.onnx_program,
         onnx_bytes=result.onnx_bytes,
@@ -277,6 +292,7 @@ def build_verdict(
             timings[Phase.verify] = time.perf_counter() - verify_start
 
     verdict.numerics = numerics
+    verdict.axes = axes_for(prepared, numerics)
     verdict.status, verdict.recommended_backend, verdict.reason = numerics_outcome(
         numerics,
         f"exported via {result.capture_strategy}; numerics ok",

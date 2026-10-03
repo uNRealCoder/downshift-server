@@ -15,8 +15,14 @@ from downshift.adapters.embedding import EmbeddingRecipe
 from downshift.adapters.text import TextIO
 from downshift.core.phase import Phase, report
 from downshift.core.prevalidated import intake
-from downshift.core.shapes import dim_bounds
-from downshift.core.verdict import BackendName, ExportVerdict, build_verdict, prepare_model
+from downshift.core.shapes import dynamic_bounds
+from downshift.core.verdict import (
+    BackendName,
+    ExportVerdict,
+    axes_for,
+    build_verdict,
+    prepare_model,
+)
 from downshift.loading import HF_REPO_DIR, UNKNOWN_SOURCE, LoadedModel, LoadError
 from downshift.serve.backends import (
     Backend,
@@ -174,6 +180,7 @@ def _verdict_for(
             reason="--backend torch: export skipped",
             input_names=prepared.input_names,
             dynamic_dims=prepared.dynamic_dims,
+            axes=axes_for(prepared, None),
             prepared=prepared,
         )
     return build_verdict(
@@ -309,16 +316,10 @@ def _axis_bounds(verdict: ExportVerdict) -> dict[str, dict[int, DimBound]]:
     prepared = verdict.prepared
     if prepared is None:
         return {}
-    bounds: dict[str, dict[int, DimBound]] = {}
-    for name, spec in zip(prepared.input_names, prepared.dynamic_shapes, strict=True):
-        if not spec:
-            continue
-        axes = {
-            axis: DimBound(getattr(dim, "__name__", str(axis)), *dim_bounds(spec, axis))
-            for axis, dim in spec.items()
-        }
-        bounds[name] = axes
-    return bounds
+    return {
+        name: {axis: DimBound(*bound) for axis, bound in axes.items()}
+        for name, axes in dynamic_bounds(prepared.input_names, prepared.dynamic_shapes).items()
+    }
 
 
 def axis_bounds_to_json(bounds: dict[str, dict[int, DimBound]]) -> dict[str, list[list]]:

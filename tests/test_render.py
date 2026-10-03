@@ -486,3 +486,36 @@ def test_print_ready_without_timings(caplog):
     render.print_ready(_serving_state(_verdict()))
     assert "ready" in caplog.text
     assert " in " not in caplog.text.split("ready", 1)[1]
+
+
+def _fact(name: str, served_max: int, sampled_max: int | None, input: str = "x"):
+    from downshift.core.axes import AxisFact
+
+    return AxisFact(input, 0, name, 1, served_max, None if sampled_max is None else 2, sampled_max)
+
+
+def test_axes_text_warns_on_a_wide_unverified_axis(caplog):
+    render.print_verdict(_verdict(axes=[_fact("num_nodes", 65536, 23)]), "model")
+
+    assert "`num_nodes` (x[0])  sampled 2-23, serves 1-65536" in caplog.text
+    assert "unverified above 23" in caplog.text
+
+
+def test_axes_text_never_warns_on_the_batch_axis(caplog):
+    render.print_verdict(_verdict(axes=[_fact("batch", 4096, 8, "input_ids")]), "model")
+
+    assert "`batch` (input_ids[0])  sampled 2-8, serves 1-4096" in caplog.text
+    assert "unverified" not in caplog.text
+
+
+def test_axes_text_says_so_when_nothing_was_sampled(caplog):
+    render.print_verdict(_verdict(axes=[_fact("seq", 512, None)]), "model")
+
+    assert "not verified, serves 1-512" in caplog.text
+    assert "unverified above" not in caplog.text
+
+
+def test_axes_text_falls_back_to_the_dynamic_dims(caplog):
+    render.print_verdict(_verdict(dynamic_dims={"x": [0]}), "model")
+
+    assert "x[0]" in caplog.text
