@@ -1,0 +1,218 @@
+"""Client-supplied graph batching for /predict/graph: many graphs in one request become one
+disjoint-union graph (one inference), and the outputs are cut back into one slice per graph.
+
+Splitting needs to know what each output's axis 0 follows: nodes, edges, or neither. That is
+decided once at verify time (ExportVerdict.output_axes); see core/verdict.py.
+"""
+
+import logging
+from collections.abc import Sequence
+from typing import Any
+
+import numpy as np
+
+logger = logging.getLogger("downshift.serve")
+
+NODE, EDGE, FIXED, UNKNOWN = "node", "edge", "fixed", "unknown"
+
+GRAPH_TENSORS = ("x", "edge_index", "edge_attr")
+
+_FIXED_HELP = (
+    "has a fixed size (its axis 0 follows neither nodes nor edges), so it can't be split per "
+    "graph; graph-level batching needs a model that takes a `batch` vector and an explicit "
+    "graph count (planned for 0.6). Send one graph per request"
+)
+_UNKNOWN_HELP = (
+    "could not be classified as per-node or per-edge when the model was verified, so it can't "
+    "be split per graph. Send one graph per request"
+)
+
+
+def eager_output_axes(prepared: Any, samples: int = 4) -> list[str]:
+    """Output kinds for a PyG model whose export (and so verify) was skipped, `--backend
+    torch`: the same classification verify would make, from a few eager forwards over the
+    adapter's own varied samples. [] (every output unknown) when it can't be worked out."""
+    from downshift.core.axes import classify_outputs
+
+    if prepared.family != "pyg" or prepared.vary_fn is None:
+        return []
+    try:
+        import torch
+
+        from downshift.core.verify import _as_tensor_list
+
+        names = list(prepared.input_names)
+        sample_shapes: list[list[tuple[int, ...]]] = []
+        output_shapes: list[list[tuple[int, ...]]] = []
+        prepared.model.eval()
+        with torch.random.fork_rng(devices=[]), torch.inference_mode():
+            torch.manual_seed(0)
+            for i in range(samples):
+                sample = prepared.vary_fn(i)
+                outs = _as_tensor_list(prepared.model(*sample))
+                sample_shapes.append([tuple(t.shape) for t in sample])
+                output_shapes.append([tuple(t.shape) for t in outs])
+        return classify_outputs(
+            sample_shapes, output_shapes, names.index("x"), names.index("edge_index")
+        )
+    except Exception:  # noqa: BLE001 - an unclassifiable model is served, it just can't batch
+        logger.debug("could not classify the model's outputs", exc_info=True)
+        return []
+
+
+def _edge_index_violation(feeds: dict[str, np.ndarray]) -> str | None:
+    # predict.py imports this module, so its checker is fetched at call time.
+    from downshift.serve.predict import _edge_index_violation as check
+
+    return check(feeds)
+
+
+def batch_graphs(
+    items: Sequence[dict[str, np.ndarray]],
+) -> tuple[dict[str, np.ndarray], list[int], list[int]]:
+    """Concatenate graphs into one feed dict, offsetting each edge_index by the nodes before it.
+
+    Each item holds `x` [n, ...], `edge_index` [2, e] in that graph's own node ids and
+    optionally `edge_attr` [e, ...]. Returns (feeds, node_counts, edge_counts). Raises
+    ValueError naming the offending graph, e.g. "graphs[2]: ...".
+    """
+    node_counts: list[int] = []
+    edge_counts: list[int] = []
+    with_attr = "edge_attr" in items[0]
+    for i, item in enumerate(items):
+        where = f"graphs[{i}]"
+        x, edge_index = item["x"], item["edge_index"]
+        if x.ndim < 1 or x.shape[0] < 1:
+            raise ValueError(f"{where}: x must have at least one node")
+        if edge_index.ndim != 2 or edge_index.shape[0] != 2:
+            raise ValueError(
+                f"{where}: edge_index must have shape [2, E], got {list(edge_index.shape)}"
+            )
+        if x.shape[1:] != items[0]["x"].shape[1:]:
+            raise ValueError(
+                f"{where}: x has trailing shape {list(x.shape[1:])}; graphs[0] has "
+                f"{list(items[0]['x'].shape[1:])}"
+            )
+        violation = _edge_index_violation({"x": x, "edge_index": edge_index})
+        if violation is not None:
+            raise ValueError(f"{where}: {violation}")
+        if ("edge_attr" in item) != with_attr:
+            raise ValueError(f"{where}: edge_attr must be given for every graph or for none")
+        if with_attr:
+            attr = item["edge_attr"]
+            if attr.ndim < 1 or attr.shape[0] != edge_index.shape[1]:
+                raise ValueError(
+                    f"{where}: edge_attr has {attr.shape[0] if attr.ndim else 0} rows; "
+                    f"edge_index has {edge_index.shape[1]} edges"
+                )
+            if attr.shape[1:] != items[0]["edge_attr"].shape[1:]:
+                raise ValueError(
+                    f"{where}: edge_attr has trailing shape {list(attr.shape[1:])}; graphs[0] "
+                    f"has {list(items[0]['edge_attr'].shape[1:])}"
+                )
+        node_counts.append(int(x.shape[0]))
+        edge_counts.append(int(edge_index.shape[1]))
+
+    offsets = np.concatenate(([0], np.cumsum(node_counts[:-1]))).astype(np.int64)
+    edge_index = np.concatenate([item["edge_index"] for item in items], axis=1)
+    edge_index = edge_index + np.repeat(offsets, edge_counts)[None, :].astype(edge_index.dtype)
+    feeds = {"x": np.concatenate([item["x"] for item in items]), "edge_index": edge_index}
+    if with_attr:
+        feeds["edge_attr"] = np.concatenate([item["edge_attr"] for item in items])
+    return feeds, node_counts, edge_counts
+
+
+def slice_binary_batch(tensors: dict[str, np.ndarray]) -> list[dict[str, np.ndarray]]:
+    """A safetensors batch (concatenated local-id x/edge_index/edge_attr plus int64 `num_nodes`
+    and `num_edges` vectors) back into per-graph items for batch_graphs. Everything is
+    validated before any slicing; ValueError for a body that does not add up."""
+    if "num_nodes" not in tensors or "num_edges" not in tensors:
+        raise ValueError("a batched body needs both 'num_nodes' and 'num_edges'")
+    num_nodes, num_edges = tensors["num_nodes"], tensors["num_edges"]
+    for name, counts in (("num_nodes", num_nodes), ("num_edges", num_edges)):
+        if counts.ndim != 1:
+            raise ValueError(f"{name} must be a 1-D vector, got shape {list(counts.shape)}")
+        if counts.dtype != np.int64:
+            raise ValueError(f"{name} is {counts.dtype.name}; it must be int64")
+    if num_nodes.shape != num_edges.shape:
+        raise ValueError(
+            f"num_nodes has {num_nodes.shape[0]} entries and num_edges {num_edges.shape[0]}; "
+            "they must match"
+        )
+    if num_nodes.shape[0] == 0:
+        raise ValueError("num_nodes is empty; a batch needs at least one graph")
+    if int(num_nodes.min()) < 1:
+        raise ValueError("num_nodes must be at least 1 for every graph")
+    if int(num_edges.min()) < 0:
+        raise ValueError("num_edges must not be negative")
+    x, edge_index = tensors["x"], tensors["edge_index"]
+    total_nodes, total_edges = int(num_nodes.sum()), int(num_edges.sum())
+    if x.ndim < 1 or total_nodes != x.shape[0]:
+        raise ValueError(
+            f"sum(num_nodes) is {total_nodes}; x has {x.shape[0] if x.ndim else 0} rows"
+        )
+    if edge_index.ndim != 2 or edge_index.shape[0] != 2:
+        raise ValueError(f"edge_index must have shape [2, E], got {list(edge_index.shape)}")
+    if total_edges != edge_index.shape[1]:
+        raise ValueError(
+            f"sum(num_edges) is {total_edges}; edge_index has {edge_index.shape[1]} columns"
+        )
+    attr = tensors.get("edge_attr")
+    if attr is not None and (attr.ndim < 1 or attr.shape[0] != total_edges):
+        raise ValueError(
+            f"sum(num_edges) is {total_edges}; edge_attr has "
+            f"{attr.shape[0] if attr.ndim else 0} rows"
+        )
+
+    node_bounds = np.concatenate(([0], np.cumsum(num_nodes))).tolist()
+    edge_bounds = np.concatenate(([0], np.cumsum(num_edges))).tolist()
+    items: list[dict[str, np.ndarray]] = []
+    for i in range(num_nodes.shape[0]):
+        n0, n1, e0, e1 = node_bounds[i], node_bounds[i + 1], edge_bounds[i], edge_bounds[i + 1]
+        item = {"x": x[n0:n1], "edge_index": edge_index[:, e0:e1]}
+        if attr is not None:
+            item["edge_attr"] = attr[e0:e1]
+        items.append(item)
+    return items
+
+
+def split_refusal(kinds: Sequence[str], names: Sequence[str], graph_count: int) -> str | None:
+    """Why a batch of `graph_count` graphs can't be split, or None. One graph always can: its
+    outputs are the answer as they are. Cheap, so run_predict asks before inferring."""
+    if graph_count <= 1:
+        return None
+    for i in range(max(len(kinds), len(names))):
+        kind = kinds[i] if i < len(kinds) else UNKNOWN
+        if kind in (NODE, EDGE):
+            continue
+        name = names[i] if i < len(names) else f"output_{i}"
+        return f"output {name!r} {_FIXED_HELP if kind == FIXED else _UNKNOWN_HELP}"
+    return None
+
+
+def split_outputs(
+    outputs: dict[str, np.ndarray],
+    kinds: Sequence[str],
+    node_counts: Sequence[int],
+    edge_counts: Sequence[int],
+) -> list[dict[str, np.ndarray]]:
+    """One outputs dict per graph, in request order: `node` outputs cut by node counts, `edge`
+    outputs by edge counts. With a single graph the outputs are returned as they are, whatever
+    their kind. ValueError for an output that can't be split."""
+    if len(node_counts) == 1:
+        return [outputs]
+    refusal = split_refusal(kinds, list(outputs), len(node_counts))
+    if refusal is not None:
+        raise ValueError(refusal)
+    per_graph: list[dict[str, np.ndarray]] = [{} for _ in node_counts]
+    for i, (name, arr) in enumerate(outputs.items()):
+        counts = node_counts if kinds[i] == NODE else edge_counts
+        if arr.ndim < 1 or arr.shape[0] != sum(counts):
+            raise ValueError(
+                f"output {name!r} has {arr.shape[0] if arr.ndim else 0} rows on axis 0; "
+                f"expected {sum(counts)} to split per graph"
+            )
+        bounds = np.concatenate(([0], np.cumsum(counts))).tolist()
+        for g, graph in enumerate(per_graph):
+            graph[name] = arr[bounds[g] : bounds[g + 1]]
+    return per_graph

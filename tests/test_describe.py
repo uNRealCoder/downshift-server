@@ -70,6 +70,11 @@ def test_schema_points_a_graph_model_at_the_graph_route(gcn_client):
     assert {i["name"] for i in body["inputs"]} == {"x", "edge_index"}
     assert [i["dtype"] for i in body["inputs"] if i["name"] == "edge_index"] == ["int64"]
     assert gcn_client.post("/predict", json=body["example_request"]).status_code == 200
+    assert body["graph_batching"] == {"output_0": "node"}
+
+
+def test_schema_has_no_graph_batching_for_a_non_graph_model(mlp_client):
+    assert mlp_client.get("/schema").json()["graph_batching"] is None
 
 
 def test_a_large_fixed_shape_input_gets_a_note_instead_of_an_inlined_example(serve_fixture):

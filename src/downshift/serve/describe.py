@@ -210,6 +210,16 @@ def _embedding(state: ServingState, outputs: list[TensorSchema]) -> EmbeddingInf
     )
 
 
+def _graph_batching(state: ServingState, outputs: list[TensorSchema]) -> dict[str, str] | None:
+    """Each output's axis-0 kind for a PyG model (what a `graphs` batch splits it by); None
+    when the verdict classified nothing (not a PyG export, or a prevalidated .onnx)."""
+    kinds = state.verdict.output_axes
+    if not kinds:
+        return None
+    names = [o.name for o in outputs] or [f"output_{i}" for i in range(len(kinds))]
+    return {name: kinds[i] if i < len(kinds) else "unknown" for i, name in enumerate(names)}
+
+
 def axes_info(state: ServingState) -> list[AxisInfo]:
     return [AxisInfo.model_validate(fact.to_dict()) for fact in state.verdict.axes]
 
@@ -260,6 +270,7 @@ def describe(state: ServingState, predict_url: str) -> SchemaResponse:
         device=meta.device,
         endpoint="/predict",
         graph_endpoint="/predict/graph" if GRAPH_INPUTS <= set(state.input_names) else None,
+        graph_batching=_graph_batching(state, outputs),
         inputs=inputs,
         outputs=outputs,
         axes=axes_info(state),

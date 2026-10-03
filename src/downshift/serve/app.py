@@ -180,7 +180,7 @@ _UNSUPPORTED_MEDIA_TYPE = (
     "unsupported Content-Type; send JSON (application/json) or safetensors "
     f"({SAFETENSORS_MEDIA_TYPE}, or application/octet-stream)"
 )
-_GRAPH_TENSOR_NAMES = frozenset({"x", "edge_index", "edge_attr"})
+_GRAPH_TENSOR_NAMES = frozenset({"x", "edge_index", "edge_attr", "num_nodes", "num_edges"})
 
 
 def _content_type(request: Request) -> str:
@@ -341,6 +341,9 @@ def _predict_context(request: Request) -> dict[str, Any]:
     line (U1)."""
     timings: dict[str, float] = {}
     request.state.timings_ms = timings
+    # Filled by a graph batch with graphs/nodes/edges; a metrics step reads it from here.
+    graph_stats: dict[str, int] = {}
+    request.state.graph_stats = graph_stats
     return {
         "admitted_at": request.state.admitted_at,
         "parse_ms": getattr(request.state, "parse_ms", 0.0),
@@ -348,6 +351,7 @@ def _predict_context(request: Request) -> dict[str, Any]:
         "timings_ms": timings,
         "tensors": getattr(request.state, "tensors", None),
         "accept_safetensors": SAFETENSORS_MEDIA_TYPE in request.headers.get("accept", "").lower(),
+        "graph_stats": graph_stats,
     }
 
 
@@ -662,10 +666,18 @@ def build_app(
         # No dtype hints needed: to_numpy takes the backend's declared dtype (int64 for
         # edge_index on both backends), and integer lists default to int64 anyway.
         inputs: dict[str, Any] = {"x": req.x, "edge_index": req.edge_index}
-        if getattr(request.state, "tensors", None) is not None:
+        graphs = None
+        if req.graphs is not None:
+            inputs = {}
+            graphs = [
+                {"x": g.x, "edge_index": g.edge_index, "edge_attr": g.edge_attr} for g in req.graphs
+            ]
+        elif getattr(request.state, "tensors", None) is not None:
             inputs = {}
         elif req.edge_attr is not None:
             inputs["edge_attr"] = req.edge_attr
-        return await run_predict(current, inputs, req.output_encoding, **_predict_context(request))
+        return await run_predict(
+            current, inputs, req.output_encoding, graphs=graphs, **_predict_context(request)
+        )
 
     return app

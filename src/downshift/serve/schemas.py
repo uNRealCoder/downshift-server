@@ -122,17 +122,50 @@ class PredictResponse(BaseModel):
 GRAPH_INPUTS = frozenset({"x", "edge_index"})
 
 
-class GraphPredictRequest(BaseModel):
-    """One graph per request: node features, COO edge index, optional edge attributes.
-
-    No batching; concatenate graphs client-side (with offset edge indices) if needed.
-    Each tensor is a nested list or a TypedArray dict (which is how base64 arrives).
-    """
+class GraphItem(BaseModel):
+    """One graph of a batch: node features, COO edge index in the graph's own node ids,
+    optional edge attributes."""
 
     x: list | dict
     edge_index: list | dict
     edge_attr: list | dict | None = None
+
+
+class GraphPredictRequest(BaseModel):
+    """One graph (top-level `x`, `edge_index`, optional `edge_attr`) or a batch (`graphs`, a
+    list of the same three fields), never both.
+
+    A batch runs as one inference over the graphs joined into one disjoint graph; each
+    `edge_index` uses its own graph's local node ids and the server does the offsetting. The
+    response is {"graphs": [{outputs, shapes, dtypes}, ...]} in request order; with
+    `Accept: application/vnd.safetensors` each output is a tensor named
+    `graphs.<i>.<output name>`, and `__metadata__` carries the graph count as
+    `downshift.graphs`. Node-level and edge-level outputs are split per graph; a model whose
+    output has a fixed size (a pooled readout) takes one graph per request.
+    A safetensors request body may carry the batch as concatenated `x`, `edge_index`,
+    `edge_attr` plus int64 `num_nodes` and `num_edges` vectors of length G.
+    Each tensor is a nested list or a TypedArray dict (which is how base64 arrives).
+    """
+
+    x: list | dict | None = None
+    edge_index: list | dict | None = None
+    edge_attr: list | dict | None = None
+    graphs: list[GraphItem] | None = None
     output_encoding: OutputEncodingField = None
+
+    @model_validator(mode="after")
+    def _one_graph_or_a_batch(self) -> "GraphPredictRequest":
+        single = (self.x, self.edge_index, self.edge_attr)
+        if self.graphs is not None:
+            if any(v is not None for v in single):
+                raise ValueError(
+                    "send either 'graphs' or top-level x/edge_index/edge_attr, not both"
+                )
+            if not self.graphs:
+                raise ValueError("'graphs' is empty")
+        elif self.x is None or self.edge_index is None:
+            raise ValueError("send 'x' and 'edge_index' for one graph, or 'graphs' for a batch")
+        return self
 
 
 class WorstMismatchInfo(BaseModel):
@@ -317,6 +350,9 @@ class SchemaResponse(BaseModel):
     device: str
     endpoint: str
     graph_endpoint: str | None = None
+    # PyG models: output name -> "node" / "edge" (split per graph in a `graphs` batch),
+    # "fixed" / "unknown" (one graph per request).
+    graph_batching: dict[str, str] | None = None
     inputs: list[TensorSchema] = Field(default_factory=list)
     outputs: list[TensorSchema] = Field(default_factory=list)
     axes: list[AxisInfo] = Field(default_factory=list)

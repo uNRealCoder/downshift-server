@@ -19,10 +19,20 @@ from fastapi.responses import JSONResponse
 from downshift.serve.backends import FIRST_OUTPUT_NAME, InferenceInputError
 from downshift.serve.codec import b64encode, encode_safetensors
 from downshift.serve.engine import DimBound, ServingState
+from downshift.serve.graphs import (
+    GRAPH_TENSORS,
+    batch_graphs,
+    slice_binary_batch,
+    split_outputs,
+    split_refusal,
+)
 from downshift.serve.metrics import STAGES
 from downshift.serve.schemas import OutputEncoding, RequestOutputEncoding, normalize_dtype, to_numpy
 
 logger = logging.getLogger("downshift.serve")
+
+# Per-graph (node_counts, edge_counts) of a graph batch, what the response is split by.
+GraphLayout = tuple[list[int], list[int]]
 
 # The predict routes: the only ones OrjsonRoute admits against before reading the body (P1).
 PREDICT_PATHS = frozenset({"/predict", "/predict/graph"})
@@ -182,25 +192,79 @@ def _binary_feeds(
     return feeds
 
 
+def _graph_item(
+    state: ServingState, index: int, graph: dict[str, Any], max_bytes: int
+) -> dict[str, np.ndarray]:
+    """One `graphs` entry (JSON values) to arrays; an error names the graph."""
+    declared = state.declared_dtypes
+    try:
+        return {
+            n: to_numpy(n, graph[n], declared.get(n), max_bytes=max_bytes)
+            for n in GRAPH_TENSORS
+            if n in state.input_names and graph.get(n) is not None
+        }
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"graphs[{index}]: {exc}") from exc
+
+
+def _batch_feeds(
+    state: ServingState,
+    graphs: list[dict[str, Any]] | None,
+    tensors: dict[str, np.ndarray] | None,
+    max_bytes: int,
+) -> tuple[dict[str, np.ndarray], GraphLayout]:
+    """A `graphs` list, or a binary body with num_nodes/num_edges, to one batched feed set and
+    the per-graph counts the response is split by. ValueError for anything the client got wrong."""
+    names = [spec.name for spec in state.backend.metadata().outputs]
+    if tensors is not None:
+        _binary_feeds(state, tensors, state.declared_dtypes)
+        items = slice_binary_batch(tensors)
+    else:
+        assert graphs is not None
+        items = [_graph_item(state, i, graph, max_bytes) for i, graph in enumerate(graphs)]
+    refusal = split_refusal(state.verdict.output_axes, names, len(items))
+    if refusal is not None:
+        raise ValueError(refusal)
+    items = [{k: v for k, v in item.items() if k in state.input_names} for item in items]
+    feeds, node_counts, edge_counts = batch_graphs(items)
+    missing = [n for n in state.input_names if n not in feeds]
+    if missing:
+        raise ValueError(f"missing inputs: {missing}")
+    return {n: feeds[n] for n in state.input_names}, (node_counts, edge_counts)
+
+
 def _prepare_feeds(
     state: ServingState,
     inputs: dict[str, Any],
     text: list[str] | None,
     prompt: str = "",
     tensors: dict[str, np.ndarray] | None = None,
-) -> tuple[dict[str, np.ndarray], float]:
+    graphs: list[dict[str, Any]] | None = None,
+    graph_stats: dict[str, int] | None = None,
+) -> tuple[dict[str, np.ndarray], float, GraphLayout | None]:
     """Request body to the graph's own input arrays (base64 decode, to_numpy, tokenize) and
     the checks that need them: vocab, edge index, axis bounds. Runs in state.prep_executor.
-    Returns the feeds and the milliseconds spent. `tensors` (a safetensors body, already
-    decoded) takes the place of `inputs`.
+    Returns the feeds, the milliseconds spent and, for a graph batch, its per-graph counts.
+    `tensors` (a safetensors body, already decoded) takes the place of `inputs`; `graphs` (or
+    a `tensors` body carrying num_nodes) is a batch of graphs, concatenated here into one feed
+    set, with its counts written to `graph_stats`.
 
     Raises HTTPException(400) for anything the client got wrong (bad shape/dtype/JSON).
     """
     declared = state.declared_dtypes
     max_bytes = state.options.max_input_bytes
     start = time.perf_counter()
+    layout: GraphLayout | None = None
     try:
-        if tensors is not None:
+        if graphs is not None or (
+            tensors is not None and ("num_nodes" in tensors or "num_edges" in tensors)
+        ):
+            feeds, layout = _batch_feeds(state, graphs, tensors, max_bytes)
+            if graph_stats is not None:
+                graph_stats.update(
+                    graphs=len(layout[0]), nodes=sum(layout[0]), edges=sum(layout[1])
+                )
+        elif tensors is not None:
             feeds = _binary_feeds(state, tensors, declared)
         elif text is not None:
             feeds = _text_feeds(state, text, declared, prompt)
@@ -215,13 +279,14 @@ def _prepare_feeds(
     vocab_violation = _vocab_violation(state, feeds)
     if vocab_violation is not None:
         raise HTTPException(400, vocab_violation)
-    edge_index_violation = _edge_index_violation(feeds)
+    # A batch was checked graph by graph against each graph's own node count.
+    edge_index_violation = None if layout is not None else _edge_index_violation(feeds)
     if edge_index_violation is not None:
         raise HTTPException(400, edge_index_violation)
     bound_violation = _bound_violation(state, feeds)
     if bound_violation is not None:
         raise HTTPException(400, bound_violation)
-    return feeds, (time.perf_counter() - start) * 1000
+    return feeds, (time.perf_counter() - start) * 1000, layout
 
 
 def _infer(
@@ -249,20 +314,56 @@ def _encode_response(
     encoding: OutputEncoding | RequestOutputEncoding | None,
     timings_ms: dict[str, float],
     accept_safetensors: bool = False,
+    layout: GraphLayout | None = None,
 ) -> Response:
     """Outputs to the response body, in state.prep_executor. `timings_ms` already holds the
     earlier stages; the encode stage and the Server-Timing header are added here.
 
     A safetensors body (an `Accept` naming it, or output_encoding "safetensors") carries each
     output under its own name, with `predictions` and the embedding recipe as JSON strings in
-    `__metadata__`."""
+    `__metadata__`.
+
+    `layout` (a graph batch) splits the outputs per graph first: the body is
+    {"graphs": [{outputs, shapes, dtypes}, ...]} in request order, or in safetensors each
+    output named `graphs.<i>.<output>` with the graph count in `downshift.graphs`."""
     encoding = encoding or state.options.output_encoding
     encode = _base64_ready if encoding == OutputEncoding.base64 else _json_ready
     start = time.perf_counter()
     # C-contiguous once, up front (np.require keeps 0-d arrays 0-d; ascontiguousarray does not).
     arrays = {name: np.require(arr, requirements="C") for name, arr in outputs.items()}
+    if layout is not None:
+        try:
+            per_graph = split_outputs(arrays, state.verdict.output_axes, *layout)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if accept_safetensors or encoding == RequestOutputEncoding.safetensors:
+            flat = {
+                f"graphs.{g}.{name}": arr
+                for g, part in enumerate(per_graph)
+                for name, arr in part.items()
+            }
+            response: Response = Response(
+                encode_safetensors(flat, {"downshift.graphs": str(len(per_graph))}),
+                media_type=SAFETENSORS_MEDIA_TYPE,
+            )
+        else:
+            response = NumpyJSONResponse(
+                {
+                    "graphs": [
+                        {
+                            "outputs": {name: encode(arr) for name, arr in part.items()},
+                            "shapes": {name: list(arr.shape) for name, arr in part.items()},
+                            "dtypes": {name: arr.dtype.name for name, arr in part.items()},
+                        }
+                        for part in per_graph
+                    ]
+                }
+            )
+        timings_ms["encode"] = round((time.perf_counter() - start) * 1000, 2)
+        _add_server_timing(response, timings_ms)
+        return response
     if accept_safetensors or encoding == RequestOutputEncoding.safetensors:
-        response: Response = _safetensors_response(state, arrays)
+        response = _safetensors_response(state, arrays)
         timings_ms["encode"] = round((time.perf_counter() - start) * 1000, 2)
         _add_server_timing(response, timings_ms)
         return response
@@ -353,6 +454,8 @@ async def run_predict(
     inline: bool = False,
     tensors: dict[str, np.ndarray] | None = None,
     accept_safetensors: bool = False,
+    graphs: list[dict[str, Any]] | None = None,
+    graph_stats: dict[str, int] | None = None,
 ) -> Response:
     """Missing-input check happens here, on the loop; the rest is three stages so only the
     middle one holds an inference thread: _prepare_feeds (prep pool), _infer (inference
@@ -370,6 +473,11 @@ async def run_predict(
 
     `tensors` is a decoded safetensors request body, used instead of `inputs`; with
     `accept_safetensors` the response is safetensors too.
+
+    `graphs` is a /predict/graph batch (a list of {x, edge_index, edge_attr?} JSON values; a
+    `tensors` body with num_nodes/num_edges is one too). It is batched in the prep pool, run
+    as one inference and split in the encode stage; its graph/node/edge counts land in
+    `graph_stats` for whoever wants them (metrics).
     """
     prep_pool = None if inline else state.prep_executor
     infer_pool = None if inline else state.executor
@@ -380,7 +488,7 @@ async def run_predict(
                 "this model takes tensors only: it was not loaded from a Hugging Face repo "
                 "directory with tokenizer files. Send 'inputs' (see GET /schema).",
             )
-    else:
+    elif graphs is None:
         missing = [n for n in state.input_names if n not in (tensors or inputs)]
         if missing:
             raise HTTPException(400, f"missing inputs: {missing}")
@@ -388,8 +496,18 @@ async def run_predict(
     prompt = resolve_prompt(state, prompt_name, text is not None)
 
     timings_ms["parse"] = round(parse_ms, 2)
-    feeds, prep_ms = await _run_in(
-        prep_pool, "prep_wait", timings_ms, _prepare_feeds, state, inputs, text, prompt, tensors
+    feeds, prep_ms, layout = await _run_in(
+        prep_pool,
+        "prep_wait",
+        timings_ms,
+        _prepare_feeds,
+        state,
+        inputs,
+        text,
+        prompt,
+        tensors,
+        graphs,
+        graph_stats,
     )
     timings_ms["prep"] = round(prep_ms, 2)
 
@@ -413,6 +531,7 @@ async def run_predict(
         encoding,
         timings_ms,
         accept_safetensors,
+        layout,
     )
     return response
 
