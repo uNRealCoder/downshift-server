@@ -35,6 +35,7 @@ dependencies = [
     "numpy>=1.24",
     "pydantic>=2.0",
     "orjson>=3.9",
+    "prometheus_client>=0.17",  # /metrics; pure Python, always on
 ]
 
 [project.optional-dependencies]
@@ -44,6 +45,7 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.0",
     "httpx>=0.24",  # FastAPI TestClient
+    "safetensors>=0.4",  # reference reader/writer for the binary wire format tests
 ]
 gnn = [
     "torch-geometric>=2.5",
