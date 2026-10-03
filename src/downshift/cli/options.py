@@ -75,6 +75,16 @@ AxisMaxOpt = Annotated[
         "Face, num_nodes and num_edges for PyG. Default: the bound the export chose",
     ),
 ]
+ExportCacheDirOpt = Annotated[
+    str | None,
+    typer.Option(
+        "--export-cache-dir",
+        metavar="DIR",
+        help="An existing directory to save the verified export in and reuse on the next boot, "
+        "keyed by the weights' content. Default: nothing is written to disk. Delete the "
+        "directory to clear it",
+    ),
+]
 ReferenceOpt = Annotated[
     str | None,
     typer.Option(

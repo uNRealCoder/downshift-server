@@ -29,6 +29,7 @@ def app_for(
     tokenizer_from: str | Path | None = None,
     middleware: Sequence[str] = (),
     api_key: str | None = settings.API_KEY,
+    cache: bool = True,
     **options: Any,
 ) -> FastAPI:
     """`LoadedModel` + `prepare_serving()` + `build_app(state=...)`, in one call.
@@ -53,23 +54,37 @@ def app_for(
 
     `api_key` defaults to DOWNSHIFT_SERVER_API_KEY (settings.API_KEY), same as the CLI (U7,
     ruling 5); pass a value, or None to force it off, to override that for this app.
+
+    A model this process already exported and verified (same weights, code and options) is
+    served from the in-process memo with no export or verify phase; `model` may also be a
+    downloaded Hugging Face repo directory, which is then looked up before anything is loaded.
+    `export_cache_dir=` (a `ServeOptions` field; default DOWNSHIFT_EXPORT_CACHE_DIR) adds the
+    on-disk tier that survives restarts. `cache=False` skips both, in both directions.
     """
     from downshift.loading import (
         IN_PROCESS_MODULE,
         ONNX_FILE,
         LoadedModel,
+        LoadSpec,
+        hf_repo_dir,
+        load_model,
         resolve_tokenizer_source,
     )
     from downshift.serve.app import build_app
-    from downshift.serve.engine import ServeOptions, prepare_serving
+    from downshift.serve.engine import ServeOptions
+    from downshift.serve.reuse import prepare_serving_reusing
 
+    opts = ServeOptions(**options)
+    repo = hf_repo_dir(str(model)) if isinstance(model, (str, Path)) else None
+    loaded: LoadedModel | None = None
     if isinstance(model, (str, Path)):
-        loaded = LoadedModel(
-            source=source or str(model),
-            onnx_path=Path(model),
-            example_inputs=example_inputs,
-            kind=ONNX_FILE,
-        )
+        if repo is None:
+            loaded = LoadedModel(
+                source=source or str(model),
+                onnx_path=Path(model),
+                example_inputs=example_inputs,
+                kind=ONNX_FILE,
+            )
     else:
         loaded = LoadedModel(
             source=source or "model",
@@ -85,7 +100,13 @@ def app_for(
     resolved_tokenizer_from = (
         resolve_tokenizer_source(str(tokenizer_from)) if tokenizer_from is not None else None
     )
-    state = prepare_serving(
-        loaded, ServeOptions(**options), ref, tokenizer_from=resolved_tokenizer_from
-    )
+
+    def load() -> tuple[LoadedModel, LoadedModel | None]:
+        if loaded is not None:
+            return loaded, ref
+        return load_model(
+            LoadSpec(str(model), None, None, False, opts.pooling, opts.normalize)
+        ), ref
+
+    state = prepare_serving_reusing(load, opts, resolved_tokenizer_from, repo=repo, cache=cache)
     return build_app(state=state, middleware=tuple(middleware), api_key=api_key)

@@ -121,6 +121,10 @@ EXECUTION = _env_cast("DOWNSHIFT_EXECUTION", "threadpool", _execution, "executio
 # boot banner and /schema list. Empty means each axis keeps the bound the adapter exported.
 AXIS_MAX = _env_axis_max("DOWNSHIFT_AXIS_MAX", {})
 
+# A directory verified exports are saved in and reused from on the next boot (`serve` and
+# `export`). Unset means nothing is ever written to disk: the in-process memo is the whole cache.
+EXPORT_CACHE_DIR = os.environ.get("DOWNSHIFT_EXPORT_CACHE_DIR") or None
+
 # Threads converting request bodies to arrays and responses to bytes, apart from the
 # inference threads, so a slow encode never holds an inference slot.
 PREP_THREADS = _env_int("DOWNSHIFT_PREP_THREADS", min(4, usable_cpus()))

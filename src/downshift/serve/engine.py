@@ -34,6 +34,7 @@ from downshift.serve.backends import (
     resolve_device,
     verified_provider_for,
 )
+from downshift.serve.graphs import eager_output_axes
 from downshift.serve.options import BackendChoice, ExecutionChoice, ServeOptions
 from downshift.serve.schemas import normalize_dtype
 
@@ -70,6 +71,9 @@ class ServingState:
     # HF_REPO_DIR, IMPORT_SPEC, IN_PROCESS_MODULE). Reported under /schema's `source`, and
     # labelled on the boot banner, so it is visible that nothing was fetched to serve this.
     source_kind: str = UNKNOWN_SOURCE
+    # "memory" or "disk" when this boot reused an earlier export instead of running export and
+    # verify (the in-process memo, or --export-cache-dir); None for a fresh export.
+    reused: str | None = None
     # The Hugging Face repo directory attach_hf_metadata should read tokenizer/pooling/label
     # metadata from, or None to skip that. Usually `source` itself (kind HF_REPO_DIR), but a
     # bare .onnx MODEL takes it from --tokenizer-from instead, kept separate from --reference
@@ -194,6 +198,7 @@ def _verdict_for(
             input_names=prepared.input_names,
             dynamic_dims=prepared.dynamic_dims,
             axes=axes_for(prepared, None),
+            output_axes=eager_output_axes(prepared),
             prepared=prepared,
         )
     return build_verdict(
@@ -201,8 +206,12 @@ def _verdict_for(
     )
 
 
-def choose_backend(verdict: ExportVerdict, opts: ServeOptions) -> tuple[BackendName, list[str]]:
-    """Return (backend name, notes for the banner)."""
+def choose_backend(
+    verdict: ExportVerdict, opts: ServeOptions, *, has_torch: bool | None = None
+) -> tuple[BackendName, list[str]]:
+    """Return (backend name, notes for the banner). `has_torch` says whether a PyTorch model
+    can be had when the verdict carries none (a reused export, whose caller loads it on
+    demand); by default that is whether the verdict has a Prepared."""
     notes: list[str] = []
     wanted: BackendName = (
         verdict.recommended_backend
@@ -219,8 +228,13 @@ def choose_backend(verdict: ExportVerdict, opts: ServeOptions) -> tuple[BackendN
         wanted = BackendName.onnxruntime
         notes.append("--force-onnx: serving a DEGRADED graph; outputs may be wrong")
 
-    has_onnx = verdict.onnx_program is not None or verdict.onnx_path is not None
-    has_torch = verdict.prepared is not None
+    has_onnx = (
+        verdict.onnx_program is not None
+        or verdict.onnx_path is not None
+        or bool(verdict.onnx_bytes)
+    )
+    if has_torch is None:
+        has_torch = verdict.prepared is not None
     if wanted == BackendName.onnxruntime and not has_onnx:
         notes.append("no ONNX graph available; falling back to torch")
         wanted = BackendName.torch
@@ -395,6 +409,7 @@ def _new_state(
     kind: str = UNKNOWN_SOURCE,
     axis_bounds: dict[str, dict[int, DimBound]] | None = None,
     hf_source: str | None = None,
+    reused: str | None = None,
 ) -> ServingState:
     """The single ServingState constructor every builder below funnels through, so
     finish_state (and so attach_hf_metadata) never gets skipped by a builder that forgot.
@@ -410,6 +425,7 @@ def _new_state(
         source_kind=kind,
         axis_bounds=_axis_bounds(verdict) if axis_bounds is None else axis_bounds,
         hf_source=hf_source,
+        reused=reused,
     )
     return finish_state(state, timings)
 
@@ -480,7 +496,7 @@ def _release_torch_model(
 
 def serving_state_from_artifact(
     source: str,
-    onnx_path: Path,
+    onnx_path: Path | None,
     verdict: ExportVerdict,
     opts: ServeOptions,
     input_names: tuple[str, ...],
@@ -489,6 +505,7 @@ def serving_state_from_artifact(
     axis_bounds: dict[str, dict[int, DimBound]] | None = None,
     kind: str = UNKNOWN_SOURCE,
     hf_source: str | None = None,
+    reused: str | None = None,
 ) -> ServingState:
     """Rebuild a ServingState in a `serve --workers N` worker from the ONNX graph and
     verdict a parent process already exported and verified: no capture, no verify, just a
@@ -497,8 +514,12 @@ def serving_state_from_artifact(
     LoadedModel to read the kind from); `example_inputs` are real feeds the parent saved
     alongside the graph when it had any, loaded by the caller from the .npz sidecar -
     otherwise warmup() synthesizes them (see synthesize_feeds).
+
+    `onnx_path` None means the graph is the verdict's own `onnx_bytes` (an export reused from
+    the in-process memo); `reused` says which cache the verdict came from, for the banner.
     """
-    verdict.onnx_path = onnx_path
+    if onnx_path is not None:
+        verdict.onnx_path = onnx_path
     timings: dict[str, float] = {}
     session_start = time.perf_counter()
     backend = _build_backend(BackendName.onnxruntime, verdict, opts)
@@ -515,6 +536,7 @@ def serving_state_from_artifact(
         kind=kind,
         axis_bounds=axis_bounds,
         hf_source=hf_source,
+        reused=reused,
     )
 
 
@@ -524,6 +546,7 @@ def serving_state_from_torch_artifact(
     opts: ServeOptions,
     notes: list[str] | None = None,
     hf_source: str | None = None,
+    reused: str | None = None,
 ) -> ServingState:
     """Rebuild a ServingState in a `serve --workers N` worker when the parent's export chose
     torch: the worker still loads and prepares the model itself (torch weights aren't shipped
@@ -550,6 +573,7 @@ def serving_state_from_torch_artifact(
         notes=notes,
         kind=loaded.kind,
         hf_source=hf_source,
+        reused=reused,
     )
 
 

@@ -143,6 +143,7 @@ def _collect_serve_args(
     seed: int,
     vary: str | None,
     axis_max: dict[str, int] | None,
+    export_cache_dir: str | None,
 ) -> tuple[LoadSpec, ServeOptions]:
     """serve_cmd's typer parameters, collected into the LoadSpec/ServeOptions pair ServeArgs
     carries. A new serve option is one field here, one on ServeOptions, and one typer
@@ -181,6 +182,7 @@ def _collect_serve_args(
         seed=seed,
         vary=vary,
         axis_max=axis_max,
+        export_cache_dir=export_cache_dir,
         pooling=pooling,
         normalize=normalize,
     )
@@ -232,7 +234,8 @@ def _build_from_torch_artifact(args: ServeArgs, opts: ServeOptions) -> ServingSt
 
 
 def _build_serving_state(args: ServeArgs) -> ServingState:
-    from downshift.serve.engine import prepare_serving
+    from downshift.loading import hf_repo_dir
+    from downshift.serve.reuse import prepare_serving_reusing
 
     opts = args.options
 
@@ -240,12 +243,25 @@ def _build_serving_state(args: ServeArgs) -> ServingState:
         return _build_from_onnx_artifact(args, opts)
     if args.artifact is not None and args.artifact.backend == "torch":
         return _build_from_torch_artifact(args, opts)
-    load_start = time.perf_counter()
-    loaded = _load(args.load)
-    # --reference shares --pooling/--normalize with MODEL: see check_cmd's comment.
-    ref = _load(replace(args.load, model=args.reference)) if args.reference else None
-    load_s = time.perf_counter() - load_start
-    state = prepare_serving(loaded, opts, ref, tokenizer_from=args.tokenizer_from)
+
+    load_s = 0.0
+
+    def load() -> tuple[LoadedModel, LoadedModel | None]:
+        nonlocal load_s
+        load_start = time.perf_counter()
+        loaded = _load(args.load)
+        # --reference shares --pooling/--normalize with MODEL: see check_cmd's comment.
+        ref = _load(replace(args.load, model=args.reference)) if args.reference else None
+        load_s += time.perf_counter() - load_start
+        return loaded, ref
+
+    state = prepare_serving_reusing(
+        load,
+        opts,
+        args.tokenizer_from,
+        repo=hf_repo_dir(args.load.model),
+        inputs_spec=args.load.inputs,
+    )
     state.timings[Phase.load] = load_s
     return state
 

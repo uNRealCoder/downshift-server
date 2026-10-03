@@ -180,12 +180,17 @@ def _execution_text(state: ServingState) -> str:
     return "threadpool  (--execution)"
 
 
+_REUSED_TEXT = {"memory": "reused (in-process)", "disk": "reused from --export-cache-dir"}
+
+
 def _boot_text(state: ServingState) -> str | None:
     timings = state.timings
     if not timings:
         return None
     total = sum(timings.values())
     parts = ", ".join(f"{name} {timings[name]:.1f}" for name in Phase if name in timings)
+    if state.reused is not None:
+        parts += ", " + _REUSED_TEXT[state.reused]
     return f"{total:.1f} s: {parts}"
 
 

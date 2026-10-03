@@ -41,6 +41,8 @@ class ServeOptions:
     dynamic: dict[str, list[int]] | None = None
     # --axis-max: {axis name: largest size to serve}; DOWNSHIFT_AXIS_MAX when not given
     axis_max: dict[str, int] | None = field(default_factory=lambda: dict(settings.AXIS_MAX) or None)
+    # --export-cache-dir: where verified exports are saved for the next boot; None = never write
+    export_cache_dir: str | None = settings.EXPORT_CACHE_DIR
     intra_op_threads: int = settings.INTRA_OP_THREADS  # ORT SessionOptions; 0 = let ORT choose
     inter_op_threads: int = settings.INTER_OP_THREADS
     output_encoding: OutputEncoding = OutputEncoding(settings.OUTPUT_ENCODING)  # per-call override

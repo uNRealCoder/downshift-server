@@ -19,6 +19,7 @@ import torch
 from downshift._imports import import_object
 from downshift.adapters import registry
 from downshift.adapters.base import Adapter, Family, Prepared, VaryFn
+from downshift.core import memo
 from downshift.core.axes import AxisFact, axis_facts, classify_outputs
 from downshift.core.capture import capture
 from downshift.core.inputs import synthesize
@@ -346,8 +347,14 @@ def check(
     seed: int = 0,
     vary: VaryFn | str | None = None,
     axis_max: dict[str, int] | None = None,
+    cache: bool = True,
+    _memo_key: str | None = None,
 ) -> ExportVerdict:
     """Export in memory, verify, and return the verdict. Writes nothing to disk.
+
+    A CLEAN or DEGRADED result is also kept in the in-process export memo (core/memo.py), for
+    export() and app_for() to reuse; check() itself never reads it, since it is the audit gate.
+    `cache=False` keeps nothing.
 
     fp16=True casts a deep copy of `model` to float16 and leaves the caller's model and
     its parameters untouched; `example_inputs`, if given, are cast on the copies used for
@@ -360,6 +367,22 @@ def check(
     verify.default_tolerances). seed makes the verification samples reproducible. vary
     overrides the adapter's own vary_fn; see prepare_model, which also says what axis_max does.
     """
+    key = None
+    if cache and verify_numerics:
+        key = _memo_key or memo.guarded(
+            memo.model_key,
+            model,
+            example_inputs,
+            adapter=adapter,
+            dynamic=dynamic,
+            k=k,
+            seed=seed,
+            atol=atol,
+            rtol=rtol,
+            vary=vary,
+            axis_max=axis_max,
+            fp16=fp16,
+        )
     if fp16:
         model = copy.deepcopy(model).half()
         if example_inputs is not None:
@@ -368,6 +391,11 @@ def check(
                 for t in example_inputs
             )
     prepared = prepare_model(model, example_inputs, adapter, dynamic, vary=vary, axis_max=axis_max)
-    return build_verdict(
+    verdict = build_verdict(
         prepared, k=k, verify_numerics=verify_numerics, atol=atol, rtol=rtol, seed=seed
     )
+    if key is not None and verdict.status in memo.STORED_STATUSES:
+        entry = memo.entry_from_verdict(verdict)
+        if entry is not None:
+            memo.MEMO.put(key, entry)
+    return verdict

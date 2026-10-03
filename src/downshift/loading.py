@@ -191,6 +191,17 @@ def load_model(spec: LoadSpec) -> LoadedModel:
     raise LoadError(f"{path} is not on this machine. {ACCEPTED}.")
 
 
+def hf_repo_dir(model: str) -> str | None:
+    """`model` itself when load_model would read it as a Hugging Face repo directory (the same
+    checks, in the same order, as load_model), else None. Touches no weights."""
+    path = Path(model)
+    if path.suffix == ".onnx" or (path.exists() and path.suffix in _STATE_DICT_SUFFIXES):
+        return None
+    if is_import_spec(model):
+        return None
+    return model if (path / "config.json").is_file() else None
+
+
 def resolve_tokenizer_source(spec: str) -> str:
     """Check --tokenizer-from names a downloaded Hugging Face repo directory and return it as
     a string; the repo itself is read later, by serve.engine.attach_hf_metadata."""

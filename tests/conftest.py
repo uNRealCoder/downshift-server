@@ -15,6 +15,7 @@ import torch
 from fastapi.testclient import TestClient
 
 import downshift
+from downshift.core.memo import MEMO
 from downshift.loading import LoadSpec, load_model
 from downshift.serve.app import build_app
 from downshift.serve.engine import ServeOptions, ServingState, prepare_serving
@@ -62,6 +63,15 @@ def _no_real_os_exit() -> Iterator[None]:
         yield
     finally:
         os._exit = real_exit
+
+
+@pytest.fixture(autouse=True)
+def _fresh_export_memo() -> Iterator[None]:
+    """The export memo is process-global; a test that counts export phases, or patches a
+    loader, must never see a hit left behind by an earlier test."""
+    MEMO.clear()
+    yield
+    MEMO.clear()
 
 
 def subprocess_env(*extra_paths: Path) -> dict[str, str]:
