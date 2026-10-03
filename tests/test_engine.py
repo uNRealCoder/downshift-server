@@ -43,6 +43,15 @@ def test_serving_state_builds_an_executor_from_max_concurrency(mlp_state):
     assert wider.executor._max_workers == 3
 
 
+def test_serving_state_builds_a_prep_pool_from_prep_threads(mlp_state):
+    narrow = dataclasses.replace(
+        mlp_state, options=dataclasses.replace(mlp_state.options, prep_threads=2)
+    )
+    assert isinstance(narrow.prep_executor, ThreadPoolExecutor)
+    assert narrow.prep_executor._max_workers == 2
+    assert narrow.prep_executor._thread_name_prefix == "downshift-prep"
+
+
 def test_degraded_model_falls_back_to_torch(serve_fixture):
     state = serve_fixture("scatter_include_self_false")
     assert state.verdict.status == "DEGRADED"

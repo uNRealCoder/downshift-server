@@ -147,9 +147,8 @@ def test_predict_reports_server_timing(mlp_client):
     resp = mlp_client.post("/predict", json=MLP_INPUT)
     assert resp.status_code == 200, resp.text
     timing = resp.headers["server-timing"]
-    assert "parse;dur=" in timing
-    assert "codec;dur=" in timing
-    assert "infer;dur=" in timing
+    for stage in ("parse", "prep_wait", "prep", "infer_wait", "infer", "encode"):
+        assert f"{stage};dur=" in timing
 
 
 def test_predict_missing_input(mlp_client):

@@ -147,6 +147,15 @@ MaxConcurrencyOpt = Annotated[
         "(ONNX Runtime's own intra-op threads still parallelise inside that one inference)",
     ),
 ]
+PrepThreadsOpt = Annotated[
+    int,
+    typer.Option(
+        "--prep-threads",
+        min=1,
+        help="Threads per worker process that decode request bodies and encode responses, "
+        "apart from the inference threads (default: min(4, usable CPUs))",
+    ),
+]
 MaxQueueOpt = Annotated[
     int,
     typer.Option(

@@ -7,7 +7,8 @@ import asyncio
 import contextvars
 import logging
 import time
-from functools import partial
+from collections.abc import Callable
+from concurrent.futures import Executor
 from typing import Any
 
 import numpy as np
@@ -18,6 +19,7 @@ from fastapi.responses import JSONResponse
 from downshift.serve.backends import FIRST_OUTPUT_NAME, InferenceInputError
 from downshift.serve.codec import b64encode
 from downshift.serve.engine import DimBound, ServingState
+from downshift.serve.metrics import STAGES
 from downshift.serve.schemas import OutputEncoding, to_numpy
 
 logger = logging.getLogger("downshift.serve")
@@ -129,40 +131,31 @@ def _bound_violation(state: ServingState, feeds: dict[str, np.ndarray]) -> str |
     return None
 
 
-def _predict_body(
-    state: ServingState,
-    inputs: dict[str, Any],
-    encoding: OutputEncoding | None,
-    admitted_at: float,
-    text: list[str] | None,
-    parse_ms: float,
-    timings_ms: dict[str, float],
-) -> NumpyJSONResponse:
-    """Runs in state.executor, never on the event loop: conversion of a large JSON body,
-    the inference itself, and response encoding. Admission and the cheap missing-input check
-    already happened on the loop by the time this is submitted.
-
-    On success the parse/codec/infer split (ms) is also written into `timings_ms`, for the
-    request log line (U1).
-
-    Raises HTTPException(400) for anything the client got wrong (bad shape/dtype/JSON).
-    Anything else (a backend bug, OOM, ...) propagates so the app-level handler turns it into
-    a 500 without leaking the exception text to the client.
-    """
+def _check_timeout(state: ServingState, admitted_at: float) -> None:
     request_timeout = state.options.request_timeout
     if request_timeout > 0:
         waited = time.monotonic() - admitted_at
         if waited > request_timeout:
-            # Never raised once infer() has begun: only a request that sat in the queue.
+            # Only ever raised before infer() has begun: a request that sat in a queue.
             raise HTTPException(
                 503,
                 f"request waited {waited:.1f}s in queue, past the {request_timeout:.1f}s "
                 "--request-timeout",
             )
 
+
+def _prepare_feeds(
+    state: ServingState, inputs: dict[str, Any], text: list[str] | None
+) -> tuple[dict[str, np.ndarray], float]:
+    """Request body to the graph's own input arrays (base64 decode, to_numpy, tokenize) and
+    the checks that need them: vocab, edge index, axis bounds. Runs in state.prep_executor.
+    Returns the feeds and the milliseconds spent.
+
+    Raises HTTPException(400) for anything the client got wrong (bad shape/dtype/JSON).
+    """
     declared = state.declared_dtypes
     max_bytes = state.options.max_input_bytes
-    codec_start = time.perf_counter()
+    start = time.perf_counter()
     try:
         if text is not None:
             feeds = _text_feeds(state, text, declared)
@@ -173,7 +166,6 @@ def _predict_body(
             }
     except (ValueError, TypeError, KeyError) as exc:
         raise HTTPException(400, str(exc)) from exc
-    codec_ms = (time.perf_counter() - codec_start) * 1000
 
     vocab_violation = _vocab_violation(state, feeds)
     if vocab_violation is not None:
@@ -184,21 +176,39 @@ def _predict_body(
     bound_violation = _bound_violation(state, feeds)
     if bound_violation is not None:
         raise HTTPException(400, bound_violation)
+    return feeds, (time.perf_counter() - start) * 1000
 
-    infer_start = time.perf_counter()
+
+def _infer(
+    state: ServingState, feeds: dict[str, np.ndarray]
+) -> tuple[dict[str, np.ndarray], float]:
+    """Only the backend call, so an inference slot is never held for conversion or encoding.
+    Runs in state.executor. Returns the outputs and the milliseconds spent.
+
+    Anything but a client error (a backend bug, OOM, ...) propagates so the app-level handler
+    turns it into a 500 without leaking the exception text to the client.
+    """
+    start = time.perf_counter()
     try:
         outputs = state.backend.infer(feeds)
-    except HTTPException:
-        raise
     except InferenceInputError as exc:
-        # The bound pre-check above already answers the common case; this is the backend
+        # The bound pre-check already answers the common case; this is the backend
         # rejecting something we had no bound for.
         raise HTTPException(400, str(exc)) from exc
-    infer_ms = (time.perf_counter() - infer_start) * 1000
+    return outputs, (time.perf_counter() - start) * 1000
 
+
+def _encode_response(
+    state: ServingState,
+    outputs: dict[str, np.ndarray],
+    encoding: OutputEncoding | None,
+    timings_ms: dict[str, float],
+) -> NumpyJSONResponse:
+    """Outputs to the response body, in state.prep_executor. `timings_ms` already holds the
+    earlier stages; the encode stage and the Server-Timing header are added here."""
     encoding = encoding or state.options.output_encoding
     encode = _base64_ready if encoding == OutputEncoding.base64 else _json_ready
-    encode_start = time.perf_counter()
+    start = time.perf_counter()
     # C-contiguous once, up front (np.require keeps 0-d arrays 0-d; ascontiguousarray does not).
     arrays = {name: np.require(arr, requirements="C") for name, arr in outputs.items()}
     # Same keys as PredictResponse; built by hand so orjson serializes the buffers directly.
@@ -211,14 +221,34 @@ def _predict_body(
         predictions = state.text.predictions(arrays[FIRST_OUTPUT_NAME])
         if predictions is not None:
             body["predictions"] = predictions
-    codec_ms += (time.perf_counter() - encode_start) * 1000
+    timings_ms["encode"] = round((time.perf_counter() - start) * 1000, 2)
 
-    timings_ms.update(parse=round(parse_ms, 2), codec=round(codec_ms, 2), infer=round(infer_ms, 2))
     response = NumpyJSONResponse(body)
-    response.headers["Server-Timing"] = (
-        f"parse;dur={parse_ms:.2f}, codec;dur={codec_ms:.2f}, infer;dur={infer_ms:.2f}"
+    response.headers["Server-Timing"] = ", ".join(
+        f"{stage};dur={timings_ms.get(stage, 0.0):.2f}" for stage in STAGES
     )
     return response
+
+
+async def _run_in(
+    executor: Executor,
+    wait_key: str,
+    timings_ms: dict[str, float],
+    fn: Callable[..., Any],
+    *args: Any,
+) -> Any:
+    """fn(*args) in `executor`, carrying contextvars (run_in_executor does not; without this,
+    log lines from the executor thread would lose the request id). The time from submit to
+    start is added to timings_ms[wait_key]."""
+    submitted = time.perf_counter()
+
+    def call() -> Any:
+        waited = (time.perf_counter() - submitted) * 1000
+        timings_ms[wait_key] = round(timings_ms.get(wait_key, 0.0) + waited, 2)
+        return fn(*args)
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(executor, contextvars.copy_context().run, call)
 
 
 async def run_predict(
@@ -231,11 +261,16 @@ async def run_predict(
     parse_ms: float,
     timings_ms: dict[str, float],
 ) -> NumpyJSONResponse:
-    """Missing-input check happens here, on the loop; everything else runs in state.executor
-    (see _predict_body) so a slow body or a slow backend never blocks /health or /ready, which
-    share this process's single event loop. Tokenizing a `text` request is part of that
-    executor work. Admission itself already happened in OrjsonRoute, before the body was even
-    read (P1); `admitted_at` is when that happened.
+    """Missing-input check happens here, on the loop; the rest is three stages so only the
+    middle one holds an inference thread: _prepare_feeds (prep pool), _infer (inference
+    executor), _encode_response (prep pool). A slow body or encode therefore never blocks
+    /health or /ready (they share this process's single event loop) nor another request's
+    inference. Admission itself already happened in OrjsonRoute, before the body was even
+    read (P1); `admitted_at` is when that happened, and the request keeps its slot until
+    the response is built.
+
+    `timings_ms` collects the per-stage milliseconds (parse, prep_wait, prep, infer_wait,
+    infer, encode) for Server-Timing and the request log line (U1).
     """
     if text is not None:
         if state.text is None:
@@ -249,20 +284,33 @@ async def run_predict(
         if missing:
             raise HTTPException(400, f"missing inputs: {missing}")
 
-    loop = asyncio.get_running_loop()
-    body = partial(
-        _predict_body,
+    timings_ms["parse"] = round(parse_ms, 2)
+    feeds, prep_ms = await _run_in(
+        state.prep_executor, "prep_wait", timings_ms, _prepare_feeds, state, inputs, text
+    )
+    timings_ms["prep"] = round(prep_ms, 2)
+
+    _check_timeout(state, admitted_at)
+
+    def infer() -> tuple[dict[str, np.ndarray], float]:
+        # Re-checked at start: the request may have queued behind a running inference.
+        _check_timeout(state, admitted_at)
+        return _infer(state, feeds)
+
+    outputs, infer_ms = await _run_in(state.executor, "infer_wait", timings_ms, infer)
+    timings_ms["infer"] = round(infer_ms, 2)
+
+    response: NumpyJSONResponse = await _run_in(
+        state.prep_executor,
+        "prep_wait",
+        timings_ms,
+        _encode_response,
         state,
-        inputs,
+        outputs,
         encoding,
-        admitted_at,
-        text,
-        parse_ms,
         timings_ms,
     )
-    # run_in_executor does not carry contextvars over; without this, log lines from the
-    # executor thread would lose the request id.
-    return await loop.run_in_executor(state.executor, contextvars.copy_context().run, body)
+    return response
 
 
 __all__ = [

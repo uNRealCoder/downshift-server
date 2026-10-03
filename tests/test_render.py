@@ -236,7 +236,7 @@ def test_print_banner_shows_concurrency(caplog):
 
 
 def test_print_banner_shows_threads_row_for_multiple_workers(caplog, monkeypatch):
-    monkeypatch.setattr(render.os, "cpu_count", lambda: 16)
+    monkeypatch.setattr(render.settings, "usable_cpus", lambda: 16)
     state = _serving_state(_verdict(), options=ServeOptions(intra_op_threads=4))
     render.print_banner(state, "127.0.0.1", 8000, workers=4)
     out = caplog.text
@@ -519,3 +519,9 @@ def test_axes_text_falls_back_to_the_dynamic_dims(caplog):
     render.print_verdict(_verdict(dynamic_dims={"x": [0]}), "model")
 
     assert "x[0]" in caplog.text
+
+
+def test_print_banner_shows_prep_threads_in_the_capacity_row(caplog):
+    state = _serving_state(_verdict(), options=ServeOptions(prep_threads=3))
+    render.print_banner(state, "127.0.0.1", 8000)
+    assert "3 prep threads" in caplog.text

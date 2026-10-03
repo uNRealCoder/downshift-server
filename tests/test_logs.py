@@ -164,7 +164,14 @@ def test_predict_writes_one_request_line_with_timings(client, caplog):
     assert re.fullmatch(r"POST /predict 200 \d+\.\d ms", record.getMessage())
     assert (record.method, record.path, record.status) == ("POST", "/predict", 200)
     assert record.duration_ms > 0
-    assert set(record.timings_ms) == {"parse", "codec", "infer"}
+    assert set(record.timings_ms) == {
+        "parse",
+        "prep_wait",
+        "prep",
+        "infer_wait",
+        "infer",
+        "encode",
+    }
 
 
 def test_health_is_debug_only(client, caplog):

@@ -40,6 +40,7 @@ class ServeOptions:
     max_input_bytes: int = settings.MAX_INPUT_BYTES  # cap on one decoded base64 tensor input
     max_body_bytes: int = settings.MAX_BODY_BYTES  # cap on the whole request body
     max_concurrency: int = settings.MAX_CONCURRENCY  # inferences allowed to run at once per worker
+    prep_threads: int = settings.PREP_THREADS  # request decode/encode threads, not inference
     max_queue: int = settings.MAX_QUEUE  # admitted predicts allowed to wait past max_concurrency
     request_timeout: float = settings.REQUEST_TIMEOUT  # seconds queued before a 503; 0 = no limit
     atol: float | None = None  # None means "by the model's floating dtype"

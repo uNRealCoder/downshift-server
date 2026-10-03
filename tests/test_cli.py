@@ -491,6 +491,43 @@ def test_serve_workers_writes_and_ships_the_onnx_artifact(monkeypatch):
     assert len(seen["onnx_bytes"]) > 0
 
 
+def test_export_with_external_data_writes_both_files_and_lists_the_data_file(
+    tmp_path: Path, monkeypatch
+):
+    from downshift.core import capture as capture_mod
+
+    monkeypatch.setattr(capture_mod, "EXTERNAL_DATA_THRESHOLD", 0)
+    result = run("export", CLEAN, "-o", str(tmp_path), "--json")
+    assert result.exit_code == 0, result.output
+
+    assert (tmp_path / "clean_mlp.onnx").is_file()
+    assert (tmp_path / "clean_mlp.onnx.data").is_file()
+    manifest = json.loads((tmp_path / "clean_mlp.manifest.json").read_text())
+    assert [entry["file"] for entry in manifest["external_data"]] == ["clean_mlp.onnx.data"]
+
+
+def test_serve_workers_hands_an_external_data_export_to_the_workers(monkeypatch):
+    """The parent drops its state before the workers load; the .onnx and the data file beside
+    it must still be there, and a worker rebuilt from the handoff must serve."""
+    from downshift.core import capture as capture_mod
+
+    monkeypatch.setattr(capture_mod, "EXTERNAL_DATA_THRESHOLD", 0)
+    seen: dict = {}
+
+    def fake_run(app, **kw):
+        args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
+        onnx_path = Path(args.artifact.onnx_path)
+        seen["files"] = sorted(p.name for p in onnx_path.parent.iterdir() if p.suffix != ".npz")
+        seen["api"] = _rebuilt_app()
+
+    monkeypatch.setattr(uvicorn, "run", fake_run)
+    result = run("serve", CLEAN, "--warmup", "1", "--workers", "2", "--no-access-log")
+    assert result.exit_code == 0, result.output
+
+    assert seen["files"] == ["model.onnx", "model.onnx.data"]
+    assert seen["api"].state.serving.backend.name == "onnxruntime"
+
+
 def test_serve_workers_degraded_ships_a_torch_artifact_and_warns(monkeypatch):
     seen: dict = {}
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: seen.update(app=app, **kw))
@@ -587,3 +624,9 @@ def test_serve_axis_max_round_trips_through_serve_args():
         log_level="warning",
     )
     assert ServeArgs.from_json(args.to_json()).options.axis_max == {"dim0": 20}
+
+
+def test_serve_passes_prep_threads(monkeypatch):
+    result, captured = _serve_captured(monkeypatch, "--prep-threads", "3")
+    assert captured["app"].state.serving.options.prep_threads == 3
+    assert "3 prep threads" in result.output

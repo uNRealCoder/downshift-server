@@ -183,7 +183,7 @@ class OrjsonRoute(APIRoute):
                     wrapped._body = result
                 if is_predict:
                     assert current is not None
-                    await wrapped.parse_in(current.executor)
+                    await wrapped.parse_in(current.prep_executor)
                 return await handler(wrapped)
             finally:
                 if admitted:

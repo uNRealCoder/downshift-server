@@ -6,6 +6,7 @@ environment, and the environment always wins over the default below. Read once a
 time, so setting an env var means restarting the process (or CLI invocation) that reads it.
 """
 
+import math
 import os
 from collections.abc import Callable, Iterable
 
@@ -17,6 +18,25 @@ DEFAULT_MAX_BODY_BYTES = 32 * 1024 * 1024
 
 # Verification samples for check()/export()/intake()/build_verdict() and ServeOptions.k.
 DEFAULT_SAMPLES = 8
+
+
+_CGROUP_CPU_MAX = "/sys/fs/cgroup/cpu.max"
+
+
+def usable_cpus() -> int:
+    """CPUs this process may actually use: a cgroup v2 quota (a container's --cpus) first,
+    then the scheduler affinity mask, then the machine's logical count."""
+    try:
+        with open(_CGROUP_CPU_MAX) as f:
+            quota, period = f.read().split()[:2]
+        if quota != "max":
+            return max(1, math.ceil(int(quota) / int(period)))
+    except (OSError, ValueError, ZeroDivisionError):
+        pass
+    process_cpu_count = getattr(os, "process_cpu_count", None)
+    if process_cpu_count is not None:
+        return process_cpu_count() or 1
+    return os.cpu_count() or 1
 
 
 def _env_str(name: str, default: str) -> str:
@@ -88,6 +108,10 @@ MAX_CONCURRENCY = _env_int("DOWNSHIFT_MAX_CONCURRENCY", 1)
 # Largest size to serve per named axis ("seq=4096,num_nodes=500"); the names are the ones the
 # boot banner and /schema list. Empty means each axis keeps the bound the adapter exported.
 AXIS_MAX = _env_axis_max("DOWNSHIFT_AXIS_MAX", {})
+
+# Threads converting request bodies to arrays and responses to bytes, apart from the
+# inference threads, so a slow encode never holds an inference slot.
+PREP_THREADS = _env_int("DOWNSHIFT_PREP_THREADS", min(4, usable_cpus()))
 
 # Predicts allowed to wait past max_concurrency before a new one gets a fast 503 instead of
 # joining the queue.

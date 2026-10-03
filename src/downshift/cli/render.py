@@ -10,11 +10,10 @@ together. That logger is forced to INFO, so reports print at any `--log-level`.
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from downshift import __version__
+from downshift import __version__, settings
 from downshift.core.phase import Phase
 from downshift.logs import REPORT_LOGGER
 from downshift.serve.codec import BASE64_CODEC
@@ -168,8 +167,9 @@ def _capacity_text(state: ServingState) -> str:
     inferences = "inference" if opts.max_concurrency == 1 else "inferences"
     timeout = "no timeout" if opts.request_timeout <= 0 else f"{opts.request_timeout:g} s timeout"
     return (
-        f"{opts.max_concurrency} {inferences} at a time, {opts.max_queue} queued, {timeout}"
-        "  (--max-concurrency, --max-queue, --request-timeout)"
+        f"{opts.max_concurrency} {inferences} at a time, {opts.prep_threads} prep threads, "
+        f"{opts.max_queue} queued, {timeout}"
+        "  (--max-concurrency, --prep-threads, --max-queue, --request-timeout)"
     )
 
 
@@ -336,7 +336,7 @@ def print_banner(state: ServingState, host: str, port: int, workers: int = 1) ->
     if warmup_text is not None:
         rows.add("Warmup", warmup_text)
     if workers > 1:
-        logical = os.cpu_count() or workers
+        logical = settings.usable_cpus()
         rows.add(
             "Threads",
             f"{state.options.intra_op_threads} intra-op per worker"

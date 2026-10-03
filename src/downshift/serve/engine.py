@@ -92,9 +92,12 @@ class ServingState:
     # Empty for a bare .onnx with no reference model - there is no Prepared to read it from.
     axis_bounds: dict[str, dict[int, DimBound]] = field(default_factory=dict, repr=False)
     # Not JSON-able and not part of a serving state's identity: rebuilt from options.max_concurrency.
-    # `infer` (and, for the JSON path, request conversion) runs on these threads, never on the
-    # event loop, so /health and /ready are never stuck behind a queue of slow predicts.
+    # `infer` runs on these threads, never on the event loop, so /health and /ready are never
+    # stuck behind a queue of slow predicts.
     executor: ThreadPoolExecutor = field(init=False, repr=False, compare=False)
+    # Request conversion and response encoding (and the body's JSON parse): the CPU work around
+    # an inference, kept off `executor` so it never holds an inference slot.
+    prep_executor: ThreadPoolExecutor = field(init=False, repr=False, compare=False)
     # Admitted-but-not-yet-finished predicts (running in the executor or still queued there),
     # guarded by _admission_lock since it's read-then-written from the event loop and written
     # again from whichever executor thread finishes a request.
@@ -103,6 +106,9 @@ class ServingState:
 
     def __post_init__(self) -> None:
         self.executor = ThreadPoolExecutor(max_workers=self.options.max_concurrency)
+        self.prep_executor = ThreadPoolExecutor(
+            max_workers=self.options.prep_threads, thread_name_prefix="downshift-prep"
+        )
         self._admission_lock = threading.Lock()
 
     def try_admit(self) -> bool:

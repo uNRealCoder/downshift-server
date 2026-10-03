@@ -133,6 +133,7 @@ def _collect_serve_args(
     max_input_bytes: int,
     max_body_bytes: int,
     max_concurrency: int,
+    prep_threads: int,
     max_queue: int,
     request_timeout: float,
     atol: float | None,
@@ -169,6 +170,7 @@ def _collect_serve_args(
         max_input_bytes=max_input_bytes,
         max_body_bytes=max_body_bytes,
         max_concurrency=max_concurrency,
+        prep_threads=prep_threads,
         max_queue=max_queue,
         request_timeout=request_timeout,
         atol=atol,
@@ -286,6 +288,9 @@ def _serve_app_factory() -> FastAPI:
     )
 
 
+_HANDOFF_KEEPALIVE: list[object] = []
+
+
 def _write_onnx_artifact(state: ServingState) -> tuple[Path, Path | None, Path | None]:
     """(onnx_path, feeds_path, temp_dir) for a `--workers N` parent to hand its already-
     verified export to the workers. temp_dir is what to clean up afterwards, or None when
@@ -297,6 +302,11 @@ def _write_onnx_artifact(state: ServingState) -> tuple[Path, Path | None, Path |
     from downshift.serve.backends import example_feeds
 
     verdict = state.verdict
+    if verdict._tmpdir is not None:
+        # An external-data export lives in the verdict's own temp dir, data file beside the
+        # .onnx. The parent drops its state before the workers load, which would delete that
+        # dir, so it has to outlive the verdict (its finalizer then runs at exit).
+        _HANDOFF_KEEPALIVE.append(verdict._tmpdir)
     needs_copy = verdict.onnx_path is None
     needs_feeds = state.example_inputs is not None
     if not needs_copy and not needs_feeds:

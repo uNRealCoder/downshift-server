@@ -103,3 +103,30 @@ def test_bad_axis_max_env_var_raises_clear_error(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("DOWNSHIFT_AXIS_MAX", raw)
     with pytest.raises(ValueError, match="DOWNSHIFT_AXIS_MAX"):
         importlib.reload(settings)
+
+
+def test_usable_cpus_reads_a_cgroup_v2_quota(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    quota = tmp_path / "cpu.max"
+    quota.write_text("200000 100000\n")
+    monkeypatch.setattr(settings, "_CGROUP_CPU_MAX", str(quota))
+    assert settings.usable_cpus() == 2
+
+    quota.write_text("50000 100000\n")
+    assert settings.usable_cpus() == 1
+
+
+def test_usable_cpus_falls_back_without_a_quota(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    quota = tmp_path / "cpu.max"
+    quota.write_text("max 100000\n")
+    monkeypatch.setattr(settings, "_CGROUP_CPU_MAX", str(quota))
+    monkeypatch.setattr(settings.os, "process_cpu_count", lambda: 6, raising=False)
+    assert settings.usable_cpus() == 6
+
+    monkeypatch.setattr(settings, "_CGROUP_CPU_MAX", str(tmp_path / "missing"))
+    assert settings.usable_cpus() == 6
+
+
+def test_prep_threads_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DOWNSHIFT_PREP_THREADS", "7")
+    importlib.reload(settings)
+    assert settings.PREP_THREADS == 7

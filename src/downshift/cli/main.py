@@ -50,6 +50,7 @@ from downshift.cli.options import (
     NormalizeOpt,
     OutputEncodingOpt,
     PoolingOpt,
+    PrepThreadsOpt,
     ReferenceOpt,
     RequestTimeoutOpt,
     RtolOpt,
@@ -346,6 +347,7 @@ def serve_cmd(
     max_input_bytes: MaxInputBytesOpt = settings.MAX_INPUT_BYTES,
     max_body_bytes: MaxBodyBytesOpt = settings.MAX_BODY_BYTES,
     max_concurrency: MaxConcurrencyOpt = settings.MAX_CONCURRENCY,
+    prep_threads: PrepThreadsOpt = settings.PREP_THREADS,
     max_queue: MaxQueueOpt = settings.MAX_QUEUE,
     request_timeout: RequestTimeoutOpt = settings.REQUEST_TIMEOUT,
     workers: WorkersOpt = settings.WORKERS,
@@ -374,7 +376,7 @@ def serve_cmd(
         if workers > 1 and intra_op_threads == 0:
             # Unset (0 means "let ONNX Runtime/torch choose") oversubscribes N-fold across
             # worker processes; split the logical cores instead. Explicit flags still win.
-            intra_op_threads = max(1, (os.cpu_count() or 1) // workers)
+            intra_op_threads = max(1, settings.usable_cpus() // workers)
         load, options = _collect_serve_args(
             model,
             inputs,
@@ -395,6 +397,7 @@ def serve_cmd(
             max_input_bytes,
             max_body_bytes,
             max_concurrency,
+            prep_threads,
             max_queue,
             request_timeout,
             atol,

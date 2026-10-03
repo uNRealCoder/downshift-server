@@ -4,6 +4,7 @@ before the body is read, bf16 models, input range checks, /ready phases, torch e
 import dataclasses
 import logging
 import threading
+import time
 
 import numpy as np
 import pytest
@@ -520,3 +521,77 @@ def test_device_cuda_without_cuda_fails_at_construction(monkeypatch, device):
 
     with pytest.raises(ValueError, match=f"--device {device}"):
         TorchBackend(nn.Linear(2, 2), ("x",), device)
+
+
+# --- the prep pool keeps conversion off the inference slot -----------------------------------
+
+
+def test_a_slow_text_encode_does_not_hold_the_inference_slot(tmp_path, monkeypatch):
+    pytest.importorskip("transformers")
+    pytest.importorskip("tokenizers")
+    from downshift.adapters.text import TextIO
+    from tests.models import hf_repo
+
+    repo = hf_repo.write_encoder_repo(tmp_path)
+    state = prepare_serving(
+        load_model(LoadSpec(repo)),
+        ServeOptions(warmup=1, max_concurrency=1, prep_threads=2),
+    )
+    client = TestClient(build_app(state, api_key=None))
+    started = threading.Event()
+
+    def slow_encode(self, text):
+        started.set()
+        time.sleep(2.0)
+        raise ValueError("never mind")
+
+    monkeypatch.setattr(TextIO, "encode", slow_encode)
+    results: list[int] = []
+    slow = threading.Thread(
+        target=lambda: results.append(client.post("/predict", json={"text": "hi"}).status_code)
+    )
+    slow.start()
+    assert started.wait(5)
+
+    began = time.perf_counter()
+    resp = client.post("/predict", json=_ids([2, 3, 4]))
+    elapsed = time.perf_counter() - began
+    slow.join()
+
+    assert resp.status_code == 200, resp.text
+    assert elapsed < 1.0
+    assert results == [400]
+
+
+def test_a_request_queued_for_inference_still_times_out(mlp_state, monkeypatch):
+    calls: list[int] = []
+
+    def slow_infer(inputs):
+        calls.append(1)
+        time.sleep(0.4)
+        return {"output_0": np.zeros((1, 4), dtype=np.float32)}
+
+    state = _with_options(mlp_state, max_concurrency=1, max_queue=5, request_timeout=0.1)
+    monkeypatch.setattr(state.backend, "infer", slow_infer)
+    client = TestClient(build_app(state, api_key=None))
+    results: list[int] = []
+    first = threading.Thread(
+        target=lambda: results.append(client.post("/predict", json=MLP_INPUT).status_code)
+    )
+    first.start()
+    time.sleep(0.05)
+    second = client.post("/predict", json=MLP_INPUT)
+    first.join()
+
+    assert second.status_code == 503
+    assert "--request-timeout" in second.json()["detail"]
+    assert results == [200]
+    assert len(calls) == 1
+
+
+def test_server_timing_and_the_access_log_carry_the_wait_stages(mlp_state):
+    resp = TestClient(build_app(mlp_state, api_key=None)).post("/predict", json=MLP_INPUT)
+
+    assert resp.status_code == 200
+    names = [part.split(";")[0] for part in resp.headers["server-timing"].split(", ")]
+    assert names == ["parse", "prep_wait", "prep", "infer_wait", "infer", "encode"]
