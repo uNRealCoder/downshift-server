@@ -296,3 +296,16 @@ def test_text_request_with_accept_returns_embeddings_as_safetensors(tmp_path):
     np.testing.assert_allclose(got[name], want["outputs"][name], rtol=1e-5, atol=1e-6)
     meta = decode_safetensors(resp.content, max_input_bytes=BIG)[1]
     assert json.loads(meta["downshift.embedding"])["pooling"] == "mean"
+
+
+def test_an_unknown_output_encoding_in_metadata_is_a_400(mlp_client):
+    x = np.random.randn(1, 16).astype(np.float32)
+    resp = _post(mlp_client, "/predict", {"x": x}, {"output_encoding": "pickle"})
+    assert resp.status_code == 400
+    assert "output_encoding" in resp.json()["detail"]
+
+
+def test_an_empty_predict_body_is_the_usual_422(mlp_client):
+    resp = mlp_client.post("/predict", content=b"", headers={"Content-Type": "application/json"})
+    assert resp.status_code == 422
+    assert resp.json()["detail"][0]["type"] == "missing"

@@ -57,6 +57,17 @@ class EmbeddingRecipe:
     def describe(self) -> str:
         return f"{self.pooling} pooling" + (", L2-normalised" if self.normalize else "")
 
+    def info(self, dimension: int | None) -> dict[str, Any]:
+        """The recipe as /schema's `embedding` and the safetensors `downshift.embedding`
+        metadata report it (prompts aside), for an output of `dimension` values per row."""
+        return {
+            "pooling": self.pooling,
+            "normalized": self.normalize,
+            "dimension": dimension,
+            "max_seq_length": self.max_seq_length,
+            "from": self.origin,
+        }
+
 
 def _read_json(path: Path) -> Any:
     try:

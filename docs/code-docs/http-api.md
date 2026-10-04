@@ -94,7 +94,8 @@ class MetadataResponse(BaseModel):
     input_names: list[str]
     notes: list[str] = []
     version: str
-    limits: dict = {}
+    limits: Limits  # max_body_bytes, max_input_bytes, max_concurrency, max_queue, request_timeout
+    execution: str  # "threadpool" or "inline"
     boot: dict[str, float] = {}
     warmup: dict | None = None
 ```
@@ -108,7 +109,8 @@ class MetadataResponse(BaseModel):
 | `input_names` | Flat input names, in forward-argument order. |
 | `notes` | Notes for the banner (e.g. `--force-onnx` warnings). |
 | `version` | `downshift.__version__`. |
-| `limits` | `max_body_bytes`, `max_input_bytes`, `max_concurrency`, `max_queue`, `request_timeout`, read from `ServeOptions`. |
+| `limits` | `max_body_bytes`, `max_input_bytes`, `max_concurrency`, `max_queue`, `request_timeout`, read from `ServeOptions`; the same block as `/schema`'s `limits`. |
+| `execution` | `--execution`: `"threadpool"` or `"inline"`. |
 | `boot` | Wall-clock seconds per phase (`load`, `export`, `verify`, `session`, `warmup` - whichever ran); the same dict the CLI's `Boot` banner row prints. |
 | `warmup` | `{"count", "mean_ms", "synthesized"}` from `WarmupStats`, or `null` if warmup hasn't run. |
 
@@ -143,7 +145,7 @@ describes the graph that is actually running, never what the source model promis
 | `input_formats` | The three wire forms a tensor value may take (nested list, typed object, base64) - the same rules as "Wire formats" below. |
 | `output_encodings` | `["json", "base64"]`. |
 | `default_output_encoding` | What this server uses when a request omits `output_encoding`. |
-| `limits` | `max_body_bytes` and `max_input_bytes` - the two limits that constrain a request body. |
+| `limits` | The same five limits as `/metadata`'s `limits`. |
 | `notes` | Anything a caller would otherwise be surprised by; see the fields above. |
 
 Each entry in `inputs`/`outputs` is a `TensorSchema`:
@@ -185,7 +187,7 @@ curl -s localhost:8000/schema | python -m json.tool
  "source": {"spec": "bert-base-uncased", "kind": "hf-repo-dir",
             "description": "a downloaded Hugging Face repo directory on this machine (has config.json)",
             "fetched_at_runtime": false},
- "family": "hf-transformers", "backend": "onnxruntime", "device": "CPUExecutionProvider",
+ "family": "hf", "backend": "onnxruntime", "device": "CPUExecutionProvider",
  "endpoint": "/predict", "graph_endpoint": null,
  "inputs": [{"name": "input_ids", "dtype": "int64", "shape": ["batch", "seq"],
              "required": true, "example_shape": [1, 1],

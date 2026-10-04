@@ -799,9 +799,9 @@ def _inline_client(mlp_state, execution) -> TestClient:
 
 
 def test_metadata_reports_the_execution_mode(mlp_client, mlp_state):
-    assert mlp_client.get("/metadata").json()["execution"] == {"mode": "threadpool"}
+    assert mlp_client.get("/metadata").json()["execution"] == "threadpool"
     client = _inline_client(mlp_state, ExecutionChoice.inline)
-    assert client.get("/metadata").json()["execution"] == {"mode": "inline"}
+    assert client.get("/metadata").json()["execution"] == "inline"
 
 
 def test_inline_runs_a_small_json_request_on_the_event_loop(mlp_state, monkeypatch):

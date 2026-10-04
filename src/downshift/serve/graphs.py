@@ -16,6 +16,11 @@ logger = logging.getLogger("downshift.serve")
 NODE, EDGE, FIXED, UNKNOWN = "node", "edge", "fixed", "unknown"
 
 GRAPH_TENSORS = ("x", "edge_index", "edge_attr")
+# The inputs that make a model "graph-shaped": what /predict/graph accepts, and what /schema
+# checks before advertising that route.
+GRAPH_INPUTS = frozenset(GRAPH_TENSORS[:2])
+# The per-graph count vectors a batched safetensors body adds.
+GRAPH_COUNTS = ("num_nodes", "num_edges")
 
 _FIXED_HELP = (
     "has a fixed size (its axis 0 follows neither nodes nor edges), so it can't be split per "
@@ -32,14 +37,15 @@ def eager_output_axes(prepared: Any, samples: int = 4) -> list[str]:
     """Output kinds for a PyG model whose export (and so verify) was skipped, `--backend
     torch`: the same classification verify would make, from a few eager forwards over the
     adapter's own varied samples. [] (every output unknown) when it can't be worked out."""
+    from downshift.adapters.base import Family
     from downshift.core.axes import classify_outputs
 
-    if prepared.family != "pyg" or prepared.vary_fn is None:
+    if prepared.family != Family.pyg or prepared.vary_fn is None:
         return []
     try:
         import torch
 
-        from downshift.core.verify import _as_tensor_list
+        from downshift.core.verify import as_tensor_list
 
         names = list(prepared.input_names)
         sample_shapes: list[list[tuple[int, ...]]] = []
@@ -49,7 +55,7 @@ def eager_output_axes(prepared: Any, samples: int = 4) -> list[str]:
             torch.manual_seed(0)
             for i in range(samples):
                 sample = prepared.vary_fn(i)
-                outs = _as_tensor_list(prepared.model(*sample))
+                outs = as_tensor_list(prepared.model(*sample))
                 sample_shapes.append([tuple(t.shape) for t in sample])
                 output_shapes.append([tuple(t.shape) for t in outs])
         return classify_outputs(
@@ -60,11 +66,24 @@ def eager_output_axes(prepared: Any, samples: int = 4) -> list[str]:
         return []
 
 
-def _edge_index_violation(feeds: dict[str, np.ndarray]) -> str | None:
-    # predict.py imports this module, so its checker is fetched at call time.
-    from downshift.serve.predict import _edge_index_violation as check
+def index_range_violation(name: str, arr: np.ndarray | None, upper: int, what: str) -> str | None:
+    """Why `arr` (an index tensor) holds a value outside [0, upper), or None. One vectorised
+    min/max, since a backend that trusts the indices wraps a negative one or reads out of
+    bounds instead of refusing the request."""
+    if arr is None or arr.size == 0:
+        return None
+    lo, hi = int(arr.min()), int(arr.max())
+    if lo >= 0 and hi < upper:
+        return None
+    return f"{name} contains {lo if lo < 0 else hi}, outside the {what} [0, {upper})"
 
-    return check(feeds)
+
+def edge_index_violation(feeds: dict[str, np.ndarray]) -> str | None:
+    """edge_index must index into x's node dimension."""
+    x = feeds.get("x")
+    if x is None:
+        return None
+    return index_range_violation("edge_index", feeds.get("edge_index"), x.shape[0], "node range")
 
 
 def batch_graphs(
@@ -93,7 +112,7 @@ def batch_graphs(
                 f"{where}: x has trailing shape {list(x.shape[1:])}; graphs[0] has "
                 f"{list(items[0]['x'].shape[1:])}"
             )
-        violation = _edge_index_violation({"x": x, "edge_index": edge_index})
+        violation = edge_index_violation({"x": x, "edge_index": edge_index})
         if violation is not None:
             raise ValueError(f"{where}: {violation}")
         if ("edge_attr" in item) != with_attr:
@@ -115,17 +134,19 @@ def batch_graphs(
 
     offsets = np.concatenate(([0], np.cumsum(node_counts[:-1]))).astype(np.int64)
     edge_index = np.concatenate([item["edge_index"] for item in items], axis=1)
-    edge_index = edge_index + np.repeat(offsets, edge_counts)[None, :].astype(edge_index.dtype)
+    edge_index += np.repeat(offsets, edge_counts).astype(edge_index.dtype)  # a fresh array
     feeds = {"x": np.concatenate([item["x"] for item in items]), "edge_index": edge_index}
     if with_attr:
         feeds["edge_attr"] = np.concatenate([item["edge_attr"] for item in items])
     return feeds, node_counts, edge_counts
 
 
-def slice_binary_batch(tensors: dict[str, np.ndarray]) -> list[dict[str, np.ndarray]]:
+def binary_batch(
+    tensors: dict[str, np.ndarray],
+) -> tuple[dict[str, np.ndarray], list[int], list[int]]:
     """A safetensors batch (concatenated local-id x/edge_index/edge_attr plus int64 `num_nodes`
-    and `num_edges` vectors) back into per-graph items for batch_graphs. Everything is
-    validated before any slicing; ValueError for a body that does not add up."""
+    and `num_edges` vectors) as batch_graphs returns it: (feeds, node_counts, edge_counts).
+    ValueError for a body that does not add up."""
     if "num_nodes" not in tensors or "num_edges" not in tensors:
         raise ValueError("a batched body needs both 'num_nodes' and 'num_edges'")
     num_nodes, num_edges = tensors["num_nodes"], tensors["num_edges"]
@@ -164,16 +185,23 @@ def slice_binary_batch(tensors: dict[str, np.ndarray]) -> list[dict[str, np.ndar
             f"{attr.shape[0] if attr.ndim else 0} rows"
         )
 
-    node_bounds = np.concatenate(([0], np.cumsum(num_nodes))).tolist()
-    edge_bounds = np.concatenate(([0], np.cumsum(num_edges))).tolist()
-    items: list[dict[str, np.ndarray]] = []
-    for i in range(num_nodes.shape[0]):
-        n0, n1, e0, e1 = node_bounds[i], node_bounds[i + 1], edge_bounds[i], edge_bounds[i + 1]
-        item = {"x": x[n0:n1], "edge_index": edge_index[:, e0:e1]}
-        if attr is not None:
-            item["edge_attr"] = attr[e0:e1]
-        items.append(item)
-    return items
+    # Each edge's own graph's node count, and the nodes of every graph before it: the local ids
+    # are range-checked and shifted to batch ids in one pass, with x and edge_attr left as sent.
+    edge_nodes = np.repeat(num_nodes, num_edges)
+    bad = (edge_index < 0) | (edge_index >= edge_nodes)
+    if bad.any():
+        column = int(np.argmax(bad.any(axis=0)))
+        graph = int(np.searchsorted(np.cumsum(num_edges), column, side="right"))
+        value = int(edge_index[:, column][bad[:, column]][0])
+        raise ValueError(
+            f"graphs[{graph}]: edge_index contains {value}, outside the node range "
+            f"[0, {int(num_nodes[graph])})"
+        )
+    starts = np.repeat(np.cumsum(num_nodes) - num_nodes, num_edges)
+    feeds = {"x": x, "edge_index": edge_index + starts.astype(edge_index.dtype)}
+    if attr is not None:
+        feeds["edge_attr"] = attr
+    return feeds, num_nodes.tolist(), num_edges.tolist()
 
 
 def split_refusal(kinds: Sequence[str], names: Sequence[str], graph_count: int) -> str | None:

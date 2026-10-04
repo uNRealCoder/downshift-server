@@ -7,7 +7,7 @@ to /predict unchanged, returns 200. Everything else describes that body.
 import pytest
 from fastapi.testclient import TestClient
 
-from downshift import loading
+from downshift import sources
 from downshift.serve.backends import IOSpec
 from downshift.serve.describe import (
     DYNAMIC_AXIS,
@@ -46,8 +46,8 @@ def test_schema_says_the_model_is_one_already_on_this_machine(mlp_client):
     source = mlp_client.get("/schema").json()["source"]
 
     assert source["spec"] == "tests.models.clean_mlp:make_model"
-    assert source["kind"] == loading.IMPORT_SPEC
-    assert source["description"] == loading.SOURCE_KIND_HELP[loading.IMPORT_SPEC]
+    assert source["kind"] == sources.IMPORT_SPEC
+    assert source["description"] == sources.SOURCE_KIND_HELP[sources.IMPORT_SPEC]
     assert source["fetched_at_runtime"] is False
 
 
@@ -57,10 +57,8 @@ def test_schema_reports_the_wire_formats_and_the_request_limits(mlp_client, mlp_
     assert [f["name"] for f in body["input_formats"]] == ["nested list", "typed object", "base64"]
     assert body["output_encodings"] == ["json", "base64"]
     assert body["default_output_encoding"] == mlp_state.options.output_encoding.value
-    assert body["limits"] == {
-        "max_body_bytes": mlp_state.options.max_body_bytes,
-        "max_input_bytes": mlp_state.options.max_input_bytes,
-    }
+    assert body["limits"] == mlp_client.get("/metadata").json()["limits"]
+    assert body["limits"]["max_body_bytes"] == mlp_state.options.max_body_bytes
 
 
 def test_schema_points_a_graph_model_at_the_graph_route(gcn_client):
@@ -148,7 +146,7 @@ def test_openapi_documents_the_schema_route(mlp_client):
 
 
 def test_serving_state_reports_the_kind_of_its_source(mlp_state):
-    assert mlp_state.source_kind == loading.IMPORT_SPEC
+    assert mlp_state.source_kind == sources.IMPORT_SPEC
 
 
 def test_schema_falls_back_when_the_backend_declares_no_shape(mlp_state, monkeypatch):
@@ -170,7 +168,7 @@ def test_app_for_exposes_schema_for_an_in_memory_module():
     client = TestClient(app_for(clean_mlp.make_model(), clean_mlp.make_inputs(), warmup=1))
     body = client.get("/schema").json()
 
-    assert body["source"]["kind"] == loading.IN_PROCESS_MODULE
+    assert body["source"]["kind"] == sources.IN_PROCESS_MODULE
     assert body["model"] == "model"  # an nn.Module has no path to name
     assert client.post("/predict", json=body["example_request"]).status_code == 200
 
@@ -182,7 +180,7 @@ def test_app_for_names_an_onnx_file_by_its_file_name(exported_mlp):
     client = TestClient(app_for(str(path), clean_mlp.make_inputs(), reference=model, warmup=1))
     body = client.get("/schema").json()
 
-    assert body["source"]["kind"] == loading.ONNX_FILE
+    assert body["source"]["kind"] == sources.ONNX_FILE
     assert body["source"]["spec"] == path.name
     assert client.post("/predict", json=body["example_request"]).status_code == 200
 

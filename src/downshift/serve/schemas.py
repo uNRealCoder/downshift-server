@@ -117,11 +117,6 @@ class PredictResponse(BaseModel):
     predictions: list[dict[str, Any]] | None = None
 
 
-# The input names that make a model "graph-shaped": what /predict/graph accepts, and what
-# /schema checks before advertising that route.
-GRAPH_INPUTS = frozenset({"x", "edge_index"})
-
-
 class GraphItem(BaseModel):
     """One graph of a batch: node features, COO edge index in the graph's own node ids,
     optional edge attributes."""
@@ -244,8 +239,14 @@ class AxisInfo(BaseModel):
     sampled_max: int | None = None
 
 
-class ExecutionInfo(BaseModel):
-    mode: str  # "threadpool" or "inline" (--execution)
+class Limits(BaseModel):
+    """The serving limits a client runs into; the same block on /metadata and /schema."""
+
+    max_body_bytes: int
+    max_input_bytes: int
+    max_concurrency: int
+    max_queue: int
+    request_timeout: float
 
 
 class MetadataResponse(BaseModel):
@@ -257,8 +258,8 @@ class MetadataResponse(BaseModel):
     input_names: list[str]
     notes: list[str] = Field(default_factory=list)
     version: str
-    limits: dict = Field(default_factory=dict)
-    execution: ExecutionInfo = Field(default_factory=lambda: ExecutionInfo(mode="threadpool"))
+    limits: Limits
+    execution: str  # "threadpool" or "inline" (--execution)
     boot: dict[str, float] = Field(default_factory=dict)
     warmup: dict | None = None
 
@@ -335,11 +336,6 @@ class EmbeddingInfo(BaseModel):
     default_prompt: str | None = None
 
 
-class SchemaLimits(BaseModel):
-    max_body_bytes: int
-    max_input_bytes: int
-
-
 class SchemaResponse(BaseModel):
     """The answer to "what do I POST?": see downshift/serve/describe.py."""
 
@@ -363,7 +359,7 @@ class SchemaResponse(BaseModel):
     input_formats: list[InputFormat] = Field(default_factory=list)
     output_encodings: list[str] = Field(default_factory=list)
     default_output_encoding: str
-    limits: SchemaLimits
+    limits: Limits
     notes: list[str] = Field(default_factory=list)
 
 

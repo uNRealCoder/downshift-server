@@ -16,7 +16,7 @@ def verdict() -> downshift.ExportVerdict:
 @pytest.mark.needs_torch_26
 def test_bert_exports_clean(verdict):
     assert verdict.status == "CLEAN", verdict.reason
-    assert verdict.model_family == "hf-transformers"
+    assert verdict.model_family == "hf"
     assert verdict.recommended_backend == "onnxruntime"
     assert verdict.warnings == []
 
@@ -241,7 +241,7 @@ def test_the_torch_model_is_released_after_a_clean_onnx_verdict(tmp_path):
     assert loaded.model is None
     assert state.verdict.prepared is None
     assert state.axis_bounds  # read off the Prepared before it was dropped
-    assert state.verdict.numerics is not None and state.verdict.numerics.session is not None
+    assert state.verdict.numerics is not None
 
 
 def test_the_torch_backend_keeps_its_model(tmp_path):

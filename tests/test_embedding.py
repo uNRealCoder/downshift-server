@@ -22,7 +22,7 @@ from downshift.adapters.embedding import (  # noqa: E402
     read_recipe,
     resolve_recipe,
 )
-from downshift.cli import main  # noqa: E402
+from downshift.cli import main, runtime  # noqa: E402
 from downshift.loading import LoadError, LoadSpec, load_model  # noqa: E402
 from downshift.serve.app import build_app  # noqa: E402
 from downshift.serve.engine import prepare_serving  # noqa: E402
@@ -468,7 +468,7 @@ def _worker_args(repo: str, *, pooling=None, normalize=None, **artifact) -> main
 
 def _rebuilt(monkeypatch, args: main.ServeArgs) -> TestClient:
     monkeypatch.setenv(main._SERVE_ARGS_ENV, args.to_json())
-    api = main._serve_app_factory()
+    api = runtime._serve_app_factory()
     with TestClient(api):
         api.state.loader_thread.join(timeout=60)
     return TestClient(api)
@@ -482,13 +482,10 @@ def test_onnx_artifact_worker_still_takes_text_and_reports_the_recipe(
     onnx_path.write_bytes(state.verdict.onnx_bytes)
     args = _worker_args(
         repo,
-        backend="onnxruntime",
         verdict=state.verdict.to_dict(),
         input_names=list(state.input_names),
-        notes=[],
         onnx_path=str(onnx_path),
         kind=state.source_kind,  # what the parent's serve_cmd ships
-        hf_source=state.hf_source,
     )
 
     worker = _rebuilt(monkeypatch, args)
@@ -505,10 +502,9 @@ def test_torch_artifact_worker_still_takes_text_and_reports_the_recipe(monkeypat
     )
     args = _worker_args(
         repo,
-        backend="torch",
         verdict=torch_state.verdict.to_dict(),
-        notes=[],
-        hf_source=torch_state.hf_source,
+        input_names=list(torch_state.input_names),
+        kind=torch_state.source_kind,
     )
 
     worker = _rebuilt(monkeypatch, args)

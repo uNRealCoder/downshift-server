@@ -200,6 +200,14 @@ def test_binary_batch_mismatches_are_400(gcn_client, override, message):
     assert message in resp.json()["detail"]
 
 
+def test_binary_batch_names_the_graph_with_a_bad_local_node_id(gcn_client):
+    graphs = _graphs()
+    graphs[1]["edge_index"][1][0] = len(graphs[1]["x"])  # one past graph 1's own nodes
+    resp = _post_binary(gcn_client, _binary(graphs))
+    assert resp.status_code == 400
+    assert resp.json()["detail"].startswith("graphs[1]: edge_index contains")
+
+
 def test_binary_batch_needs_both_counts(gcn_client):
     tensors = _binary(_graphs())
     del tensors["num_edges"]

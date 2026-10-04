@@ -45,7 +45,6 @@ def _guess_single_tensor_input(model: nn.Module) -> torch.Tensor | None:
 
 class GenericAdapter:
     name = Family.generic
-    family = "generic-torch"
 
     def matches(self, model: nn.Module, example_inputs: tuple | None) -> bool:
         return True
@@ -75,7 +74,7 @@ class GenericAdapter:
             input_names=names,
             dynamic_shapes=dynamic_shapes,
             vary_fn=pin_vary_fn(inputs, dynamic_shapes, axis_max) if axis_max else None,
-            family=self.family,
+            family=self.name,
         )
 
 

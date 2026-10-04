@@ -76,7 +76,7 @@ def load_from_file(path_str: str, attr: str = "ADAPTER") -> Adapter:
     if not isinstance(obj, Adapter):
         raise LoadError(
             f"{path}:{attr} is a {type(obj).__name__}, not an Adapter — it needs `name`, "
-            "`family`, matches(), example_inputs(), and prepare(); see GenericAdapter for "
+            "matches(), example_inputs(), and prepare(); see GenericAdapter for "
             "the shape to implement."
         )
     return obj

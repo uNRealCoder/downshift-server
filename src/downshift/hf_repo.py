@@ -80,13 +80,19 @@ class TextGenerationModelError(ValueError):
     """The repo is a text generator with no embedding recipe; downshift serves embedders."""
 
 
+def _json_dict(path: Path) -> dict:
+    """A repo JSON file's top-level object; {} when it is missing, unreadable or not an object
+    (the loaders report a broken file themselves)."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def _refuse_remote_code(root: Path) -> None:
     for name in ("config.json", "tokenizer_config.json"):
-        try:
-            data = json.loads((root / name).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue  # a missing or unreadable file is the loaders' to report
-        if isinstance(data, dict) and data.get("auto_map"):
+        if _json_dict(root / name).get("auto_map"):
             raise RemoteCodeError(
                 f"{name} has an auto_map, so loading it would run Python code from the repo. "
                 "downshift never runs a repo's own code (no trust_remote_code)"
@@ -192,11 +198,7 @@ def _load_backbone(path: str, **kwargs: bool) -> PreTrainedModel:
 
 def _padding_side(root: Path) -> str:
     """The side the repo's tokenizer pads on; a decoder embedder usually pads left."""
-    try:
-        data = json.loads((root / "tokenizer_config.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return "right"
-    side = data.get("padding_side") if isinstance(data, dict) else None
+    side = _json_dict(root / "tokenizer_config.json").get("padding_side")
     return "left" if side == "left" else "right"
 
 

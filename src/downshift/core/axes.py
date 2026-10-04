@@ -6,10 +6,36 @@ Torch-free so the CLI and the schemas can import it.
 """
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from typing import NamedTuple
 
-# input -> axis -> (Dim name, served min, served max)
-AxisBounds = dict[str, dict[int, tuple[str, int, int]]]
+
+class DimBound(NamedTuple):
+    """One dynamic axis's Dim name and the (min, max) torch.export traced it for (U2)."""
+
+    name: str
+    min: int
+    max: int
+
+
+# input -> axis -> its DimBound
+AxisBounds = dict[str, dict[int, DimBound]]
+
+
+def axis_bounds_to_json(bounds: AxisBounds) -> dict[str, list[list]]:
+    """[[axis, name, min, max], ...] per input: the form the export cache's serving.json and
+    the `serve --workers N` handoff carry, for a process that has no Prepared to derive them."""
+    return {
+        name: [[axis, b.name, b.min, b.max] for axis, b in axes.items()]
+        for name, axes in bounds.items()
+    }
+
+
+def axis_bounds_from_json(raw: dict[str, list[list]]) -> AxisBounds:
+    return {
+        name: {int(axis): DimBound(str(dim), int(lo), int(hi)) for axis, dim, lo, hi in rows}
+        for name, rows in raw.items()
+    }
 
 
 @dataclass(frozen=True)
@@ -23,15 +49,7 @@ class AxisFact:
     sampled_max: int | None
 
     def to_dict(self) -> dict:
-        return {
-            "input": self.input,
-            "axis": self.axis,
-            "name": self.name,
-            "served_min": self.served_min,
-            "served_max": self.served_max,
-            "sampled_min": self.sampled_min,
-            "sampled_max": self.sampled_max,
-        }
+        return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict) -> "AxisFact":

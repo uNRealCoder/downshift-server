@@ -357,7 +357,6 @@ def test_worker_rebuild_attaches_text_from_a_carried_hf_source(embedding_onnx, e
 
     rebuilt = serving_state_from_artifact(
         embedding_onnx,
-        base.verdict.onnx_path,
         base.verdict,
         base.options,
         base.input_names,

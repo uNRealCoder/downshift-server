@@ -62,8 +62,6 @@ def app_for(
     on-disk tier that survives restarts. `cache=False` skips both, in both directions.
     """
     from downshift.loading import (
-        IN_PROCESS_MODULE,
-        ONNX_FILE,
         LoadedModel,
         LoadSpec,
         hf_repo_dir,
@@ -73,6 +71,7 @@ def app_for(
     from downshift.serve.app import build_app
     from downshift.serve.engine import ServeOptions
     from downshift.serve.reuse import prepare_serving_reusing
+    from downshift.sources import IN_PROCESS_MODULE, ONNX_FILE
 
     opts = ServeOptions(**options)
     repo = hf_repo_dir(str(model)) if isinstance(model, (str, Path)) else None

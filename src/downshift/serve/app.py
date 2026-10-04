@@ -15,6 +15,7 @@ from typing import Any
 
 import orjson
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from starlette.datastructures import Headers, MutableHeaders
@@ -25,6 +26,7 @@ from downshift.core.phase import CURRENT_PROGRESS, LoadProgress, Phase
 from downshift.logs import request_id_var
 from downshift.serve.codec import decode_safetensors
 from downshift.serve.engine import ServingState
+from downshift.serve.graphs import GRAPH_COUNTS, GRAPH_INPUTS, GRAPH_TENSORS
 from downshift.serve.metrics import Metrics
 from downshift.serve.middleware import load_middleware
 from downshift.serve.options import ExecutionChoice
@@ -38,16 +40,14 @@ from downshift.serve.predict import (
     run_predict,
 )
 from downshift.serve.schemas import (
-    GRAPH_INPUTS,
-    AxisInfo,
     BackendInfo,
-    ExecutionInfo,
     GraphPredictRequest,
     HealthResponse,
     MetadataResponse,
     PredictRequest,
     PredictResponse,
     ReadyResponse,
+    RequestOutputEncoding,
     SchemaResponse,
     VerdictInfo,
 )
@@ -116,11 +116,15 @@ def _route_path(scope: Scope) -> str:
 
 
 class _OrjsonRequest(Request):
+    def stash(self, parsed: Any, parse_start: float) -> None:
+        """Keep `parsed` as the body json() returns, and its time as the request's `parse`."""
+        self._json = parsed
+        self.state.parse_ms = (time.perf_counter() - parse_start) * 1000
+
     async def json(self) -> Any:
         if not hasattr(self, "_json"):
             parse_start = time.perf_counter()
-            self._json = orjson.loads(await self.body())
-            self.state.parse_ms = (time.perf_counter() - parse_start) * 1000
+            self.stash(orjson.loads(await self.body()), parse_start)
         return self._json
 
     async def parse_in(self, executor: Any) -> None:
@@ -143,8 +147,7 @@ class _OrjsonRequest(Request):
             parsed = await loop.run_in_executor(executor, orjson.loads, body)
         except ValueError:
             return
-        self._json = parsed
-        self.state.parse_ms = (time.perf_counter() - parse_start) * 1000
+        self.stash(parsed, parse_start)
 
 
 def _body_too_large(observed: int, limit: int) -> JSONResponse:
@@ -216,8 +219,7 @@ async def _try_inline(
         return False
     if not isinstance(parsed, dict) or parsed.get("text") is not None:
         return False
-    wrapped._json = parsed
-    wrapped.state.parse_ms = (time.perf_counter() - parse_start) * 1000
+    wrapped.stash(parsed, parse_start)
     wrapped.state.inline = True
     return True
 
@@ -226,30 +228,20 @@ _UNSUPPORTED_MEDIA_TYPE = (
     "unsupported Content-Type; send JSON (application/json) or safetensors "
     f"({SAFETENSORS_MEDIA_TYPE}, or application/octet-stream)"
 )
-_GRAPH_TENSOR_NAMES = frozenset({"x", "edge_index", "edge_attr", "num_nodes", "num_edges"})
+_GRAPH_TENSOR_NAMES = frozenset((*GRAPH_TENSORS, *GRAPH_COUNTS))
 
 
 def _content_type(request: Request) -> str:
     return request.headers.get("content-type", "").split(";")[0].strip().lower()
 
 
-def _as_json_request(request: Request) -> _OrjsonRequest:
-    """A request over the same body whose Content-Type reads application/json: FastAPI only
-    asks for request.json() on a JSON type, and a binary route stashes its placeholder there."""
-    scope = dict(request.scope)
-    scope["headers"] = [
-        (name, b"application/json" if name == b"content-type" else value)
-        for name, value in request.scope["headers"]
-    ]
-    return _OrjsonRequest(scope, request.receive)
-
-
 async def _load_binary(
     wrapped: _OrjsonRequest, state: ServingState, path: str, body: bytes
 ) -> None:
     """Decode a safetensors body in the prep pool (its time is the request's `parse`) and hand
-    the arrays to the endpoint as request.state.tensors. The JSON the pydantic model validates
-    is a placeholder carrying only what the body's __metadata__ can say (output_encoding)."""
+    the arrays to the endpoint as request.state.tensors, with the __metadata__ output_encoding
+    as request.state.output_encoding. The body is then emptied, so FastAPI has nothing to
+    parse and the endpoint's JSON model comes through as None."""
     parse_start = time.perf_counter()
     loop = asyncio.get_running_loop()
     try:
@@ -268,11 +260,18 @@ async def _load_binary(
         raise HTTPException(
             400, f"unknown tensor name {unknown[0]!r:.64}; this route takes {sorted(allowed)}"
         )
-    placeholder: dict[str, Any] = {"output_encoding": metadata.get("output_encoding")}
-    placeholder.update({"x": [], "edge_index": []} if graph else {"inputs": {}})
-    wrapped._json = placeholder
+    encoding = metadata.get("output_encoding")
+    try:
+        wrapped.state.output_encoding = RequestOutputEncoding(encoding) if encoding else None
+    except ValueError:
+        raise HTTPException(
+            400,
+            f"unknown output_encoding {encoding!r:.64} in __metadata__; this route takes "
+            f"{[e.value for e in RequestOutputEncoding]}",
+        ) from None
     wrapped.state.tensors = arrays
     wrapped.state.parse_ms = (time.perf_counter() - parse_start) * 1000
+    wrapped._body = b""
 
 
 class OrjsonRoute(APIRoute):
@@ -304,11 +303,7 @@ class OrjsonRoute(APIRoute):
             )
             content_type = _content_type(request) if is_predict else ""
             binary = content_type in BINARY_REQUEST_TYPES
-            wrapped = (
-                _as_json_request(request)
-                if binary
-                else _OrjsonRequest(request.scope, request.receive)
-            )
+            wrapped = _OrjsonRequest(request.scope, request.receive)
 
             metrics: Metrics = request.app.state.metrics
             admitted = False
@@ -415,6 +410,17 @@ def _predict_context(request: Request) -> dict[str, Any]:
         "accept_safetensors": SAFETENSORS_MEDIA_TYPE in request.headers.get("accept", "").lower(),
         "graph_stats": graph_stats,
     }
+
+
+def _binary_encoding(request: Request) -> RequestOutputEncoding | None:
+    """A request with no JSON model: a decoded safetensors body, or else no body at all,
+    which is the same 422 FastAPI gives a required body that is missing."""
+    if getattr(request.state, "tensors", None) is None:
+        raise RequestValidationError(
+            [{"type": "missing", "loc": ("body",), "msg": "Field required", "input": None}]
+        )
+    encoding: RequestOutputEncoding | None = request.state.output_encoding
+    return encoding
 
 
 def _observe_predict(request: Request, graph: bool = False) -> None:
@@ -697,26 +703,19 @@ def build_app(
         # ...", transformers' "Can't load tokenizer for ..."); a client gets the name only.
         located = () if current.source_kind in LABEL_KINDS else (current.source,)
         paths = (*located, current.verdict.onnx_path, current.hf_source)
-        verdict = current.verdict.to_dict()
-        verdict["reason"] = hide_paths(verdict["reason"], paths)
-        verdict["warnings"] = [hide_paths(w, paths) for w in verdict["warnings"]]
+        from downshift.serve.describe import axes_info, limits_info
+
         return MetadataResponse(
             model=display_source(current.source, current.source_kind),
             family=current.verdict.model_family,
-            verdict=VerdictInfo.model_validate(verdict),
-            axes=[AxisInfo.model_validate(fact.to_dict()) for fact in current.verdict.axes],
+            verdict=VerdictInfo.model_validate(current.verdict.redacted_dict(paths)),
+            axes=axes_info(current),
             backend=BackendInfo.model_validate(current.backend.metadata().to_dict()),
             input_names=list(current.input_names),
             notes=[hide_paths(note, paths) for note in current.notes],
             version=downshift.__version__,
-            limits={
-                "max_body_bytes": current.options.max_body_bytes,
-                "max_input_bytes": current.options.max_input_bytes,
-                "max_concurrency": current.options.max_concurrency,
-                "max_queue": current.options.max_queue,
-                "request_timeout": current.options.request_timeout,
-            },
-            execution=ExecutionInfo(mode=current.execution.value),
+            limits=limits_info(current),
+            execution=current.execution.value,
             boot=dict(current.timings),
             warmup=asdict(current.warmup_stats) if current.warmup_stats is not None else None,
         )
@@ -734,27 +733,36 @@ def build_app(
 
         return describe(current, f"{str(request.base_url).rstrip('/')}/predict")
 
+    # Each predict route's JSON body is its pydantic model; a safetensors body arrives decoded
+    # in request.state.tensors instead, with the model None (see _load_binary).
     @app.post("/predict", **_PREDICT_ROUTE)
     async def predict(
-        req: PredictRequest, request: Request, current: ServingState = Depends(require_serving)
+        request: Request,
+        current: ServingState = Depends(require_serving),
+        req: PredictRequest | None = None,
     ) -> Response:
-        text = as_batch(req.text) if req.text is not None else None
-        response = await run_predict(
-            current,
-            req.inputs,
-            req.output_encoding,
-            text,
-            req.prompt_name,
-            **_predict_context(request),
-        )
+        if req is None:
+            response = await run_predict(
+                current, {}, _binary_encoding(request), **_predict_context(request)
+            )
+        else:
+            text = as_batch(req.text) if req.text is not None else None
+            response = await run_predict(
+                current,
+                req.inputs,
+                req.output_encoding,
+                text,
+                req.prompt_name,
+                **_predict_context(request),
+            )
         _observe_predict(request)
         return response
 
     @app.post("/predict/graph", **_PREDICT_ROUTE)
     async def predict_graph(
-        req: GraphPredictRequest,
         request: Request,
         current: ServingState = Depends(require_serving),
+        req: GraphPredictRequest | None = None,
     ) -> Response:
         if not GRAPH_INPUTS <= set(current.input_names):
             raise HTTPException(
@@ -762,21 +770,25 @@ def build_app(
                 f"model is not graph-shaped: inputs are {list(current.input_names)}, "
                 "expected at least 'x' and 'edge_index'",
             )
-        # No dtype hints needed: to_numpy takes the backend's declared dtype (int64 for
-        # edge_index on both backends), and integer lists default to int64 anyway.
-        inputs: dict[str, Any] = {"x": req.x, "edge_index": req.edge_index}
+        inputs: dict[str, Any] = {}
         graphs = None
-        if req.graphs is not None:
-            inputs = {}
-            graphs = [
-                {"x": g.x, "edge_index": g.edge_index, "edge_attr": g.edge_attr} for g in req.graphs
-            ]
-        elif getattr(request.state, "tensors", None) is not None:
-            inputs = {}
-        elif req.edge_attr is not None:
-            inputs["edge_attr"] = req.edge_attr
+        if req is None:
+            encoding = _binary_encoding(request)
+        else:
+            encoding = req.output_encoding
+            # No dtype hints needed: to_numpy takes the backend's declared dtype (int64 for
+            # edge_index on both backends), and integer lists default to int64 anyway.
+            if req.graphs is not None:
+                graphs = [
+                    {"x": g.x, "edge_index": g.edge_index, "edge_attr": g.edge_attr}
+                    for g in req.graphs
+                ]
+            else:
+                inputs = {"x": req.x, "edge_index": req.edge_index}
+                if req.edge_attr is not None:
+                    inputs["edge_attr"] = req.edge_attr
         response = await run_predict(
-            current, inputs, req.output_encoding, graphs=graphs, **_predict_context(request)
+            current, inputs, encoding, graphs=graphs, **_predict_context(request)
         )
         _observe_predict(request, graph=True)
         return response

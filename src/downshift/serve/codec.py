@@ -158,7 +158,8 @@ def encode_safetensors(
     header: dict[str, Any] = {}
     if metadata:
         header["__metadata__"] = metadata
-    chunks: list[bytes] = []
+    # Byte views of each (contiguous, little-endian) array, so the join below is the only copy.
+    chunks: list[np.ndarray] = []
     offset = 0
     # The reference writer orders by descending itemsize then name, which keeps tensors aligned.
     for name, array in sorted(arrays.items(), key=lambda kv: (-kv[1].dtype.itemsize, kv[0])):
@@ -166,14 +167,14 @@ def encode_safetensors(
         wire = _SAFETENSORS_NAMES.get(dtype)
         if wire is None:
             raise ValueError(f"tensor {_q(name)} has dtype {_q(str(array.dtype))}, not on the wire")
-        raw = np.ascontiguousarray(array, dtype=dtype).tobytes()
+        raw = np.ascontiguousarray(array, dtype=dtype).reshape(-1).view(np.uint8)
         header[name] = {
             "dtype": wire,
             "shape": list(array.shape),
-            "data_offsets": [offset, offset + len(raw)],
+            "data_offsets": [offset, offset + raw.nbytes],
         }
         chunks.append(raw)
-        offset += len(raw)
+        offset += raw.nbytes
     encoded = json.dumps(header, separators=(",", ":")).encode()
     encoded += b" " * (-len(encoded) % 8)
     return b"".join([len(encoded).to_bytes(8, "little"), encoded, *chunks])

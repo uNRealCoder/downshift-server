@@ -40,7 +40,6 @@ def _first_in_channels(model: nn.Module) -> int | None:
 
 class PyGAdapter:
     name = Family.pyg
-    family = Family.pyg
 
     def matches(self, model: nn.Module, example_inputs: tuple | None) -> bool:
         if is_pyg_data(example_inputs):
@@ -79,7 +78,7 @@ class PyGAdapter:
             input_names=names,
             dynamic_shapes=dynamic_shapes,
             vary_fn=make_vary_fn(inputs, names, dynamic_shapes, axis_max),
-            family=self.family,
+            family=self.name,
         )
 
 

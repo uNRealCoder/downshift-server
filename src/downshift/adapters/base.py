@@ -31,7 +31,7 @@ class Prepared:
     input_names: tuple[str, ...]
     dynamic_shapes: tuple  # per input: {axis: torch.export.Dim} or None
     vary_fn: VaryFn | None  # sample i -> inputs; None means use the shared-axis-0 default
-    family: str
+    family: str  # the adapter's `name`: what ExportVerdict.model_family reports
 
     @property
     def dynamic_dims(self) -> dict[str, list[int]]:
@@ -44,8 +44,7 @@ class Prepared:
 
 @runtime_checkable
 class Adapter(Protocol):
-    name: str
-    family: str
+    name: str  # also what ExportVerdict.model_family reports
 
     def matches(self, model: nn.Module, example_inputs: tuple | None) -> bool: ...
 

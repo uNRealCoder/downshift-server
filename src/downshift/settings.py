@@ -61,10 +61,15 @@ def _env_float(name: str, default: float) -> float:
     return _env_cast(name, default, float, "float")
 
 
-def _execution(raw: str) -> str:
-    if raw not in ("threadpool", "inline"):
-        raise ValueError(raw)
-    return raw
+def _env_choice(name: str, default: str, choices: tuple[str, ...], type_name: str) -> str:
+    """One of `choices`, so a typo in the environment fails at startup with its own name."""
+
+    def cast(raw: str) -> str:
+        if raw not in choices:
+            raise ValueError(raw)
+        return raw
+
+    return _env_cast(name, default, cast, f"{type_name} (one of {', '.join(choices)})")
 
 
 def parse_axis_max(items: Iterable[str]) -> dict[str, int]:
@@ -89,7 +94,7 @@ def _env_axis_max(name: str, default: dict[str, int]) -> dict[str, int]:
 HOST = _env_str("DOWNSHIFT_HOST", "127.0.0.1")
 PORT = _env_int("DOWNSHIFT_PORT", 8000)
 DEVICE = _env_str("DOWNSHIFT_DEVICE", "auto")
-BACKEND = _env_str("DOWNSHIFT_BACKEND", "auto")
+BACKEND = _env_choice("DOWNSHIFT_BACKEND", "auto", ("auto", "onnxruntime", "torch"), "backend")
 WARMUP = _env_int("DOWNSHIFT_WARMUP", 3)
 SAMPLES = _env_int("DOWNSHIFT_SAMPLES", DEFAULT_SAMPLES)
 
@@ -99,7 +104,9 @@ INTER_OP_THREADS = _env_int("DOWNSHIFT_INTER_OP_THREADS", 0)
 
 # Default encoding of response tensors ("json" lists or "base64" buffers); a request's
 # output_encoding field overrides it.
-OUTPUT_ENCODING = _env_str("DOWNSHIFT_OUTPUT_ENCODING", "json")
+OUTPUT_ENCODING = _env_choice(
+    "DOWNSHIFT_OUTPUT_ENCODING", "json", ("json", "base64"), "output encoding"
+)
 
 # Largest decoded size accepted for one base64 tensor input; bigger ones get a 400.
 MAX_INPUT_BYTES = _env_int("DOWNSHIFT_MAX_INPUT_BYTES", DEFAULT_MAX_INPUT_BYTES)
@@ -115,7 +122,9 @@ MAX_CONCURRENCY = _env_int("DOWNSHIFT_MAX_CONCURRENCY", 1)
 
 # "threadpool" runs every request's parse, inference and encode on worker threads; "inline"
 # runs small JSON bodies on the event loop itself, which only pays off for very fast models.
-EXECUTION = _env_cast("DOWNSHIFT_EXECUTION", "threadpool", _execution, "execution mode")
+EXECUTION = _env_choice(
+    "DOWNSHIFT_EXECUTION", "threadpool", ("threadpool", "inline"), "execution mode"
+)
 
 # Largest size to serve per named axis ("seq=4096,num_nodes=500"); the names are the ones the
 # boot banner and /schema list. Empty means each axis keeps the bound the adapter exported.

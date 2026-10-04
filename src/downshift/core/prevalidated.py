@@ -16,11 +16,12 @@ from downshift.core.phase import Phase, report
 from downshift.core.verdict import (
     BackendName,
     ExportVerdict,
+    Status,
     axes_for,
     numerics_outcome,
     prepare_model,
 )
-from downshift.core.verify import OnnxRuntimeError, verify
+from downshift.core.verify import OnnxRuntimeError, first_line, load_session, verify
 from downshift.settings import DEFAULT_SAMPLES
 
 
@@ -53,7 +54,7 @@ def intake(
 
     if reference is None:
         return ExportVerdict(
-            status="UNVERIFIED",
+            status=Status.UNVERIFIED,
             model_family="onnx",
             capture_strategy=None,
             opset=opset,
@@ -71,9 +72,10 @@ def intake(
     report(Phase.verify)
     verify_start = time.perf_counter()
     try:
+        session = load_session(onnx_path)
         numerics = verify(
             prepared.model,
-            onnx_path,
+            session,
             prepared.inputs,
             prepared.dynamic_shapes,
             prepared.vary_fn,
@@ -83,9 +85,9 @@ def intake(
             seed=seed,
         )
     except OnnxRuntimeError as exc:
-        message = str(exc).splitlines()[0]
+        message = first_line(exc)
         return ExportVerdict(
-            status="FAILED",
+            status=Status.FAILED,
             model_family=prepared.family,
             capture_strategy=None,
             opset=opset,
@@ -121,4 +123,5 @@ def intake(
         axes=axes_for(prepared, numerics),
         onnx_path=onnx_path,
         prepared=prepared,
+        _session=session,
     )

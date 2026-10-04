@@ -6,7 +6,7 @@ traced fine but froze a shape or specialised a data-dependent branch.
 """
 
 import logging
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -14,7 +14,7 @@ import onnxruntime as ort
 import torch
 
 from downshift.adapters.base import VaryFn
-from downshift.core.shapes import alternative_sizes, dim_bounds, pick_size
+from downshift.core.shapes import alternative_sizes, dim_bounds, pick_size, resize_axis
 from downshift.logs import REPORT_LOGGER
 from downshift.settings import DEFAULT_SAMPLES, TOLERANCES
 
@@ -63,25 +63,17 @@ class NumericsReport:
     output_shapes: list[list[tuple[int, ...]]] = field(default_factory=list)  # [sample][output]
     seed: int = 0
     notes: list[str] = field(default_factory=list)
-    # The session verify() built (or was given) to run the samples; not JSON-able, so it's
-    # excluded from to_dict(). serve/engine.py reuses it instead of building a second one.
-    session: ort.InferenceSession | None = field(default=None, repr=False, compare=False)
 
     @property
     def passed(self) -> bool:
         return self.failures == 0
 
     def to_dict(self) -> dict:
-        # asdict() deep-copies every field; swap the live session for None first so it's
-        # never touched, then drop the key entirely (it's not JSON-able).
-        data = asdict(replace(self, session=None))
-        del data["session"]
-        return data | {"passed": self.passed}
+        return asdict(self) | {"passed": self.passed}
 
     @classmethod
     def from_dict(cls, data: dict) -> "NumericsReport":
-        """Rebuild from to_dict()'s output. `passed` is derived, and `session` was never
-        serialized in the first place - both are ignored on the way in."""
+        """Rebuild from to_dict()'s output; `passed` is derived, so it is ignored."""
         worst_data = data.get("worst")
         worst = (
             WorstMismatch(
@@ -139,28 +131,6 @@ def default_tolerances(model: torch.nn.Module) -> tuple[str, float, float]:
     return name, atol, rtol
 
 
-def _resize_dim0(tensor: torch.Tensor, new_size: int) -> torch.Tensor:
-    """Resize axis 0 to new_size, staying close to the example rather than pure noise.
-
-    Floating tensors tile or slice the example's own rows and add small noise scaled to
-    the example's own spread, so a varied sample looks like a plausible input rather than
-    unrelated white noise. Integer tensors (usually indices) stay inside the observed range.
-    """
-    if tensor.ndim == 0 or tensor.shape[0] == new_size:
-        return tensor
-    if tensor.is_floating_point():
-        base_size = tensor.shape[0]
-        reps = -(-new_size // base_size)  # ceil division
-        tiled = tensor.repeat(reps, *([1] * (tensor.ndim - 1)))[:new_size]
-        noise_std = 0.1 * tensor.std(unbiased=False)  # unbiased is undefined for one row
-        return tiled + noise_std * torch.randn(tiled.shape, dtype=tensor.dtype)
-    shape = list(tensor.shape)
-    shape[0] = new_size
-    lo = int(tensor.min().item())
-    hi = max(int(tensor.max().item()) + 1, lo + 1)
-    return torch.randint(lo, hi, shape, dtype=tensor.dtype)
-
-
 def make_shared_axis0_vary_fn(base_inputs: tuple, dynamic_shapes: tuple) -> VaryFn:
     """Default sampler: every dynamic tensor shares one axis-0 size (the batch case)."""
     base_size = None
@@ -177,7 +147,7 @@ def make_shared_axis0_vary_fn(base_inputs: tuple, dynamic_shapes: tuple) -> Vary
             return base_inputs
         size = pick_size(candidates)
         return tuple(
-            _resize_dim0(t, size) if isinstance(t, torch.Tensor) and spec else t
+            resize_axis(t, 0, size) if isinstance(t, torch.Tensor) and spec else t
             for t, spec in zip(base_inputs, dynamic_shapes, strict=True)
         )
 
@@ -200,15 +170,38 @@ def quiet_ort_logging() -> None:
     _ort_logging_quieted = True
 
 
+def new_session(
+    model: bytes | str | Path,
+    providers: list[str] | None = None,
+    options: ort.SessionOptions | None = None,
+) -> ort.InferenceSession:
+    """The one place an InferenceSession is built (CPU unless `providers` says otherwise), so
+    ORT's logger is always quieted first (P6)."""
+    quiet_ort_logging()
+    source = model if isinstance(model, bytes) else str(model)
+    return ort.InferenceSession(
+        source, sess_options=options, providers=providers or ["CPUExecutionProvider"]
+    )
+
+
 def _to_session(onnx_model: bytes | str | Path | ort.InferenceSession) -> ort.InferenceSession:
     if isinstance(onnx_model, ort.InferenceSession):
         return onnx_model
-    quiet_ort_logging()  # must run before any session exists (P6)
-    source: str | bytes = str(onnx_model) if isinstance(onnx_model, (str, Path)) else onnx_model
-    return ort.InferenceSession(source, providers=["CPUExecutionProvider"])
+    return new_session(onnx_model)
 
 
-def _as_tensor_list(output) -> list[torch.Tensor]:
+def load_session(onnx_model: bytes | str | Path | ort.InferenceSession) -> ort.InferenceSession:
+    """The CPU session verify() runs the samples on; OnnxRuntimeError when ORT can't load the
+    graph. The caller keeps it so the server can reuse it instead of building a second one."""
+    try:
+        return _to_session(onnx_model)
+    except Exception as exc:  # noqa: BLE001 - reported as a verdict, not a crash
+        raise OnnxRuntimeError(
+            f"onnxruntime could not load the exported graph: {first_line(exc)}"
+        ) from exc
+
+
+def as_tensor_list(output) -> list[torch.Tensor]:
     if isinstance(output, torch.Tensor):
         return [output]
     if isinstance(output, (tuple, list)):
@@ -216,7 +209,7 @@ def _as_tensor_list(output) -> list[torch.Tensor]:
     raise TypeError(f"can't compare model output of type {type(output).__name__}")
 
 
-def _first_line(exc: Exception) -> str:
+def first_line(exc: Exception) -> str:
     text = str(exc)
     return text.splitlines()[0] if text else type(exc).__name__
 
@@ -335,13 +328,8 @@ def verify(
     atol = default_atol if atol is None else atol
     rtol = default_rtol if rtol is None else rtol
 
-    try:
-        session = _to_session(onnx_model)
-        input_names = [inp.name for inp in session.get_inputs()]
-    except Exception as exc:  # noqa: BLE001 - reported as a verdict, not a crash
-        raise OnnxRuntimeError(
-            f"onnxruntime could not load the exported graph: {_first_line(exc)}"
-        ) from exc
+    session = load_session(onnx_model)
+    input_names = [inp.name for inp in session.get_inputs()]
 
     model.eval()
     max_abs_err = 0.0
@@ -383,18 +371,18 @@ def verify(
                 if i == 0:
                     raise ValueError(
                         f"model raised on sample {i} (input shapes {shapes}): "
-                        f"{_first_line(exc)}. Try --dynamic or --inputs if this shape isn't "
+                        f"{first_line(exc)}. Try --dynamic or --inputs if this shape isn't "
                         "one the model supports."
                     ) from exc
                 bounds = _bounds_text(dynamic_shapes)
                 drawn_from = f", drawn from bounds {bounds}" if bounds else ""
                 raise ValueError(
                     f"model raised on sample {i} (input shapes {shapes}{drawn_from}), "
-                    f"generated by downshift's sampler: {_first_line(exc)}. If the model "
+                    f"generated by downshift's sampler: {first_line(exc)}. If the model "
                     "doesn't support this shape, pass --vary or a custom adapter to control "
                     "how verification samples are generated."
                 ) from exc
-            torch_outs = _as_tensor_list(raw_output)
+            torch_outs = as_tensor_list(raw_output)
             output_shapes.append([tuple(t.shape) for t in torch_outs])
 
             try:
@@ -406,7 +394,7 @@ def verify(
             except Exception as exc:  # noqa: BLE001 - reported as a verdict, not a crash
                 shapes = [tuple(t.shape) for t in sample if isinstance(t, torch.Tensor)]
                 raise OnnxRuntimeError(
-                    f"onnxruntime failed on sample {i} (input shapes {shapes}): {_first_line(exc)}"
+                    f"onnxruntime failed on sample {i} (input shapes {shapes}): {first_line(exc)}"
                 ) from exc
 
             sample_abs, sample_rel, sample_failed, note, candidate = _compare_sample(
@@ -451,5 +439,4 @@ def verify(
         output_shapes=output_shapes,
         seed=seed,
         notes=notes,
-        session=session,
     )

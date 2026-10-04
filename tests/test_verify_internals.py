@@ -6,12 +6,12 @@ import pytest
 import torch
 
 from downshift.core import verify as verify_mod
+from downshift.core.shapes import resize_axis
 from downshift.core.verify import (
     OnnxRuntimeError,
-    _as_tensor_list,
     _compare_sample,
-    _resize_dim0,
     _to_session,
+    as_tensor_list,
     default_tolerances,
     make_shared_axis0_vary_fn,
     verify,
@@ -21,10 +21,10 @@ from tests.models import bf16_weights, clean_mlp
 
 def test_resize_dim0_is_a_noop_for_scalars_and_matching_sizes():
     scalar = torch.tensor(5.0)
-    assert _resize_dim0(scalar, 3) is scalar
+    assert resize_axis(scalar, 0, 3) is scalar
 
     tensor = torch.randn(4, 3)
-    assert _resize_dim0(tensor, 4) is tensor
+    assert resize_axis(tensor, 0, 4) is tensor
 
 
 def test_to_session_accepts_raw_bytes(exported_mlp):
@@ -35,10 +35,10 @@ def test_to_session_accepts_raw_bytes(exported_mlp):
 
 def test_as_tensor_list_filters_a_tuple_and_rejects_other_types():
     t1, t2 = torch.zeros(1), torch.ones(1)
-    assert _as_tensor_list((t1, "not a tensor", t2)) == [t1, t2]
+    assert as_tensor_list((t1, "not a tensor", t2)) == [t1, t2]
 
     with pytest.raises(TypeError, match="can't compare"):
-        _as_tensor_list({"a": 1})
+        as_tensor_list({"a": 1})
 
 
 def test_verify_requires_dynamic_shapes_or_vary_fn():
@@ -390,7 +390,7 @@ def test_shared_axis0_vary_fn_never_exceeds_the_dims_max():
 
 def test_resize_dim0_tiles_the_example_exactly_when_it_has_no_spread():
     base = torch.full((2, 4), 1000.0)
-    resized = _resize_dim0(base, 5)
+    resized = resize_axis(base, 0, 5)
     assert resized.shape == (5, 4)
     assert torch.equal(resized, torch.full((5, 4), 1000.0))
 
@@ -398,7 +398,7 @@ def test_resize_dim0_tiles_the_example_exactly_when_it_has_no_spread():
 def test_resize_dim0_stays_near_the_example_rather_than_pure_noise():
     torch.manual_seed(0)
     base = torch.tensor([[0.0], [10.0]])
-    resized = _resize_dim0(base, 4)
+    resized = resize_axis(base, 0, 4)
     tiled = torch.tensor([[0.0], [10.0], [0.0], [10.0]])
     assert resized.shape == (4, 1)
     assert torch.all((resized - tiled).abs() < 5.0)

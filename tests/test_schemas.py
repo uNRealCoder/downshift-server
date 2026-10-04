@@ -110,12 +110,3 @@ def test_server_wide_output_encoding_stays_json_or_base64():
 
     assert {e.value for e in OutputEncoding} == {"json", "base64"}
     assert "safetensors" in {e.value for e in RequestOutputEncoding}
-
-
-def test_execution_info_is_a_mode_block():
-    from downshift.serve.schemas import ExecutionInfo, MetadataResponse
-
-    assert ExecutionInfo(mode="inline").model_dump() == {"mode": "inline"}
-    assert MetadataResponse.model_fields["execution"].default_factory() == ExecutionInfo(  # type: ignore[call-arg]
-        mode="threadpool"
-    )

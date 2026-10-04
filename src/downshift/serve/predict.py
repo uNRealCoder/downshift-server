@@ -16,13 +16,16 @@ import orjson
 from fastapi import HTTPException, Response
 from fastapi.responses import JSONResponse
 
+from downshift.core.axes import DimBound
 from downshift.serve.backends import FIRST_OUTPUT_NAME, InferenceInputError
 from downshift.serve.codec import b64encode, encode_safetensors
-from downshift.serve.engine import DimBound, ServingState
+from downshift.serve.engine import ServingState
 from downshift.serve.graphs import (
     GRAPH_TENSORS,
     batch_graphs,
-    slice_binary_batch,
+    binary_batch,
+    edge_index_violation,
+    index_range_violation,
     split_outputs,
     split_refusal,
 )
@@ -115,39 +118,32 @@ def _text_feeds(
 
 
 def _vocab_violation(state: ServingState, feeds: dict[str, np.ndarray]) -> str | None:
-    """B3: ORT wraps a negative input_ids index instead of refusing it. One vectorised
-    min/max comparison against the hf model's own vocab_size, so garbage in doesn't become a
-    confident 200 out."""
+    """B3: ORT wraps a negative input_ids index instead of refusing it, so garbage in would
+    become a confident 200 out."""
     if state.vocab_size is None:
         return None
-    ids = feeds.get("input_ids")
-    if ids is None or ids.size == 0:
-        return None
-    lo, hi = int(ids.min()), int(ids.max())
-    if lo >= 0 and hi < state.vocab_size:
-        return None
-    bad = lo if lo < 0 else hi
-    return f"input_ids contains {bad}, outside the vocabulary [0, {state.vocab_size})"
-
-
-def _edge_index_violation(feeds: dict[str, np.ndarray]) -> str | None:
-    """The /predict/graph analogue of _vocab_violation: edge_index must index into x's node
-    dimension, or a backend that trusts it (gather/scatter with no bounds check of its own)
-    reads or writes out of bounds instead of refusing the request."""
-    edge_index = feeds.get("edge_index")
-    x = feeds.get("x")
-    if edge_index is None or x is None or edge_index.size == 0:
-        return None
-    num_nodes = x.shape[0]
-    lo, hi = int(edge_index.min()), int(edge_index.max())
-    if lo >= 0 and hi < num_nodes:
-        return None
-    bad = lo if lo < 0 else hi
-    return f"edge_index contains {bad}, outside the node range [0, {num_nodes})"
+    return index_range_violation(
+        "input_ids", feeds.get("input_ids"), state.vocab_size, "vocabulary"
+    )
 
 
 def _bound_message(name: str, axis: int, size: int, bound: DimBound) -> str:
     return f"{name} axis {axis} is {size}; this model accepts {bound.min} to {bound.max}"
+
+
+def _shape_violation(state: ServingState, feeds: dict[str, np.ndarray]) -> str | None:
+    """The first input whose rank, or one of whose fixed axes, differs from what the backend
+    declares. Checked before infer so a model's own shape error is never the client's 400."""
+    for name, arr in feeds.items():
+        spec = state.input_specs.get(name)
+        if spec is None or spec.shape is None:
+            continue
+        if arr.ndim != len(spec.shape):
+            return f"{name} has {arr.ndim} dimensions; this model takes {len(spec.shape)}"
+        for axis, dim in enumerate(spec.shape):
+            if isinstance(dim, int) and arr.shape[axis] != dim:
+                return f"{name} axis {axis} is {arr.shape[axis]}; this model takes {dim}"
+    return None
 
 
 def _bound_violation(state: ServingState, feeds: dict[str, np.ndarray]) -> str | None:
@@ -223,15 +219,14 @@ def _batch_feeds(
     names = [spec.name for spec in state.backend.metadata().outputs]
     if tensors is not None:
         _binary_feeds(state, tensors, state.declared_dtypes)
-        items = slice_binary_batch(tensors)
+        feeds, node_counts, edge_counts = binary_batch(tensors)
     else:
         assert graphs is not None
         items = [_graph_item(state, i, graph, max_bytes) for i, graph in enumerate(graphs)]
-    refusal = split_refusal(state.verdict.output_axes, names, len(items))
+        feeds, node_counts, edge_counts = batch_graphs(items)
+    refusal = split_refusal(state.verdict.output_axes, names, len(node_counts))
     if refusal is not None:
         raise ValueError(refusal)
-    items = [{k: v for k, v in item.items() if k in state.input_names} for item in items]
-    feeds, node_counts, edge_counts = batch_graphs(items)
     missing = [n for n in state.input_names if n not in feeds]
     if missing:
         raise ValueError(f"missing inputs: {missing}")
@@ -285,12 +280,12 @@ def _prepare_feeds(
     if vocab_violation is not None:
         raise HTTPException(400, vocab_violation)
     # A batch was checked graph by graph against each graph's own node count.
-    edge_index_violation = None if layout is not None else _edge_index_violation(feeds)
-    if edge_index_violation is not None:
-        raise HTTPException(400, edge_index_violation)
-    bound_violation = _bound_violation(state, feeds)
-    if bound_violation is not None:
-        raise HTTPException(400, bound_violation)
+    edge_violation = None if layout is not None else edge_index_violation(feeds)
+    if edge_violation is not None:
+        raise HTTPException(400, edge_violation)
+    violation = _shape_violation(state, feeds) or _bound_violation(state, feeds)
+    if violation is not None:
+        raise HTTPException(400, violation)
     return feeds, (time.perf_counter() - start) * 1000, layout
 
 
@@ -333,87 +328,71 @@ def _encode_response(
     output named `graphs.<i>.<output>` with the graph count in `downshift.graphs`."""
     encoding = encoding or state.options.output_encoding
     encode = _base64_ready if encoding == OutputEncoding.base64 else _json_ready
+    safetensors = accept_safetensors or encoding == RequestOutputEncoding.safetensors
     start = time.perf_counter()
     # C-contiguous once, up front (np.require keeps 0-d arrays 0-d; ascontiguousarray does not).
     arrays = {name: np.require(arr, requirements="C") for name, arr in outputs.items()}
+    response: Response
     if layout is not None:
         try:
             per_graph = split_outputs(arrays, state.verdict.output_axes, *layout)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
-        if accept_safetensors or encoding == RequestOutputEncoding.safetensors:
+        if safetensors:
             flat = {
                 f"graphs.{g}.{name}": arr
                 for g, part in enumerate(per_graph)
                 for name, arr in part.items()
             }
-            response: Response = Response(
+            response = Response(
                 encode_safetensors(flat, {"downshift.graphs": str(len(per_graph))}),
                 media_type=SAFETENSORS_MEDIA_TYPE,
             )
         else:
             response = NumpyJSONResponse(
-                {
-                    "graphs": [
-                        {
-                            "outputs": {name: encode(arr) for name, arr in part.items()},
-                            "shapes": {name: list(arr.shape) for name, arr in part.items()},
-                            "dtypes": {name: arr.dtype.name for name, arr in part.items()},
-                        }
-                        for part in per_graph
-                    ]
-                }
+                {"graphs": [_tensor_body(part, encode) for part in per_graph]}
             )
-        timings_ms["encode"] = round((time.perf_counter() - start) * 1000, 2)
-        _add_server_timing(response, timings_ms)
-        return response
-    if accept_safetensors or encoding == RequestOutputEncoding.safetensors:
+    elif safetensors:
         response = _safetensors_response(state, arrays)
-        timings_ms["encode"] = round((time.perf_counter() - start) * 1000, 2)
-        _add_server_timing(response, timings_ms)
-        return response
-    # Same keys as PredictResponse; built by hand so orjson serializes the buffers directly.
-    body = {
+    else:
+        # Same keys as PredictResponse; built by hand so orjson serializes the buffers directly.
+        body = _tensor_body(arrays, encode)
+        predictions = _predictions(state, arrays)
+        if predictions is not None:
+            body["predictions"] = predictions
+        response = NumpyJSONResponse(body)
+    timings_ms["encode"] = round((time.perf_counter() - start) * 1000, 2)
+    response.headers["Server-Timing"] = ", ".join(
+        f"{stage};dur={timings_ms.get(stage, 0.0):.2f}" for stage in STAGES
+    )
+    return response
+
+
+def _tensor_body(
+    arrays: dict[str, np.ndarray], encode: Callable[[np.ndarray], Any]
+) -> dict[str, Any]:
+    return {
         "outputs": {name: encode(arr) for name, arr in arrays.items()},
         "shapes": {name: list(arr.shape) for name, arr in arrays.items()},
         "dtypes": {name: arr.dtype.name for name, arr in arrays.items()},
     }
-    if state.text is not None and FIRST_OUTPUT_NAME in arrays:
-        predictions = state.text.predictions(arrays[FIRST_OUTPUT_NAME])
-        if predictions is not None:
-            body["predictions"] = predictions
-    timings_ms["encode"] = round((time.perf_counter() - start) * 1000, 2)
-
-    response = NumpyJSONResponse(body)
-    _add_server_timing(response, timings_ms)
-    return response
 
 
-def _add_server_timing(response: Response, timings_ms: dict[str, float]) -> None:
-    response.headers["Server-Timing"] = ", ".join(
-        f"{stage};dur={timings_ms.get(stage, 0.0):.2f}" for stage in STAGES
-    )
+def _predictions(state: ServingState, arrays: dict[str, np.ndarray]) -> list | None:
+    if state.text is None or FIRST_OUTPUT_NAME not in arrays:
+        return None
+    return state.text.predictions(arrays[FIRST_OUTPUT_NAME])
 
 
 def _safetensors_response(state: ServingState, arrays: dict[str, np.ndarray]) -> Response:
     metadata: dict[str, str] = {}
-    if state.text is not None and FIRST_OUTPUT_NAME in arrays:
-        predictions = state.text.predictions(arrays[FIRST_OUTPUT_NAME])
-        if predictions is not None:
-            metadata["downshift.predictions"] = _json_str(predictions)
-    recipe = state.embedding
-    if recipe is not None:
+    predictions = _predictions(state, arrays)
+    if predictions is not None:
+        metadata["downshift.predictions"] = _json_str(predictions)
+    if state.embedding is not None:
         first = next(iter(arrays.values()), None)
         dimension = first.shape[-1] if first is not None and first.ndim else None
-        metadata["downshift.embedding"] = _json_str(
-            {
-                "pooling": recipe.pooling,
-                "normalized": recipe.normalize,
-                "dimension": dimension,
-                "max_seq_length": recipe.max_seq_length,
-                "from": recipe.origin,
-            }
-        )
+        metadata["downshift.embedding"] = _json_str(state.embedding.info(dimension))
     return Response(encode_safetensors(arrays, metadata), media_type=SAFETENSORS_MEDIA_TYPE)
 
 

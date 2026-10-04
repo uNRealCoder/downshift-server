@@ -9,10 +9,12 @@ UNVERIFIED a .onnx handed to us with no reference model         -> serve via ORT
 import copy
 import re
 import time
+import traceback
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal
+from typing import Any
 
 import torch
 
@@ -31,10 +33,25 @@ from downshift.core.shapes import (
     pin_vary_fn,
     safe_capture_inputs,
 )
-from downshift.core.verify import NumericsReport, OnnxRuntimeError, verify
+from downshift.core.verify import (
+    NumericsReport,
+    OnnxRuntimeError,
+    first_line,
+    load_session,
+    verify,
+)
 from downshift.settings import DEFAULT_SAMPLES
+from downshift.sources import hide_paths
 
-Status = Literal["CLEAN", "DEGRADED", "FAILED", "UNVERIFIED"]
+
+class Status(StrEnum):
+    """A verdict's outcome; see the module docstring. Equal to its plain string, so JSON and
+    the manifest carry "CLEAN" etc. as before."""
+
+    CLEAN = "CLEAN"
+    DEGRADED = "DEGRADED"
+    FAILED = "FAILED"
+    UNVERIFIED = "UNVERIFIED"
 
 
 class BackendName(StrEnum):
@@ -45,7 +62,7 @@ class BackendName(StrEnum):
     torch = "torch"
 
 
-EXIT_CODES: dict[str, int] = {"CLEAN": 0, "FAILED": 1, "DEGRADED": 2, "UNVERIFIED": 3}
+EXIT_CODES = {Status.CLEAN: 0, Status.FAILED: 1, Status.DEGRADED: 2, Status.UNVERIFIED: 3}
 
 _ATEN_OP = re.compile(r"(?:torch\.ops\.)?aten\.(\w+)(?:\.\w+)?")
 
@@ -71,6 +88,8 @@ class ExportVerdict:
     onnx_bytes: bytes = field(default=b"", repr=False)  # serialized once by capture()
     # Keeps the external-data temp directory (onnx_path lives in it) alive; never serialized.
     _tmpdir: object | None = field(default=None, repr=False)
+    # The CPU session verify ran on; never serialized. take_session() hands it to the server.
+    _session: object | None = field(default=None, repr=False, compare=False)
     prepared: Prepared | None = field(default=None, repr=False)
     # Debug-only: not JSON-able, excluded from to_dict(); the CLI logs these at --log-level
     # debug when the status is FAILED.
@@ -112,6 +131,20 @@ class ExportVerdict:
             "onnx_path": str(self.onnx_path) if self.onnx_path else None,
         }
 
+    def take_session(self) -> Any:
+        """The ONNX Runtime session verify built, once: the verdict lets go of it, so a server
+        that builds its own does not keep a second copy of the weights alive."""
+        session, self._session = self._session, None
+        return session
+
+    def redacted_dict(self, paths: Iterable[str | Path | None]) -> dict:
+        """to_dict() for someone outside this machine: free-text fields quote whatever path an
+        exception was handed, so `paths` are reduced to their names in reason and warnings."""
+        data = self.to_dict()
+        data["reason"] = hide_paths(data["reason"], paths)
+        data["warnings"] = [hide_paths(w, paths) for w in data["warnings"]]
+        return data
+
     @classmethod
     def from_dict(cls, data: dict) -> "ExportVerdict":
         """Rebuild from to_dict()'s output, e.g. in a `serve --workers N` worker that takes
@@ -124,7 +157,7 @@ class ExportVerdict:
         numerics = NumericsReport.from_dict(numerics_data) if numerics_data is not None else None
         onnx_path = data.get("onnx_path")
         return cls(
-            status=data["status"],
+            status=Status(data["status"]),
             model_family=data["model_family"],
             capture_strategy=data.get("capture_strategy"),
             opset=data.get("opset"),
@@ -162,9 +195,9 @@ def numerics_outcome(
     err = f"(max abs err {numerics.max_abs_err:.2e})"
     if numerics.passed:
         reason = f"{passed_prefix} across {numerics.samples_tested} samples {err}"
-        return "CLEAN", BackendName.onnxruntime, reason
+        return Status.CLEAN, BackendName.onnxruntime, reason
     reason = f"{failed_prefix} on {numerics.failures}/{numerics.samples_tested} samples {err}"
-    return "DEGRADED", BackendName.torch, reason
+    return Status.DEGRADED, BackendName.torch, reason
 
 
 def _tied_weight_warnings(model: torch.nn.Module) -> list[str]:
@@ -175,6 +208,18 @@ def _tied_weight_warnings(model: torch.nn.Module) -> list[str]:
         if first != name:
             tied.append(f"tied weights: {name} shares storage with {first}")
     return tied
+
+
+def _drop_frame_locals(exc: BaseException | None) -> None:
+    """A kept exception's traceback pins every torch.export frame's locals (FX graphs, fake
+    tensors, the model) for as long as the verdict lives. Clearing them keeps the formatted
+    traceback, which is all the debug log reads."""
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if exc.__traceback__ is not None:
+            traceback.clear_frames(exc.__traceback__)
+        exc = exc.__cause__ or exc.__context__
 
 
 def prepare_model(
@@ -254,8 +299,10 @@ def build_verdict(
         if result.exception is not None
         else []
     )
+    for _, kept in capture_exceptions:
+        _drop_frame_locals(kept)
     verdict = ExportVerdict(
-        status="FAILED",
+        status=Status.FAILED,
         model_family=prepared.family,
         capture_strategy=result.capture_strategy,
         opset=result.opset,
@@ -287,16 +334,17 @@ def build_verdict(
         return verdict
 
     if not verify_numerics:
-        verdict.status, verdict.recommended_backend = "UNVERIFIED", BackendName.onnxruntime
+        verdict.status, verdict.recommended_backend = Status.UNVERIFIED, BackendName.onnxruntime
         verdict.reason = f"exported via {result.capture_strategy}; numerics never checked"
         return verdict
 
     report(Phase.verify)
     verify_start = time.perf_counter()
     try:
+        session = load_session(result.onnx_bytes or result.onnx_path)
         numerics = verify(
             prepared.model,
-            result.onnx_bytes or result.onnx_path,
+            session,
             prepared.inputs,
             prepared.dynamic_shapes,
             vary_fn=prepared.vary_fn,
@@ -306,7 +354,7 @@ def build_verdict(
             seed=seed,
         )
     except OnnxRuntimeError as exc:
-        message = str(exc).splitlines()[0]
+        message = first_line(exc)
         verdict.reason = (
             f"exported via {result.capture_strategy} but ONNX Runtime cannot run the "
             f"graph: {message}"
@@ -318,6 +366,7 @@ def build_verdict(
             timings[Phase.verify] = time.perf_counter() - verify_start
 
     verdict.numerics = numerics
+    verdict._session = session
     verdict.axes = axes_for(prepared, numerics)
     if prepared.family == Family.pyg:
         verdict.output_axes = classify_outputs(
@@ -399,3 +448,23 @@ def check(
         if entry is not None:
             memo.MEMO.put(key, entry)
     return verdict
+
+
+def unverified_verdict(prepared: Prepared, reason: str, output_axes: list[str]) -> ExportVerdict:
+    """The verdict for a model whose export was skipped (`--backend torch`): served eagerly,
+    with the served axis bounds and no numerics."""
+    return ExportVerdict(
+        status=Status.UNVERIFIED,
+        model_family=prepared.family,
+        capture_strategy=None,
+        opset=None,
+        op_types={},
+        numerics=None,
+        recommended_backend=BackendName.torch,
+        reason=reason,
+        input_names=prepared.input_names,
+        dynamic_dims=prepared.dynamic_dims,
+        axes=axes_for(prepared, None),
+        output_axes=output_axes,
+        prepared=prepared,
+    )

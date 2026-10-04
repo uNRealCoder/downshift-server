@@ -47,7 +47,6 @@ def test_get_unknown_adapter_lists_available_names():
 
 class _FakeAdapter:
     name = "fake"
-    family = "fake"
 
     def matches(self, model, example_inputs):
         return True
@@ -114,7 +113,6 @@ from downshift.adapters.base import Prepared
 
 class MyAdapter:
     name = "custom"
-    family = "custom-family"
 
     def matches(self, model, example_inputs):
         return True
@@ -129,7 +127,7 @@ class MyAdapter:
             input_names=("x",),
             dynamic_shapes=(None,),
             vary_fn=None,
-            family=self.family,
+            family=self.name,
         )
 
 ADAPTER = MyAdapter()
@@ -146,7 +144,6 @@ def test_get_loads_custom_adapter_from_py_file_default_attr(tmp_path):
 
     adapter = registry.get(str(path))
     assert adapter.name == "custom"
-    assert adapter.family == "custom-family"
 
 
 def test_get_loads_custom_adapter_from_py_file_with_explicit_attr(tmp_path):
@@ -192,7 +189,7 @@ def test_prepare_model_accepts_custom_adapter_file_path(tmp_path):
     path.write_text(_CUSTOM_ADAPTER_INSTANCE)
 
     prepared = prepare_model(clean_mlp.make_model(), clean_mlp.make_inputs(), adapter=str(path))
-    assert prepared.family == "custom-family"
+    assert prepared.family == "custom"
 
 
 def test_detect_raises_when_no_adapter_matches(monkeypatch):
@@ -203,7 +200,7 @@ def test_detect_raises_when_no_adapter_matches(monkeypatch):
 
 def test_prepare_model_accepts_adapter_name_as_string():
     prepared = prepare_model(clean_mlp.make_model(), clean_mlp.make_inputs(), adapter="generic")
-    assert prepared.family == "generic-torch"
+    assert prepared.family == "generic"
 
 
 def test_prepare_model_vary_overrides_the_adapters_own_vary_fn():

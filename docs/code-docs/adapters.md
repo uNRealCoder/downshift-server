@@ -21,7 +21,6 @@ from downshift.adapters.base import Adapter, Prepared
 @runtime_checkable
 class Adapter(Protocol):
     name: str
-    family: str
 
     def matches(self, model: nn.Module, example_inputs: tuple | None) -> bool: ...
     def example_inputs(self, model: nn.Module) -> tuple | None: ...
@@ -31,14 +30,13 @@ class Adapter(Protocol):
 ```
 
 It's a `typing.Protocol` marked `@runtime_checkable`, so `isinstance(obj, Adapter)` works
-structurally - a custom adapter doesn't need to inherit from anything, it needs these five
+structurally - a custom adapter doesn't need to inherit from anything, it needs these four
 attributes with matching signatures.
 
 - **`name: str`** - the identifier used to select it: `--adapter name`, `adapter="name"`
   on `check()`/`export()`/`intake()`/`prepare_model()`, and what `registry.get()` looks up.
-- **`family: str`** - usually the same string as `name`, but conceptually distinct: it's
-  what ends up in `ExportVerdict.model_family` and `/metadata`'s `family` field, i.e. the
-  thing a human reads, not the thing a user types on `--adapter`.
+  It is also what `ExportVerdict.model_family` and `/metadata`'s `family` field report: set
+  `Prepared.family` to it.
 - **`matches(model, example_inputs) -> bool`** - called by `registry.detect()`, in
   registration order (see below), when no `--adapter`/`adapter=` was given. The first
   adapter whose `matches()` returns `True` wins; write it to check something structural
@@ -64,7 +62,7 @@ class Prepared:
     input_names: tuple[str, ...]
     dynamic_shapes: tuple  # per input: {axis: torch.export.Dim} or None
     vary_fn: VaryFn | None  # sample i -> inputs; None means the shared-axis-0 default
-    family: str
+    family: str  # the adapter's name
 ```
 
 - `model` doesn't have to be the same object the caller passed in - wrap it if the real
@@ -203,7 +201,6 @@ class PointCloudNet(nn.Module):
 
 class PointCloudAdapter:
     name = "pointcloud"
-    family = "pointcloud"
 
     def matches(self, model: nn.Module, example_inputs: tuple | None) -> bool:
         return isinstance(model, PointCloudNet)
@@ -224,7 +221,7 @@ class PointCloudAdapter:
             input_names=("points", "features"),
             dynamic_shapes=({0: point_dim}, {0: point_dim}),
             vary_fn=None,  # the default axis-0 sampler already ties both inputs together
-            family=self.family,
+            family=self.name,
         )
 ```
 

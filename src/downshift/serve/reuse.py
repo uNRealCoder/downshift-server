@@ -10,27 +10,23 @@ exports nothing, so it is never cached.
 """
 
 import copy
-import logging
 from collections.abc import Callable
-from pathlib import Path
 
 from downshift.adapters.base import Family
 from downshift.core import memo
-from downshift.core.export_cache import ExportCache
+from downshift.core.axes import axis_bounds_from_json, axis_bounds_to_json
+from downshift.core.export_cache import ExportCache, lookup, store
 from downshift.core.verdict import BackendName, ExportVerdict
-from downshift.loading import HF_REPO_DIR, LoadedModel
+from downshift.loading import LoadedModel
 from downshift.serve.engine import (
     ServingState,
-    axis_bounds_from_json,
-    axis_bounds_to_json,
     choose_backend,
     prepare_serving,
     serving_state_from_artifact,
     serving_state_from_torch_artifact,
 )
 from downshift.serve.options import ServeOptions
-
-logger = logging.getLogger("downshift.reuse")
+from downshift.sources import HF_REPO_DIR
 
 Loader = Callable[[], tuple[LoadedModel, LoadedModel | None]]
 
@@ -59,23 +55,30 @@ def prepare_serving_reusing(
     if repo is not None:
         run = memo.run_options(opts, opts.adapter or Family.hf)
         mem_key = memo.guarded(memo.repo_key, repo, inputs_spec, memo.file_identity, **run)
-        entry = memo.MEMO.get(mem_key) if mem_key is not None else None
-        tier = "memory"
-        if entry is None and disk is not None:
+        # A repo's disk key hashes file contents, so it is only computed on a memo miss.
+        if disk is not None and (mem_key is None or mem_key not in memo.MEMO):
             disk_key = memo.guarded(memo.repo_key, repo, inputs_spec, disk.fingerprint, **run)
     else:
         loaded, reference = load()
-        entry, tier = None, "memory"
         if loaded.model is not None and loaded.onnx_path is None:
             run = memo.run_options(opts, opts.adapter or loaded.adapter_hint)
             mem_key = memo.guarded(memo.model_key, loaded.model, loaded.example_inputs, **run)
-            entry = memo.MEMO.get(mem_key) if mem_key is not None else None
             disk_key = mem_key if disk is not None else None
-    if entry is None and disk is not None and disk_key is not None:
-        entry, tier = disk.get(disk_key), "disk"
+    entry, tier = lookup(mem_key, disk, disk_key)
 
     if entry is not None:
-        return _state_from_entry(entry, tier, load, loaded, reference, opts, tokenizer_from, repo)
+        source, kind = (str(repo), HF_REPO_DIR) if loaded is None else (loaded.source, loaded.kind)
+        return state_from_entry(
+            entry,
+            load,
+            opts,
+            tokenizer_from,
+            source=source,
+            kind=kind,
+            reused=tier,
+            loaded=loaded,
+            reference=reference,
+        )
 
     if loaded is None:
         loaded, reference = load()
@@ -84,32 +87,34 @@ def prepare_serving_reusing(
     return state
 
 
-def _state_from_entry(
+def state_from_entry(
     entry: memo.ExportEntry,
-    tier: str,
     load: Loader,
-    loaded: LoadedModel | None,
-    reference: LoadedModel | None,
     opts: ServeOptions,
     tokenizer_from: str | None,
-    repo: str | None,
+    *,
+    source: str,
+    kind: str,
+    reused: str | None = None,
+    loaded: LoadedModel | None = None,
+    reference: LoadedModel | None = None,
 ) -> ServingState:
+    """A ServingState from an export that already ran: a cache hit (`reused` names the tier)
+    or a `serve --workers N` worker taking its parent's. The backend is chosen again from the
+    verdict, exactly as the export's own boot chose it. `load()` is called only when the
+    torch backend needs the model and `loaded` doesn't have it."""
     verdict = ExportVerdict.from_dict(copy.deepcopy(entry.verdict))
     verdict.onnx_bytes = entry.onnx_bytes
     verdict.onnx_path = entry.onnx_path
     name, notes = choose_backend(verdict, opts, has_torch=True)
-    if loaded is None:
-        source, kind = str(repo), HF_REPO_DIR
-    else:
-        source, kind = loaded.source, loaded.kind
     hf_source = source if kind == HF_REPO_DIR else tokenizer_from
 
     if name == BackendName.torch:
-        # Eager serving needs the model itself: the cache only saves the export and verify.
+        # Eager serving needs the model itself: the export only saves the export and verify.
         if loaded is None:
             loaded, reference = load()
         return serving_state_from_torch_artifact(
-            loaded, verdict, opts, notes=notes, hf_source=hf_source, reused=tier
+            loaded, verdict, opts, notes=notes, hf_source=hf_source, reused=reused
         )
 
     if loaded is not None:
@@ -118,7 +123,6 @@ def _state_from_entry(
         reference.model = None
     return serving_state_from_artifact(
         source,
-        entry.onnx_path,
         verdict,
         opts,
         tuple(entry.input_names),
@@ -127,7 +131,7 @@ def _state_from_entry(
         axis_bounds_from_json(entry.axis_bounds),
         kind=kind,
         hf_source=hf_source,
-        reused=tier,
+        reused=reused,
     )
 
 
@@ -136,16 +140,10 @@ def _store(
 ) -> None:
     verdict = state.verdict
     if verdict.status not in memo.STORED_STATUSES:
-        return
+        return  # checked here as well as by each tier, to skip building the entry
     if mem_key is None and (disk is None or disk_key is None):
         return
     entry = memo.build_entry(
         verdict, state.input_names, state.example_inputs, axis_bounds_to_json(state.axis_bounds)
     )
-    if mem_key is not None:
-        memo.MEMO.put(mem_key, entry)
-    if disk is not None and disk_key is not None:
-        try:
-            disk.put(disk_key, entry)
-        except OSError as exc:
-            logger.warning("export cache write failed in %s: %s", Path(disk.root), exc)
+    store(entry, mem_key, disk, disk_key)

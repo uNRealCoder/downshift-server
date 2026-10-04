@@ -7,7 +7,7 @@ All notable changes to this project are documented here. Format follows
 
 ### Added
 
-- `--execution threadpool|inline` / `DOWNSHIFT_EXECUTION` (default `threadpool`). `inline` parses, infers and encodes small JSON bodies (Content-Length up to 64 KiB, no `text`) on the event loop, with no thread hop; it only helps models under about 1 ms per inference, and a slow model stalls `/health` and `/ready`. The banner has an `Execution` row and `/metadata` an `execution` block.
+- `--execution threadpool|inline` / `DOWNSHIFT_EXECUTION` (default `threadpool`). `inline` parses, infers and encodes small JSON bodies (Content-Length up to 64 KiB, no `text`) on the event loop, with no thread hop; it only helps models under about 1 ms per inference, and a slow model stalls `/health` and `/ready`. The banner has an `Execution` row and `/metadata` an `execution` field.
 
 - `GET /metrics`, Prometheus text format, always on and behind the API key when one is set. Request counts and latency by route template and status, per-stage latency, rejections by reason, queue depth, batch sizes and boot phases. Under `--workers N` the series are summed across workers.
 
@@ -17,8 +17,22 @@ All notable changes to this project are documented here. Format follows
 - The `--max-concurrency` help and README no longer say raising it does not help: small encoders usually gain from 2-4 (all-MiniLM-L6-v2, batch 8, 8 clients: 52 req/s at 1, 134 at 4).
 - `--max-body-bytes` defaults to 32 MiB (was 64 MiB).
 - Breaking for third-party adapters: `Adapter.prepare(model, example_inputs)` is now `prepare(model, example_inputs, axis_max=None)`. Add the parameter; to support `--axis-max`, lower the named `torch.export.Dim`s with `downshift.core.shapes.lower_axis_max` and pin verification sample 1 at those sizes (`pin_vary_fn`). An adapter that ignores it just serves its own bounds.
+- Breaking: an adapter has one identity, its `name`. `Adapter.family` is gone, and `model_family` (in the manifest, `check --json`, `/metadata`'s `family`, `/schema` and the metrics `adapter` label) is now the adapter name: `hf` (was `hf-transformers`), `generic` (was `generic-torch`), `pyg` and `onnx` unchanged. Upgrade: drop `family` from a custom adapter and build its `Prepared` with `family=self.name`.
+- Breaking: `/metadata`'s `execution` is a plain string (`"threadpool"` or `"inline"`), not `{"mode": ...}`. Its `limits` is a typed block, and `/schema`'s `limits` now carries the same five fields (it had only the two byte limits).
+- Breaking: a request a backend fails on is a 400 only when ONNX Runtime rejects the input itself (`InvalidArgument`); every other failure inside inference is a 500. The input's rank and fixed axes are now checked against the model before inference (`"x axis 1 is 5; this model takes 16"`), so the common client mistakes stay 400s on both backends; what changes is that an error torch raises from inside the model is no longer guessed to be the client's from its message.
+- Breaking: `ExportVerdict.status` is a `Status` string enum (`downshift.core.verdict.Status`). It still compares equal to `"CLEAN"` etc. and serializes the same.
+- Breaking: `NumericsReport.session` is gone. The ONNX Runtime session verify ran on is kept privately on the verdict and handed to the server once.
+- Breaking: `downshift.loading` no longer re-exports `IN_PROCESS_MODULE` and `SOURCE_KIND_HELP` (import them from `downshift.sources`), and `downshift.cli.main._serve_app_factory` is gone (it lives in `downshift.cli.runtime`).
+- `check`, `export` and `serve` on the command line no longer hash every weight for the in-process export memo, which one export per process can never reuse; with `--export-cache-dir` the key is still computed for the disk tier.
+- `export` writes the graph it already serialized instead of serializing it a second time.
+- `serve --workers N`: the parent reuses verify's ONNX Runtime session instead of building a second one only to print the banner, and workers boot from the parent's export the same way a cache hit does.
+- A batched safetensors body on `/predict/graph` is no longer cut into one piece per graph and concatenated again; node ids are checked and offset in one pass.
+- A safetensors request body is decoded once and handed to the route as is; an unknown `output_encoding` in its `__metadata__` is a 400.
+- A bad `DOWNSHIFT_BACKEND` or `DOWNSHIFT_OUTPUT_ENCODING` fails at startup with the variable's name and the accepted values.
 
 ### Fixed
+
+- A stored export failure no longer keeps every `torch.export` frame (and the model) alive for the life of a server that falls back to torch.
 
 ### Removed
 

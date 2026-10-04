@@ -15,7 +15,6 @@ the graph and its data file against the manifest; an entry that fails any check 
 and a miss, and the re-export overwrites it.
 """
 
-import hashlib
 import json
 import logging
 import os
@@ -26,7 +25,7 @@ from pathlib import Path
 
 import numpy as np
 
-from downshift.core.memo import ExportEntry, file_identity
+from downshift.core.memo import MEMO, STORED_STATUSES, ExportEntry, file_identity, sha256_file
 
 logger = logging.getLogger("downshift.export_cache")
 
@@ -53,12 +52,28 @@ def check_dir(path: str | Path) -> Path:
     return root
 
 
-def sha256_file(path: str | Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def lookup(
+    mem_key: str | None, disk: "ExportCache | None", disk_key: str | None
+) -> tuple[ExportEntry | None, str]:
+    """(entry, tier): the memo first, then the disk tier; tier is "memory" or "disk"."""
+    entry = MEMO.get(mem_key) if mem_key is not None else None
+    if entry is None and disk is not None and disk_key is not None:
+        return disk.get(disk_key), "disk"
+    return entry, "memory"
+
+
+def store(
+    entry: ExportEntry, mem_key: str | None, disk: "ExportCache | None", disk_key: str | None
+) -> None:
+    """Keep `entry` in whichever tiers have a key; each tier refuses what it doesn't keep
+    (FAILED, UNVERIFIED). A disk write that fails costs one warning, never the boot."""
+    if mem_key is not None:
+        MEMO.put(mem_key, entry)
+    if disk is not None and disk_key is not None:
+        try:
+            disk.put(disk_key, entry)
+        except OSError as exc:
+            logger.warning("export cache write failed in %s: %s", disk.root, exc)
 
 
 def _write_json_atomic(path: Path, data: object) -> None:
@@ -142,7 +157,7 @@ class ExportCache:
         from downshift.core.manifest import external_data_files, write_manifest
         from downshift.core.verdict import ExportVerdict
 
-        if entry.status not in ("CLEAN", "DEGRADED"):
+        if entry.status not in STORED_STATUSES:
             return
         tmp = self.root / f"{key}.tmp-{os.getpid()}-{uuid.uuid4().hex[:8]}"
         tmp.mkdir()

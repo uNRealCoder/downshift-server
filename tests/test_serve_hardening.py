@@ -472,7 +472,7 @@ def test_a_client_shape_mistake_on_torch_is_a_400(torch_state):
     resp = client.post("/predict", json={"inputs": {"x": [[0.0] * 5]}})
 
     assert resp.status_code == 400
-    assert "shape" in resp.json()["detail"]
+    assert resp.json()["detail"] == "x axis 1 is 5; this model takes 16"
 
 
 @pytest.mark.parametrize(
@@ -498,21 +498,16 @@ def test_a_server_side_runtime_error_in_forward_is_a_500(torch_state, monkeypatc
     assert resp.json()["request_id"] == resp.headers["x-request-id"]
 
 
-def test_an_unrecognized_runtime_error_in_forward_is_presumed_client_input(
-    torch_state, monkeypatch
-):
-    """Torch has no exception type for "the client's input was bad", only ever-varying
-    RuntimeError/ValueError messages (a shape mismatch, an out-of-bounds target, ...);
-    enumerating every client-input phrasing under-classifies, so anything that isn't one of
-    the few known server-side markers (out of memory, a CUDA/cuDNN fault, an internal
-    assert, a missing kernel) is presumed to be the client's fault instead of an opaque 500."""
+def test_any_error_in_forward_after_the_input_checks_is_a_500(torch_state, monkeypatch):
+    """The input's names, dtypes, ranks and fixed axes are checked before infer, so whatever
+    the model raises past that is the server's fault, whatever its message says."""
     monkeypatch.setattr(torch_state.backend, "module", _Failing("kaboom: an unrelated failure"))
-    client = TestClient(build_app(torch_state, api_key=None))
+    client = TestClient(build_app(torch_state, api_key=None), raise_server_exceptions=False)
 
     resp = client.post("/predict", json=MLP_INPUT)
 
-    assert resp.status_code == 400
-    assert "kaboom" in resp.json()["detail"]
+    assert resp.status_code == 500
+    assert "kaboom" not in resp.text
 
 
 @pytest.mark.parametrize("device", ["cuda", "cuda:0"])

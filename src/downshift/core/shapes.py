@@ -9,6 +9,10 @@ from typing import Any
 import torch
 
 from downshift.adapters.base import VaryFn
+from downshift.core.axes import AxisBounds, DimBound
+
+# The max of every Dim downshift makes up itself (the default heuristic, --dynamic, PyG).
+DEFAULT_DIM_MAX = 1 << 16
 
 
 def alternative_sizes(base_size: int, lo: int = 1, hi: int | None = None) -> list[int]:
@@ -38,10 +42,10 @@ def pick_size(candidates: list[int]) -> int:
 def dim_bounds(spec: dict[int, Any] | None, axis: int) -> tuple[int, int]:
     """(min, max) for one axis of a dynamic_shapes entry, e.g. {0: Dim("n", min=1, max=64)}.
 
-    Falls back to (1, 1 << 16) when the axis isn't dynamic or the Dim doesn't expose the
-    attributes on this torch version - the one place that can happen, per the risk it guards.
+    Falls back to (1, DEFAULT_DIM_MAX) when the axis isn't dynamic or the Dim doesn't expose
+    the attributes on this torch version - the one place that can happen, per the risk it guards.
     """
-    fallback = (1, 1 << 16)
+    fallback = (1, DEFAULT_DIM_MAX)
     if not spec or axis not in spec:
         return fallback
     dim = spec[axis]
@@ -52,23 +56,21 @@ def dim_bounds(spec: dict[int, Any] | None, axis: int) -> tuple[int, int]:
     return lo, hi
 
 
-def dynamic_bounds(
-    input_names: tuple[str, ...], dynamic_shapes: tuple
-) -> dict[str, dict[int, tuple[str, int, int]]]:
+def dynamic_bounds(input_names: tuple[str, ...], dynamic_shapes: tuple) -> AxisBounds:
     """Per input, per dynamic axis: (Dim name, min, max) as the export traced it. The served
     bounds that core/axes.py reports and the request check enforces."""
-    bounds: dict[str, dict[int, tuple[str, int, int]]] = {}
+    bounds: AxisBounds = {}
     for name, spec in zip(input_names, dynamic_shapes, strict=True):
         if spec:
             bounds[name] = {
-                axis: (getattr(dim, "__name__", str(axis)), *dim_bounds(spec, axis))
+                axis: DimBound(dim_name(dim, axis), *dim_bounds(spec, axis))
                 for axis, dim in spec.items()
             }
     return bounds
 
 
 def infer_dynamic_shapes(inputs: tuple) -> tuple:
-    dim0 = torch.export.Dim("dim0", min=1, max=1 << 16)
+    dim0 = torch.export.Dim("dim0", min=1, max=DEFAULT_DIM_MAX)
     return tuple({0: dim0} if isinstance(t, torch.Tensor) and t.ndim > 0 else None for t in inputs)
 
 
@@ -98,12 +100,12 @@ def apply_dynamic_override(
             shapes.append(None)
             continue
         shapes.append(
-            {axis: torch.export.Dim(f"{name}_{axis}", min=1, max=1 << 16) for axis in axes}
+            {axis: torch.export.Dim(f"{name}_{axis}", min=1, max=DEFAULT_DIM_MAX) for axis in axes}
         )
     return tuple(shapes)
 
 
-def _dim_name(dim: Any, axis: int) -> str:
+def dim_name(dim: Any, axis: int) -> str:
     return getattr(dim, "__name__", str(axis))
 
 
@@ -120,7 +122,7 @@ def lower_axis_max(dynamic_shapes: tuple, axis_max: dict[str, int] | None) -> tu
     bounds: dict[str, tuple[int, int]] = {}
     for spec in dynamic_shapes:
         for axis, dim in (spec or {}).items():
-            bounds[_dim_name(dim, axis)] = dim_bounds(spec, axis)
+            bounds[dim_name(dim, axis)] = dim_bounds(spec, axis)
     unknown = sorted(set(axis_max) - set(bounds))
     if unknown:
         raise ValueError(
@@ -138,15 +140,17 @@ def lower_axis_max(dynamic_shapes: tuple, axis_max: dict[str, int] | None) -> tu
     return tuple(
         None
         if spec is None
-        else {axis: lowered.get(_dim_name(dim, axis), dim) for axis, dim in spec.items()}
+        else {axis: lowered.get(dim_name(dim, axis), dim) for axis, dim in spec.items()}
         for spec in dynamic_shapes
     )
 
 
-def _resize_axis(tensor: torch.Tensor, axis: int, size: int) -> torch.Tensor:
-    """Tile or slice `axis` to `size`: floats get noise scaled to the example's spread,
-    integers stay inside the observed value range."""
-    if tensor.shape[axis] == size:
+def resize_axis(tensor: torch.Tensor, axis: int, size: int) -> torch.Tensor:
+    """Tile or slice `axis` to `size`, staying close to the example rather than pure noise:
+    floats tile the example's own rows plus noise scaled to its spread (so a varied sample
+    looks like a plausible input), integers (usually indices) stay inside the observed range.
+    A 0-d tensor has no axis to resize and comes back as is."""
+    if tensor.ndim == 0 or tensor.shape[axis] == size:
         return tensor
     moved = tensor.movedim(axis, 0)
     if moved.is_floating_point():
@@ -180,9 +184,9 @@ def pin_vary_fn(
         for tensor, spec in zip(inputs, dynamic_shapes, strict=True):
             if isinstance(tensor, torch.Tensor) and spec:
                 for axis, dim in spec.items():
-                    pinned = axis_max.get(_dim_name(dim, axis))
+                    pinned = axis_max.get(dim_name(dim, axis))
                     if pinned is not None:
-                        tensor = _resize_axis(tensor, axis, pinned)
+                        tensor = resize_axis(tensor, axis, pinned)
             sample.append(tensor)
         return tuple(sample)
 

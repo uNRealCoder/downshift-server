@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("downshift.memo")
 
 MAX_ENTRIES = 2
-STORED_STATUSES = ("CLEAN", "DEGRADED")
+STORED_STATUSES = frozenset({"CLEAN", "DEGRADED"})
 
 _TOOLS = ("torch", "onnx", "onnxscript", "onnxruntime", "transformers", "torch_geometric")
 # Code that ships with these is covered by their version, so it isn't hashed per class.
@@ -137,8 +137,13 @@ def file_identity(path: str | Path) -> list:
     return [os.path.abspath(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino]
 
 
-def _file_digest(path: str | Path) -> str:
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+def sha256_file(path: str | Path) -> str:
+    """A file's sha256, streamed in 1 MiB chunks so a multi-GB file is never held in memory."""
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 @cache
@@ -165,7 +170,7 @@ def _code_ref(spec: object) -> list | None:
     path, sep, _ = spec.partition(".py:")
     candidate = Path(path + ".py") if sep else Path(spec)
     if candidate.suffix == ".py" and candidate.is_file():
-        return [spec, _file_digest(candidate)]
+        return [spec, sha256_file(candidate)]
     found = None
     if ":" in spec:
         try:
@@ -174,7 +179,7 @@ def _code_ref(spec: object) -> list | None:
             pass
     origin = getattr(found, "origin", None)
     if origin and Path(origin).is_file():
-        return [spec, _file_digest(origin)]
+        return [spec, sha256_file(origin)]
     return [spec, None]
 
 
@@ -182,7 +187,7 @@ def _defining_file_digest(obj: object) -> str | None:
     try:
         file = inspect.getfile(obj)  # type: ignore[arg-type]
         if Path(file).is_file():
-            return _file_digest(file)
+            return sha256_file(file)
         return hashlib.sha256(inspect.getsource(obj).encode()).hexdigest()  # type: ignore[arg-type]
     except (TypeError, OSError):
         return None
@@ -389,7 +394,7 @@ def build_entry(
     example_inputs: tuple | None,
     axis_bounds: dict[str, list[list]],
 ) -> ExportEntry:
-    from downshift.serve.backends import example_feeds
+    from downshift.core.feeds import example_feeds
 
     feeds = example_feeds(input_names, example_inputs) if example_inputs is not None else None
     return ExportEntry(
@@ -404,13 +409,11 @@ def build_entry(
 
 def entry_from_verdict(verdict: "ExportVerdict") -> ExportEntry | None:
     """The entry for a verdict straight out of build_verdict (it still has its Prepared)."""
+    from downshift.core.axes import axis_bounds_to_json
     from downshift.core.shapes import dynamic_bounds
 
     prepared = verdict.prepared
     if prepared is None:
         return None
-    bounds = {
-        name: [[axis, *bound] for axis, bound in axes.items()]
-        for name, axes in dynamic_bounds(prepared.input_names, prepared.dynamic_shapes).items()
-    }
-    return build_entry(verdict, prepared.input_names, prepared.inputs, bounds)
+    bounds = dynamic_bounds(prepared.input_names, prepared.dynamic_shapes)
+    return build_entry(verdict, prepared.input_names, prepared.inputs, axis_bounds_to_json(bounds))

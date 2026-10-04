@@ -204,9 +204,11 @@ def test_torch_backend_rejects_missing_input():
         backend.infer({"y": np.zeros((1, 16), dtype=np.float32)})
 
 
-def test_torch_backend_wraps_shape_error_in_inference_input_error():
+def test_torch_backend_leaves_a_model_error_to_the_server():
+    # The client's shape is checked before infer (predict._shape_violation); whatever the
+    # model raises after that is the server's 500, not reclassified by its message.
     backend = TorchBackend(clean_mlp.make_model(), ("x",), device="cpu")
-    with pytest.raises(InferenceInputError, match="cannot be multiplied"):
+    with pytest.raises(RuntimeError, match="cannot be multiplied"):
         backend.infer({"x": np.zeros((1, 5), dtype=np.float32)})
 
 
@@ -347,7 +349,7 @@ def test_ort_backend_does_not_check_for_cuda_on_a_cpu_server(monkeypatch):
 def _bare_verdict(**overrides) -> ExportVerdict:
     fields = dict(
         status="CLEAN",
-        model_family="generic-torch",
+        model_family="generic",
         capture_strategy=None,
         opset=None,
         op_types={},

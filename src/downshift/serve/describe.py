@@ -18,24 +18,24 @@ from typing import Any
 
 import orjson
 
-from downshift.loading import HF_REPO_DIR, SOURCE_KIND_HELP, UNKNOWN_SOURCE
+from downshift.core.axes import DimBound
 from downshift.serve.backends import IOSpec, concrete_dim
-from downshift.serve.engine import DimBound, ServingState
+from downshift.serve.engine import ServingState
+from downshift.serve.graphs import GRAPH_INPUTS
 from downshift.serve.schemas import (
-    GRAPH_INPUTS,
     AxisBound,
     AxisInfo,
     EmbeddingInfo,
     InputFormat,
+    Limits,
     OutputEncoding,
-    SchemaLimits,
     SchemaResponse,
     SourceInfo,
     TensorSchema,
     TextInputInfo,
     normalize_dtype,
 )
-from downshift.sources import display_source
+from downshift.sources import HF_REPO_DIR, SOURCE_KIND_HELP, UNKNOWN_SOURCE, display_source
 
 # An inlined example stays a thing you can read and paste. Past this many elements across
 # all inputs it is dropped and the per-input `example_shape` is left to speak for itself.
@@ -198,15 +198,8 @@ def _embedding(state: ServingState, outputs: list[TensorSchema]) -> EmbeddingInf
         return None
     last = outputs[0].shape[-1] if outputs and outputs[0].shape else None
     return EmbeddingInfo.model_validate(
-        {
-            "pooling": recipe.pooling,
-            "normalized": recipe.normalize,
-            "dimension": last if isinstance(last, int) else None,
-            "max_seq_length": recipe.max_seq_length,
-            "from": recipe.origin,
-            "prompts": recipe.prompts,
-            "default_prompt": recipe.default_prompt,
-        }
+        recipe.info(last if isinstance(last, int) else None)
+        | {"prompts": recipe.prompts, "default_prompt": recipe.default_prompt}
     )
 
 
@@ -218,6 +211,17 @@ def _graph_batching(state: ServingState, outputs: list[TensorSchema]) -> dict[st
         return None
     names = [o.name for o in outputs] or [f"output_{i}" for i in range(len(kinds))]
     return {name: kinds[i] if i < len(kinds) else "unknown" for i, name in enumerate(names)}
+
+
+def limits_info(state: ServingState) -> Limits:
+    opts = state.options
+    return Limits(
+        max_body_bytes=opts.max_body_bytes,
+        max_input_bytes=opts.max_input_bytes,
+        max_concurrency=opts.max_concurrency,
+        max_queue=opts.max_queue,
+        request_timeout=opts.request_timeout,
+    )
 
 
 def axes_info(state: ServingState) -> list[AxisInfo]:
@@ -281,9 +285,6 @@ def describe(state: ServingState, predict_url: str) -> SchemaResponse:
         input_formats=[InputFormat(name=k, description=v) for k, v in INPUT_FORMATS.items()],
         output_encodings=[e.value for e in OutputEncoding],
         default_output_encoding=state.options.output_encoding.value,
-        limits=SchemaLimits(
-            max_body_bytes=state.options.max_body_bytes,
-            max_input_bytes=state.options.max_input_bytes,
-        ),
+        limits=limits_info(state),
         notes=notes,
     )

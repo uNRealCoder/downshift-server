@@ -262,7 +262,7 @@ return, and what `serve` reads to pick a backend.
 | Field | Type | Meaning |
 |---|---|---|
 | `status` | `"CLEAN" \| "DEGRADED" \| "FAILED" \| "UNVERIFIED"` | See "The gate" in the repo README. |
-| `model_family` | `str` | The resolving adapter's `family` (`"generic-torch"`, `"pyg"`, `"hf-transformers"`, `"onnx"` for an unreferenced `intake()`, ...). |
+| `model_family` | `str` | The resolving adapter's `family` (`"generic"`, `"pyg"`, `"hf"`, `"onnx"` for an unreferenced `intake()`, ...). |
 | `capture_strategy` | `str \| None` | Which `torch.export` strategy captured the graph (e.g. `"strict=False"`), or `None` when capture never ran (`intake()` without a reference, or `--backend torch`). |
 | `opset` | `int \| None` | The ONNX opset the graph was exported at. |
 | `op_types` | `dict[str, int]` | Op-type histogram, count-descending. |
@@ -372,7 +372,6 @@ sample's per-input shapes.
 @runtime_checkable
 class Adapter(Protocol):
     name: str
-    family: str
 
     def matches(self, model: nn.Module, example_inputs: tuple | None) -> bool: ...
     def example_inputs(self, model: nn.Module) -> tuple | None: ...
@@ -402,7 +401,7 @@ What an adapter's `prepare()` returns: an export-ready module whose `forward` ta
 tensors, the matching flat example inputs, their names, the per-input dynamic-shape spec
 (`{axis: torch.export.Dim}` or `None`, one entry per input), an optional
 `vary_fn(i) -> inputs` for generating verification samples (`None` means "use the
-shared-axis-0 default", `make_shared_axis0_vary_fn`), and the family string that ends up
+shared-axis-0 default", `make_shared_axis0_vary_fn`), and the adapter's name, which ends up
 in `ExportVerdict.model_family`. `dynamic_dims` is a derived property:
 `{input_name: sorted(axes)}` for inputs whose `dynamic_shapes` entry is non-empty.
 

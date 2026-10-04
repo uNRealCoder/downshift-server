@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
 import downshift
-from downshift.cli import main
+from downshift.cli import main, runtime
 from downshift.cli.main import app
 from downshift.loading import LoadSpec
 from downshift.serve.options import ServeOptions
@@ -402,7 +402,7 @@ def test_serve_workers_explicit_intra_op_threads_wins(monkeypatch):
 
 def _rebuilt_app():
     """What a --workers worker does: rebuild the app from the env, then let the loader run."""
-    api = main._serve_app_factory()
+    api = runtime._serve_app_factory()
     with TestClient(api):
         api.state.loader_thread.join(timeout=60)
     return api
@@ -485,7 +485,7 @@ def test_serve_workers_writes_and_ships_the_onnx_artifact(monkeypatch):
     assert seen["workers"] == 2
     assert seen["access_log"] is False
     args = seen["args"]
-    assert args.artifact.backend == "onnxruntime"
+    assert args.artifact.onnx_path is not None  # the parent serves the graph
     assert args.artifact.verdict is not None
     assert args.artifact.verdict["status"] == "CLEAN"
     assert args.artifact.input_names == ["x"]
@@ -538,7 +538,6 @@ def test_serve_workers_degraded_ships_a_torch_artifact_and_warns(monkeypatch):
     assert result.exit_code == 0, result.output
     assert "each worker independently reloads and re-warms" in result.output
     args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
-    assert args.artifact.backend == "torch"
     assert args.artifact.verdict is not None
     assert args.artifact.verdict["status"] == "DEGRADED"
     assert args.artifact.onnx_path is None
@@ -568,12 +567,10 @@ def test_serve_app_factory_from_onnx_artifact_never_calls_capture(monkeypatch, t
         middleware=None,
         log_level="warning",
         artifact=main.ArtifactHandoff(
-            backend="onnxruntime",
             verdict=verdict.to_dict(),
             input_names=list(verdict.input_names),
-            notes=[],
             onnx_path=str(onnx_path),
-            feeds_path=None,
+            kind="import-spec",
         ),
     )
     monkeypatch.setenv(main._SERVE_ARGS_ENV, args.to_json())

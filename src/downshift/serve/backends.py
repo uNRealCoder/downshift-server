@@ -2,7 +2,6 @@
 so the HTTP layer doesn't care which one is behind it.
 """
 
-from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Protocol
@@ -12,47 +11,23 @@ import onnxruntime as ort
 import torch
 from torch import nn
 
+from downshift.core.feeds import WIDEN_DTYPES, example_feeds, widen_for_wire
 from downshift.core.verdict import BackendName, ExportVerdict
-from downshift.core.verify import quiet_ort_logging
+from downshift.core.verify import first_line, new_session
 
 _CUDA_EP = "CUDAExecutionProvider"
 _CPU_EP = "CPUExecutionProvider"
 
-# bf16/fp16 have no numpy dtype; the wire contract for both is float32 (B1).
-_WIDEN_DTYPES = (torch.bfloat16, torch.float16)
 
 _ort_state = ort.capi.onnxruntime_pybind11_state
-# ORT raises these for shape/dtype/graph mismatches the client caused; a Fail whose message
-# mentions "shape" is the same story (e.g. a Reshape whose target size doesn't match the input).
-_ORT_CLIENT_ERRORS = (_ort_state.InvalidArgument, _ort_state.InvalidGraph)
-
-
-# Torch has no exception class for "the client's tensor was the wrong shape, dtype or index":
-# those are plain RuntimeError/ValueError, in as many different phrasings as there are ops
-# (a shape mismatch, a bad dtype, an out-of-bounds target, ...). Enumerating client-input
-# phrasings is whack-a-mole and under-classifies; enumerating the server-side ones is a much
-# shorter, more stable list - a hardware/driver fault or a torch-internal bug - so those are
-# what stays a 500, and everything else is presumed to be the client's fault.
-_TORCH_SERVER_MARKERS = (
-    "out of memory",
-    "cuda error",
-    "cudnn error",
-    "cublas",
-    "illegal memory access",
-    "internal assert",
-    "not implemented for",  # a missing kernel/op, not a bad value
-    "can't allocate memory",  # torch's CPU allocator ("DefaultCPUAllocator: can't allocate ...")
-    "expected all tensors to be on the same device",  # a model bug, not the request's
-)
-
-
-def _is_client_input_message(message: str) -> bool:
-    lowered = message.lower()
-    return not any(m in lowered for m in _TORCH_SERVER_MARKERS)
 
 
 class InferenceInputError(ValueError):
-    """The backend rejected the inputs themselves; safe to report to the client as a 400."""
+    """The backend rejected the inputs themselves; safe to report to the client as a 400.
+
+    Only ORT says so by type (InvalidArgument). Every other failure inside infer is the
+    server's (a 500): predict.py checks names, dtypes, ranks and bounds before infer, so a
+    request that gets this far is one the model declared it takes."""
 
 
 @dataclass
@@ -92,7 +67,7 @@ class Backend(Protocol):
     name: BackendName
     input_names: list[str]
     # The execution provider verify() compared the graph against (always CPU today, since
-    # verify._to_session is CPU-only), or None when the verdict never ran numerics at all.
+    # verify.load_session is CPU-only), or None when the verdict never ran numerics at all.
     # Set by engine.py's session-creation call sites, once the verdict is known; the banner
     # reads it to print a "Verified on" row (U6).
     verified_provider: str | None
@@ -181,11 +156,9 @@ class OnnxRuntimeBackend:
             self.session = session
         else:
             assert model is not None
-            quiet_ort_logging()  # must run before any session exists (P6)
-            source = model if isinstance(model, bytes) else str(model)
             providers = _ort_providers(resolve_device(device))
             options = _session_options(intra_op_threads, inter_op_threads)
-            self.session = ort.InferenceSession(source, sess_options=options, providers=providers)
+            self.session = new_session(model, providers, options)
             _require_cuda_provider(self.session, providers)
         self.provider = self.session.get_providers()[0]
         self.input_names = [i.name for i in self.session.get_inputs()]
@@ -203,13 +176,8 @@ class OnnxRuntimeBackend:
         ort_inputs = {name: ort.OrtValue.ortvalue_from_numpy(arr) for name, arr in inputs.items()}
         try:
             outputs = self.session.run_with_ort_values(self.onnx_output_names, ort_inputs)
-        except _ORT_CLIENT_ERRORS as exc:
-            raise InferenceInputError(str(exc).splitlines()[0]) from exc
-        except _ort_state.Fail as exc:
-            message = str(exc)
-            if "shape" not in message.lower():
-                raise
-            raise InferenceInputError(message.splitlines()[0]) from exc
+        except _ort_state.InvalidArgument as exc:
+            raise InferenceInputError(first_line(exc)) from exc
         return dict(zip(self.output_names, (_widen_ort_value(o) for o in outputs), strict=True))
 
     def metadata(self) -> BackendMeta:
@@ -284,16 +252,8 @@ class TorchBackend:
             if t.is_floating_point() and t.dtype != self._param_dtype:
                 t = t.to(self._param_dtype)
             args.append(t)
-        try:
-            with torch.inference_mode():
-                out = self.module(*args)
-        except IndexError as exc:
-            raise InferenceInputError(str(exc)) from exc
-        except (RuntimeError, ValueError) as exc:
-            message = str(exc)
-            if not _is_client_input_message(message):
-                raise
-            raise InferenceInputError(message) from exc
+        with torch.inference_mode():
+            out = self.module(*args)
         if isinstance(out, torch.Tensor):
             tensors = [out]
         else:
@@ -324,11 +284,6 @@ def _dynamic_shape(
     ]
 
 
-def widen_for_wire(t: torch.Tensor) -> torch.Tensor:
-    """bf16/fp16 -> float32, everything else unchanged (B1)."""
-    return t.float() if t.dtype in _WIDEN_DTYPES else t
-
-
 def _widen_ort_value(value: ort.OrtValue) -> np.ndarray:
     """An ORT output as a wire-ready numpy array, bf16/fp16 widened to float32 (B1) like
     TorchBackend.infer. fp16 goes through numpy, which has the dtype. bf16 has none
@@ -349,20 +304,8 @@ def _widen_ort_value(value: ort.OrtValue) -> np.ndarray:
     return array
 
 
-def example_feeds(input_names: Sequence[str], example_inputs: tuple) -> dict[str, np.ndarray]:
-    """Example inputs as the numpy feeds a backend takes, keyed by forward-argument name.
-
-    bf16/fp16 tensors have no numpy dtype, so they're widened to float32 first, same as the
-    wire contract (B1).
-    """
-    return {
-        name: widen_for_wire(t).numpy() if isinstance(t, torch.Tensor) else np.asarray(t)
-        for name, t in zip(input_names, example_inputs, strict=True)
-    }
-
-
 def _wire_dtype_name(dtype: torch.dtype) -> str:
-    wire = torch.float32 if dtype in _WIDEN_DTYPES else dtype
+    wire = torch.float32 if dtype in WIDEN_DTYPES else dtype
     return str(wire).removeprefix("torch.")
 
 

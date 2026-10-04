@@ -30,7 +30,7 @@ def test_intake_with_matching_reference_is_clean(exported_mlp):
     assert verdict.status == "CLEAN", verdict.reason
     assert verdict.exit_code == 0
     assert verdict.recommended_backend == "onnxruntime"
-    assert verdict.model_family == "generic-torch"
+    assert verdict.model_family == "generic"
     assert verdict.input_names == ("x",)
     assert verdict.numerics is not None and verdict.numerics.passed
 
@@ -83,6 +83,6 @@ def test_intake_serves_an_onnx_with_an_external_data_file(tmp_path, monkeypatch)
     assert verdict.onnx_path == path
     assert verdict.op_types["Gemm"] == 2
     state = serving_state_from_artifact(
-        str(path), path, verdict, ServeOptions(k=1, device="cpu", warmup=1), verdict.input_names, []
+        str(path), verdict, ServeOptions(k=1, device="cpu", warmup=1), verdict.input_names, []
     )
     assert state.backend.name == "onnxruntime"

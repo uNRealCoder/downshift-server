@@ -9,7 +9,6 @@ module that actually defines it, and is cached on the module so later access ski
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -97,7 +96,7 @@ def export(
     both, in both directions.
     """
     from downshift.core import memo
-    from downshift.core.export_cache import ExportCache
+    from downshift.core.export_cache import ExportCache, lookup, store
     from downshift.core.manifest import write_manifest
     from downshift.core.verdict import check
 
@@ -119,10 +118,9 @@ def export(
             fp16=fp16,
         )
     output = Path(output)
-    if key is not None:
-        entry = memo.MEMO.get(key) or (disk.get(key) if disk is not None else None)
-        if entry is not None:
-            return _export_from_entry(entry, output, source_path)
+    entry, _ = lookup(key, disk, key)
+    if entry is not None:
+        return _export_from_entry(entry, output, source_path)
 
     verdict = check(
         model,
@@ -145,18 +143,16 @@ def export(
     if disk is not None and key is not None and verdict.status in memo.STORED_STATUSES:
         entry = memo.entry_from_verdict(verdict)
         if entry is not None:
-            try:
-                disk.put(key, entry)
-            except OSError as exc:
-                logging.getLogger("downshift.export_cache").warning(
-                    "export cache write failed in %s: %s", disk.root, exc
-                )
+            store(entry, None, disk, key)  # check() already put it in the memo
     output.parent.mkdir(parents=True, exist_ok=True)
-    # An external-data export (onnx_path is its temp copy) is saved through the program again,
-    # which names the data file after `output` (<name>.onnx.data) and records that location in
-    # the .onnx; the temp pair is never renamed or loaded back into memory.
-    external = verdict.onnx_path is not None
-    verdict.onnx_program.save(str(output), external_data=external or None)  # type: ignore[attr-defined]
+    if verdict.onnx_bytes:
+        # The graph capture() already serialized: the same bytes a reused export writes.
+        output.write_bytes(verdict.onnx_bytes)
+    else:
+        # An external-data export (onnx_path is its temp copy) is saved through the program
+        # again, which names the data file after `output` (<name>.onnx.data) and records that
+        # location in the .onnx; the temp pair is never renamed or loaded back into memory.
+        verdict.onnx_program.save(str(output), external_data=True)  # type: ignore[attr-defined]
     verdict.onnx_path = output
     write_manifest(output, verdict, source_path, __version__)
     return verdict

@@ -30,23 +30,19 @@ from typing import Any
 import torch
 from torch import nn
 
-# Import-spec resolution and its error type are torch-free leaf helpers; re-exported here so
-# existing `from downshift.loading import import_object, LoadError` keeps working.
-from downshift._imports import (  # noqa: F401
+# Import-spec resolution and its error type are torch-free leaf helpers.
+from downshift._imports import (
     LoadError,
     import_object,
     is_import_spec,
 )
 from downshift.adapters.base import Family
 
-# What a model argument turned out to be; defined torch-free in downshift.sources and
-# re-exported here, where the kind is decided.
-from downshift.sources import (  # noqa: F401
+# What a model argument turned out to be; defined torch-free in downshift.sources.
+from downshift.sources import (
     HF_REPO_DIR,
     IMPORT_SPEC,
-    IN_PROCESS_MODULE,
     ONNX_FILE,
-    SOURCE_KIND_HELP,
     TORCH_CHECKPOINT,
     UNKNOWN_SOURCE,
 )

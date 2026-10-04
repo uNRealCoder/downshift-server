@@ -68,7 +68,7 @@ def _numerics(
 def _verdict(**overrides) -> ExportVerdict:
     fields = dict(
         status="CLEAN",
-        model_family="generic-torch",
+        model_family="generic",
         capture_strategy="strict=False",
         opset=18,
         op_types={"Gemm": 2, "Relu": 1},

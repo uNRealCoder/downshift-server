@@ -7,20 +7,20 @@ Each model was checked with `downshift.check(..., k=8)`.
 
 | Model | Hazard | Family | Export | Capture | Numerics | Shape-general | Backend |
 |---|---|---|---|---|---|---|---|
-| `bf16_weights` | bfloat16 weights: ONNX Runtime CPU has no bf16 Gemm kernel | generic-torch | FAILED | strict=False | — | — | torch |
+| `bf16_weights` | bfloat16 weights: ONNX Runtime CPU has no bf16 Gemm kernel | generic | FAILED | strict=False | — | — | torch |
 | `broken_factory` | Not an export hazard fixture: raises as soon as it's instantiated | — | skipped (RuntimeError) | — | — | — | — |
-| `clean_mlp` | Control fixture: no export hazards | generic-torch | CLEAN | strict=False | 1.2e-07 | ✓ | onnxruntime |
-| `custom_autograd` | custom autograd.Function with no symbolic override | generic-torch | CLEAN | strict=False | 1.8e-07 | ✓ | onnxruntime |
-| `data_dependent_branch` | data-dependent control flow | generic-torch | FAILED | — | — | — | torch |
-| `dict_input` | dataclass container input | generic-torch | CLEAN | strict=False | 2.4e-07 | ✓ | onnxruntime |
-| `dropout_model` | stochastic layer | generic-torch | CLEAN | strict=False | 1.2e-07 | ✓ | onnxruntime |
-| `dynamic_batch_cnn` | batch-dim generalization | generic-torch | CLEAN | strict=False | 3.0e-08 | ✓ | onnxruntime |
+| `clean_mlp` | Control fixture: no export hazards | generic | CLEAN | strict=False | 1.2e-07 | ✓ | onnxruntime |
+| `custom_autograd` | custom autograd.Function with no symbolic override | generic | CLEAN | strict=False | 1.8e-07 | ✓ | onnxruntime |
+| `data_dependent_branch` | data-dependent control flow | generic | FAILED | — | — | — | torch |
+| `dict_input` | dataclass container input | generic | CLEAN | strict=False | 2.4e-07 | ✓ | onnxruntime |
+| `dropout_model` | stochastic layer | generic | CLEAN | strict=False | 1.2e-07 | ✓ | onnxruntime |
+| `dynamic_batch_cnn` | batch-dim generalization | generic | CLEAN | strict=False | 3.0e-08 | ✓ | onnxruntime |
 | `gnn_gat` | GNN fixture: 3-layer GAT node classifier | pyg | CLEAN | strict=False | 1.0e-07 | ✓ | onnxruntime |
 | `gnn_gcn` | GNN fixture: 2-layer GCN node classifier | pyg | CLEAN | strict=False | 2.1e-07 | ✓ | onnxruntime |
 | `gnn_sage` | GNN fixture: 2-layer GraphSAGE node classifier | pyg | CLEAN | strict=False | 8.9e-08 | ✓ | onnxruntime |
-| `scatter_include_self_false` | scatter_reduce(include_self=False) has no faithful ONNX translation | generic-torch | DEGRADED | strict=False | 1.2e+00 | — | torch |
-| `tied_weights` | tied embedding/output weight (GPT-2/OPT-style) | generic-torch | CLEAN | strict=False | 1.9e-06 | ✓ | onnxruntime |
-| `tiny_bert` | HF fixture: a randomly initialised two-layer BERT encoder | hf-transformers | CLEAN | strict=False | 7.2e-07 | ✓ | onnxruntime |
+| `scatter_include_self_false` | scatter_reduce(include_self=False) has no faithful ONNX translation | generic | DEGRADED | strict=False | 1.2e+00 | — | torch |
+| `tied_weights` | tied embedding/output weight (GPT-2/OPT-style) | generic | CLEAN | strict=False | 1.9e-06 | ✓ | onnxruntime |
+| `tiny_bert` | HF fixture: a randomly initialised two-layer BERT encoder | hf | CLEAN | strict=False | 7.2e-07 | ✓ | onnxruntime |
 
 ## How to read this
 

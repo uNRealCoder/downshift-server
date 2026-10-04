@@ -68,17 +68,11 @@ from downshift.cli.runtime import (
     ArtifactHandoff,
     ServeArgs,
     _build_serving_state,
-    _collect_serve_args,
     _load,
     _setup_logging,
     _write_onnx_artifact,
 )
-
-# Never called from here (uvicorn resolves it by import string); re-exported so
-# `downshift.cli.main._serve_app_factory` keeps working for tests/callers
-# that reach them through this module instead of downshift.cli.runtime.
-from downshift.cli.runtime import _serve_app_factory as _serve_app_factory
-from downshift.serve.options import BackendChoice, ExecutionChoice
+from downshift.serve.options import BackendChoice, ExecutionChoice, ServeOptions
 from downshift.serve.schemas import OutputEncoding
 
 if TYPE_CHECKING:
@@ -242,6 +236,7 @@ def check_cmd(
                 seed=seed,
                 vary=vary,
                 axis_max=axis_max_spec,
+                cache=False,  # one export per process: the memo could never be read back
             )
         _log_capture_failure(verdict, log_level)
         _emit(verdict, model, json_out)
@@ -311,6 +306,8 @@ def export_cmd(
             seed=seed,
             vary=vary,
             axis_max=_axis_max(axis_max),
+            # The key hashes every weight; in a one-export process only the disk tier can use it.
+            cache=bool(export_cache_dir),
             export_cache_dir=export_cache_dir,
         )
         _log_capture_failure(verdict, log_level)
@@ -416,36 +413,43 @@ def serve_cmd(
             # Unset (0 means "let ONNX Runtime/torch choose") oversubscribes N-fold across
             # worker processes; split the logical cores instead. Explicit flags still win.
             intra_op_threads = max(1, settings.usable_cpus() // workers)
-        load, options = _collect_serve_args(
-            model,
-            inputs,
-            model_class,
-            unsafe_load,
-            pooling,
-            normalize,
-            adapter,
-            k,
-            dynamic,
-            backend,
-            force_onnx,
-            device,
-            warmup,
-            intra_op_threads,
-            inter_op_threads,
-            output_encoding,
-            max_input_bytes,
-            max_body_bytes,
-            max_concurrency,
-            execution,
-            prep_threads,
-            max_queue,
-            request_timeout,
-            atol,
-            rtol,
-            seed,
-            vary,
-            _axis_max(axis_max),
-            export_cache_dir,
+        from downshift.core.shapes import parse_dynamic_spec
+        from downshift.loading import LoadSpec
+
+        load = LoadSpec(
+            model=model,
+            inputs=inputs,
+            model_class=model_class,
+            unsafe_load=unsafe_load,
+            pooling=pooling,
+            normalize=normalize,
+        )
+        options = ServeOptions(
+            backend=backend,
+            force_onnx=force_onnx,
+            device=device,
+            warmup=warmup,
+            k=k,
+            adapter=adapter,
+            dynamic=parse_dynamic_spec(dynamic) if dynamic else None,
+            intra_op_threads=intra_op_threads,
+            inter_op_threads=inter_op_threads,
+            output_encoding=output_encoding,
+            max_input_bytes=max_input_bytes,
+            max_body_bytes=max_body_bytes,
+            max_concurrency=max_concurrency,
+            execution=execution,
+            prep_threads=prep_threads,
+            max_queue=max_queue,
+            request_timeout=request_timeout,
+            atol=atol,
+            rtol=rtol,
+            seed=seed,
+            vary=vary,
+            axis_max=_axis_max(axis_max),
+            export_cache_dir=export_cache_dir,
+            pooling=pooling,
+            normalize=normalize,
         )
         args = ServeArgs(
             load=load,
@@ -500,11 +504,13 @@ def serve_cmd(
                 raise failure[0]
         else:
             # The one and only export: each worker loads this artifact instead of
-            # capturing/verifying again. Skips warmup here; this throwaway copy never
-            # serves traffic, only decides which backend to ship and prints the banner -
-            # no app is built for it, and it (model, ORT session, torch weights) is dropped
-            # before uvicorn.run spawns the N workers that each load their own copy.
-            state = _build_serving_state(replace(args, options=replace(args.options, warmup=0)))
+            # capturing/verifying again. This throwaway copy never serves traffic, only
+            # decides which backend to ship and prints the banner, so it skips warmup and
+            # takes ORT's default threads, which lets it reuse verify's own session instead
+            # of building a second one. It is dropped before uvicorn.run spawns the workers.
+            parent_options = replace(args.options, warmup=0, intra_op_threads=0, inter_op_threads=0)
+            state = _build_serving_state(replace(args, options=parent_options))
+            state.options = args.options  # the banner reports what the workers will use
             render.print_banner(state, host, port, workers=workers)
             temp_dir: Path | None = None
             onnx_path_str: str | None = None
@@ -520,22 +526,20 @@ def serve_cmd(
                     f"--workers {workers}: each worker independently reloads and re-warms "
                     "the model (memory and startup time scale with this number)"
                 )
-            from downshift.serve.engine import axis_bounds_to_json
+            from downshift.core.axes import axis_bounds_to_json
 
             artifact = ArtifactHandoff(
-                backend=state.backend.name,
                 verdict=state.verdict.to_dict(),
                 input_names=list(state.input_names),
-                notes=state.notes,
+                kind=state.source_kind,
+                axis_bounds=axis_bounds_to_json(state.axis_bounds),
                 onnx_path=onnx_path_str,
                 feeds_path=feeds_path_str,
-                axis_bounds=axis_bounds_to_json(state.axis_bounds),
-                kind=state.source_kind,
-                hf_source=state.hf_source,
             )
             del state
             gc.collect()
-            args = replace(args, artifact=artifact)
+            # The verdict is shipped, so workers never need --reference.
+            args = replace(args, artifact=artifact, reference=None)
             os.environ[_SERVE_ARGS_ENV] = args.to_json()
             metrics_dir = _worker_metrics_dir()
             try:

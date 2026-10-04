@@ -5,6 +5,7 @@ default writes nothing; a damaged entry is re-exported; digests are computed onc
 import json
 import logging
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -294,7 +295,10 @@ def test_a_worker_with_an_artifact_never_opens_the_cache(cache, monkeypatch, tmp
         raise AssertionError("a worker opened the export cache")
 
     monkeypatch.setattr(export_cache, "ExportCache", refuse)
-    monkeypatch.setattr(runtime, "_build_from_onnx_artifact", lambda args, opts: "built")
+    from downshift.serve import reuse
+
+    built = SimpleNamespace(timings={})
+    monkeypatch.setattr(reuse, "state_from_entry", lambda *args, **kwargs: built)
     from downshift.cli.runtime import ArtifactHandoff
 
     args = ServeArgs(
@@ -303,7 +307,7 @@ def test_a_worker_with_an_artifact_never_opens_the_cache(cache, monkeypatch, tmp
         reference=None,
         middleware=None,
         log_level="warning",
-        artifact=ArtifactHandoff(backend="onnxruntime"),
+        artifact=ArtifactHandoff(verdict={}, input_names=["x"], kind="onnx-file"),
     )
 
-    assert runtime._build_serving_state(args) == "built"
+    assert runtime._build_serving_state(args) is built

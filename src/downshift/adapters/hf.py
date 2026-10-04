@@ -45,7 +45,6 @@ class _FirstOutputShim(nn.Module):
 
 class HFAdapter:
     name = Family.hf
-    family = "hf-transformers"
 
     def matches(self, model: nn.Module, example_inputs: tuple | None) -> bool:
         return isinstance(model, PreTrainedModel)
@@ -86,7 +85,7 @@ class HFAdapter:
                 axis_max,
                 getattr(model, PADDING_SIDE_ATTR, "right"),
             ),
-            family=self.family,
+            family=self.name,
         )
 
 
