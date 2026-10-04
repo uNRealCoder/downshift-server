@@ -1,7 +1,9 @@
-"""One process per server variant. `python -m bench.servers <variant> <case> <port>`.
+"""The hand-rolled baselines, one process each. `python -m bench.servers <variant> <case> <port>`.
+
+The downshift servers are not here: bench/run.py launches the real `downshift serve` CLI for
+those, so every version is driven exactly as a user drives it.
 
 Variants
-  downshift          the real product path: prepare_serving() + build_app(), backend from verdict
   naive_torch        hand-rolled FastAPI + eager PyTorch, sync endpoint (threadpool)
   naive_onnx         hand-rolled FastAPI + ONNX Runtime, sync endpoint (threadpool)
   naive_torch_async  same as naive_torch but `async def`, which blocks the event loop
@@ -103,20 +105,6 @@ def build_naive_onnx(case):
     return app
 
 
-def build_downshift(case_name: str, force_onnx: bool = False):
-    """The product, driven exactly as `downshift serve` drives it."""
-    from bench.cases import load_fixture
-    from downshift.loading import LoadedModel
-    from downshift.serve.app import build_app
-    from downshift.serve.engine import BackendChoice, ServeOptions, prepare_serving
-
-    model, example = load_fixture(case_name)
-    loaded = LoadedModel(source=case_name, model=model, example_inputs=example)
-    opts = ServeOptions(backend=BackendChoice.auto, force_onnx=force_onnx, warmup=WARMUP, k=8)
-    state = prepare_serving(loaded, opts)
-    return build_app(state)
-
-
 def _json_example(case) -> dict[str, Any]:
     from bench.cases import make_inputs
 
@@ -129,22 +117,17 @@ def main() -> None:
 
     from bench._path import verify
 
-    verify()  # refuse to serve a pip-installed downshift when the checkout was meant
+    verify()  # naive_onnx exports through the checkout, the same graph the orchestrator saw
 
-    if variant == "downshift":
-        app = build_downshift(case_name)
-    elif variant == "downshift_force_onnx":
-        app = build_downshift(case_name, force_onnx=True)
+    case = prepare(case_name, export=variant == "naive_onnx")
+    if variant == "naive_torch":
+        app = build_naive_torch(case, blocking=False)
+    elif variant == "naive_torch_async":
+        app = build_naive_torch(case, blocking=True)
+    elif variant == "naive_onnx":
+        app = build_naive_onnx(case)
     else:
-        case = prepare(case_name, export=variant == "naive_onnx")
-        if variant == "naive_torch":
-            app = build_naive_torch(case, blocking=False)
-        elif variant == "naive_torch_async":
-            app = build_naive_torch(case, blocking=True)
-        elif variant == "naive_onnx":
-            app = build_naive_onnx(case)
-        else:
-            raise SystemExit(f"unknown variant {variant!r}")
+        raise SystemExit(f"unknown variant {variant!r}")
 
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning", access_log=False)
 

@@ -1,16 +1,21 @@
-"""Run the matrix and write results.json.
+"""Run the fixture and compute-heavy matrix and write one results JSON.
 
-  python -m bench.run --out bench/results.json
+  python -m bench.run --out bench/results_v0.5.0.json
 
-For each (case, variant) it starts one server process, waits for it to be ready, then sweeps
-concurrency and batch size against it. Before trusting any throughput number it calibrates the
-load generator against a trivial /health endpoint, so a result that is really a client-side
-ceiling shows up as one instead of masquerading as a server limit.
+For each case it starts one server process per variant, waits for it to be ready, then sweeps
+concurrency and batch size against it. The naive servers run once; every downshift variant runs
+once per `--targets` entry (the checkout and the previously released, pip-installed version), so
+one file holds naive, old and new side by side, measured in the same session on the same weights.
+
+Before trusting any throughput number it calibrates the load generator against a trivial /health
+endpoint, so a result that is really a client-side ceiling shows up as one instead of
+masquerading as a server limit.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import socket
@@ -27,26 +32,38 @@ import numpy as np
 
 warnings.filterwarnings("ignore")
 
-from bench._path import ROOT  # noqa: E402,F401  (must be first: fixes sys.path)
+from bench._path import ROOT, TARGETS, cli_env, target_version, verify  # noqa: E402
 from bench.cases import (  # noqa: E402
     CASE_NAMES,
-    decode_array,
+    FIXTURE_CASES,
+    decode_outputs,
+    encode_request,
     make_inputs,
     prepare,
-    to_payload,
     torch_reference,
 )
 
 PYTHON = sys.executable
-HTTP_VARIANTS = ("naive_torch", "naive_onnx", "downshift", "downshift_base64")
-EXTRA_VARIANTS = ("naive_torch_async",)
 MAX_LOADGEN_PROCS = 6
 
-# `downshift_base64` is the same `downshift` server process driven with base64 tensor bodies
-# (`to_payload(..., encoding="base64")`), so the only variable against `downshift` is the wire
-# format. Every other variant sends the nested-list JSON body.
-VARIANT_SERVER = {"downshift_base64": "downshift"}
-VARIANT_ENCODING = {"downshift_base64": "base64"}
+NAIVE_VARIANTS = ("naive_torch", "naive_onnx", "naive_torch_async")
+# Every downshift variant is `downshift serve` on a bench.factories model; they differ only in
+# the wire encoding the client uses and the extra CLI flags.
+DOWNSHIFT_VARIANTS = {
+    "downshift": ("json", []),
+    "downshift_base64": ("base64", []),
+    "downshift_safetensors": ("safetensors", []),
+    "downshift_inline": ("json", ["--execution", "inline"]),
+}
+NEW_IN = {"downshift_safetensors": (0, 5), "downshift_inline": (0, 5)}
+# Inline execution runs the model on the event loop, which only pays off when compute is short;
+# it is measured on the small fixture tier only.
+INLINE_CASES = FIXTURE_CASES
+
+
+def version_tuple(version: str) -> tuple[int, int]:
+    major, minor = version.split(".")[:2]
+    return int(major), int(minor)
 
 
 def free_port() -> int:
@@ -56,14 +73,12 @@ def free_port() -> int:
 
 
 def wait_ready(
-    port: int, proc: subprocess.Popen, timeout: float = 300.0, path: str = "/health"
+    port: int, proc: subprocess.Popen, timeout: float = 600.0, path: str = "/health"
 ) -> float:
     """Poll `path` until the server answers 200. Returns seconds to ready (export + warmup).
 
     `/ready` answers 503 while the model is still loading, and `urlopen` raises that 503 as an
-    `HTTPError` rather than returning it, so it needs its own branch to be treated as "keep
-    polling" instead of falling through to the generic `URLError` handler (which it happens to
-    be a subclass of, but relying on that would be an accident, not a contract).
+    `HTTPError`, so it has its own "keep polling" branch.
     """
     start = time.perf_counter()
     url = f"http://127.0.0.1:{port}{path}"
@@ -86,13 +101,10 @@ def wait_ready(
     raise TimeoutError(f"server on port {port} never became ready")
 
 
-def post_once(port: int, payload: dict, path: str = "/predict") -> dict:
-    body = json.dumps(payload).encode()
-    req = urllib.request.Request(
-        f"http://127.0.0.1:{port}{path}", data=body, headers={"content-type": "application/json"}
-    )
+def post_once(port: int, body: bytes, headers: dict) -> dict[str, np.ndarray]:
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/predict", data=body, headers=headers)
     with urllib.request.urlopen(req, timeout=120) as resp:
-        return json.loads(resp.read())
+        return decode_outputs(resp.read(), resp.headers.get("content-type", ""))
 
 
 def split_concurrency(concurrency: int) -> list[int]:
@@ -110,13 +122,14 @@ def percentile(sorted_vals: list[float], q: float) -> float:
     return sorted_vals[idx]
 
 
-def run_load(url: str, payload: dict, concurrency: int, duration: float, warmup: float) -> dict:
-    shards = split_concurrency(concurrency)
+def loadgen(url: str, body: bytes, headers: dict, concurrency: int, duration: float, warmup: float):
+    """Fan `concurrency` clients out over loadgen processes; returns their raw results."""
     procs = []
-    for shard in shards:
+    for shard in split_concurrency(concurrency):
         cfg = {
             "url": url,
-            "payload": payload,
+            "body_b64": base64.b64encode(body).decode("ascii"),
+            "headers": headers,
             "concurrency": shard,
             "duration_s": duration,
             "warmup_s": warmup,
@@ -131,27 +144,36 @@ def run_load(url: str, payload: dict, concurrency: int, duration: float, warmup:
         p.stdin.write(json.dumps(cfg).encode())
         p.stdin.close()
         procs.append(p)
-
     results = []
     for p in procs:
-        out = p.stdout.read()
-        err = p.stderr.read()
+        out, err = p.stdout.read(), p.stderr.read()
         p.wait()
         if not out:
             raise RuntimeError(
                 f"loadgen produced nothing: {err.decode('utf-8', 'replace')[-2000:]}"
             )
         results.append(json.loads(out))
+    return results
 
+
+def run_load(
+    url: str,
+    body: bytes,
+    headers: dict,
+    concurrency: int,
+    duration: float,
+    warmup: float,
+) -> dict:
+    results = loadgen(url, body, headers, concurrency, duration, warmup)
     latencies = sorted(v for r in results for v in r["latencies_ms"])
     ok = sum(r["ok"] for r in results)
-    errors = sum(r["errors"] for r in results)
     window = statistics.fmean(r["window_s"] for r in results)
     return {
         "concurrency": concurrency,
-        "loadgen_procs": len(shards),
+        "loadgen_procs": len(results),
         "ok": ok,
-        "errors": errors,
+        "errors": sum(r["errors"] for r in results),
+        "first_error": next((r["first_error"] for r in results if r["first_error"]), None),
         "window_s": round(window, 3),
         "throughput_rps": round(ok / window, 2) if window else 0.0,
         "p50_ms": round(percentile(latencies, 0.50), 3),
@@ -162,85 +184,71 @@ def run_load(url: str, payload: dict, concurrency: int, duration: float, warmup:
     }
 
 
-def max_abs_err(response: dict, reference: list[np.ndarray]) -> float:
-    """Score a response against eager torch. Accepts nested-list or base64 outputs."""
-    outputs = response.get("outputs", {})
+def max_abs_err(outputs: dict[str, np.ndarray], reference: list[np.ndarray]) -> float:
+    """Score a response against eager torch, element-wise."""
     errs = []
     for i, ref in enumerate(reference):
         got = outputs.get(f"output_{i}")
-        if got is None:
+        if got is None or got.shape != ref.shape:
             return float("inf")
-        try:
-            arr = decode_array(got).astype(np.float64)
-        except Exception:
-            return float("inf")
-        if arr.shape != ref.shape:
-            return float("inf")
-        errs.append(float(np.max(np.abs(arr - ref.astype(np.float64)))))
+        errs.append(float(np.max(np.abs(got.astype(np.float64) - ref.astype(np.float64)))))
     return max(errs) if errs else float("nan")
 
 
-def start_server(
-    variant: str, case_name: str, workers: int = 1
-) -> tuple[subprocess.Popen, int, float]:
+def start_naive(variant: str, case_name: str) -> tuple[subprocess.Popen, int, float]:
     port = free_port()
-    if variant == "downshift_cli":
-        # --workers only exists on the real CLI: bench.servers builds the app in-process and
-        # runs a single uvicorn worker, so this variant launches `downshift serve` itself and
-        # hands it a case built from bench.factories, so every worker's weights are seeded the
-        # same way as the in-process variants.
-        env = os.environ.copy()
-        existing = env.get("PYTHONPATH")
-        env["PYTHONPATH"] = str(ROOT) + (os.pathsep + existing if existing else "")
-        proc = subprocess.Popen(
-            [
-                PYTHON,
-                "-m",
-                "downshift",
-                "serve",
-                f"bench.factories:{case_name}",
-                "--inputs",
-                f"bench.factories:{case_name}_inputs",
-                "--host",
-                "127.0.0.1",
-                "--port",
-                str(port),
-                "--workers",
-                str(workers),
-                "--warmup",
-                "5",
-                "-k",
-                "8",
-                "--log-level",
-                "warning",
-                "--no-access-log",
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            cwd=str(ROOT),
-            env=env,
-        )
-        ready_s = wait_ready(port, proc, path="/ready")
-        return proc, port, ready_s
-
-    # /health answers 200 before the model is loaded (bind-first, since 0.4.0), so only /ready
-    # is a valid readiness signal for the downshift variants; the naive servers have no loader
-    # thread and no /ready, so /health is still correct for them.
-    path = "/ready" if VARIANT_SERVER.get(variant, variant) == "downshift" else "/health"
     proc = subprocess.Popen(
-        [PYTHON, "-m", "bench.servers", VARIANT_SERVER.get(variant, variant), case_name, str(port)],
+        [PYTHON, "-m", "bench.servers", variant, case_name, str(port)],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         cwd=str(ROOT),
     )
-    ready_s = wait_ready(port, proc, path=path)
-    return proc, port, ready_s
+    return proc, port, wait_ready(port, proc)
+
+
+def start_downshift(
+    case_name: str, target: str, extra: list[str], workers: int = 1
+) -> tuple[subprocess.Popen, int, float]:
+    """`downshift serve` from `target` on a bench.factories model.
+
+    /health answers 200 before the model is loaded (bind-first, since 0.4.0), so /ready is the
+    readiness signal; the returned seconds are the full boot: export, verify and warm-up.
+    """
+    port = free_port()
+    proc = subprocess.Popen(
+        [
+            PYTHON,
+            "-m",
+            "downshift",
+            "serve",
+            f"bench.factories:{case_name}",
+            "--inputs",
+            f"bench.factories:{case_name}_inputs",
+            "--port",
+            str(port),
+            "--workers",
+            str(workers),
+            "--warmup",
+            "5",
+            "-k",
+            "8",
+            "--log-level",
+            "warning",
+            "--no-access-log",
+            *extra,
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        cwd=str(ROOT),
+        env=cli_env(target),
+    )
+    return proc, port, wait_ready(port, proc, path="/ready")
 
 
 def stop_server(proc: subprocess.Popen) -> None:
     if sys.platform == "win32":
-        # The CLI's --workers>1 path spawns uvicorn worker child processes that proc.terminate()
-        # does not reach; they keep the port bound after the parent exits. Kill the whole tree.
+        # --workers > 1 spawns uvicorn worker children that proc.terminate() does not reach;
+        # they keep the port bound after the parent exits. Kill the whole tree.
         subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
         try:
             proc.wait(timeout=15)
@@ -255,39 +263,30 @@ def stop_server(proc: subprocess.Popen) -> None:
         proc.wait(timeout=10)
 
 
+def served_backend(port: int) -> str | None:
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/metadata", timeout=30) as r:
+            backend = json.loads(r.read()).get("backend")
+    except Exception:
+        return None
+    return backend.get("name") if isinstance(backend, dict) else backend
+
+
 def calibrate_client(concurrencies: list[int], duration: float, warmup: float) -> dict[str, float]:
     """Ceiling check: how fast can this load generator drive /health on a do-nothing server?"""
-    proc, port, _ = start_server("naive_torch", "clean_mlp")
+    proc, port, _ = start_naive("naive_torch", "clean_mlp")
     try:
         out = {}
         for c in concurrencies:
-            shards = split_concurrency(c)
-            procs = []
-            for shard in shards:
-                cfg = {
-                    "url": f"http://127.0.0.1:{port}/health",
-                    "payload": {},
-                    "concurrency": shard,
-                    "duration_s": duration,
-                    "warmup_s": warmup,
-                }
-                p = subprocess.Popen(
-                    [PYTHON, "-m", "bench.loadgen"],
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    cwd=str(ROOT),
-                )
-                p.stdin.write(json.dumps(cfg).encode())
-                p.stdin.close()
-                procs.append(p)
-            results = []
-            for p in procs:
-                data = p.stdout.read()
-                p.stderr.read()
-                p.wait()
-                results.append(json.loads(data))
             # /health is a GET route; POSTing to it 405s, which still measures the round trip
+            results = loadgen(
+                f"http://127.0.0.1:{port}/health",
+                b"{}",
+                {"content-type": "application/json"},
+                c,
+                duration,
+                warmup,
+            )
             total = sum(r["ok"] + r["errors"] for r in results)
             window = statistics.fmean(r["window_s"] for r in results)
             out[str(c)] = round(total / window, 1) if window else 0.0
@@ -296,31 +295,62 @@ def calibrate_client(concurrencies: list[int], duration: float, warmup: float) -
         stop_server(proc)
 
 
-def environment() -> dict:
+def environment(versions: dict[str, str]) -> dict:
     import onnxruntime as ort
     import torch
 
-    import downshift
-    from bench._path import verify
-
     return {
-        "downshift": verify(),
-        "downshift_path": downshift.__file__,
+        "orchestrator_downshift": verify(),
+        "downshift_targets": versions,
         "python": sys.version.split()[0],
         "platform": sys.platform,
         "cpu_count": os.cpu_count(),
         "torch": torch.__version__,
         "onnxruntime": ort.__version__,
         "torch_num_threads": torch.get_num_threads(),
-        "torch_interop_threads": torch.get_num_interop_threads(),
         "ort_providers": ort.get_available_providers(),
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
 
 
+def sweep(port, case, steps, encoding, args, label: str, **tags) -> list[dict]:
+    """Drive one running server through (batch, concurrency) steps; one result row per step.
+
+    Each step first sends a single request and scores it against eager torch, so a fast row
+    with a wrong answer is visible as one.
+    """
+    rows = []
+    for batch, concurrency in steps:
+        feeds = make_inputs(case.name, batch, seed=7)
+        body, headers = encode_request(feeds, encoding)
+        try:
+            err = max_abs_err(post_once(port, body, headers), torch_reference(case, feeds))
+        except Exception as exc:
+            print(f"    !! b{batch} c{concurrency} single request failed: {exc}", flush=True)
+            continue
+        res = run_load(
+            f"http://127.0.0.1:{port}/predict",
+            body,
+            headers,
+            concurrency,
+            args.duration,
+            args.warmup,
+        )
+        res.update(case=case.name, batch=batch, max_abs_err=err, encoding=encoding, **tags)
+        rows.append(res)
+        print(
+            f"    {label:<34} b{batch:<3} c{concurrency:<3} {res['throughput_rps']:>9.1f} rps  "
+            f"p50 {res['p50_ms']:>7.2f}  p99 {res['p99_ms']:>8.2f}  "
+            f"err {res['errors']}  maxabs {err:.2e}",
+            flush=True,
+        )
+    return rows
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="bench/results.json")
+    ap.add_argument("--targets", nargs="*", default=list(TARGETS), choices=TARGETS)
     ap.add_argument("--duration", type=float, default=3.0)
     ap.add_argument("--warmup", type=float, default=1.0)
     ap.add_argument("--cases", nargs="*", default=list(CASE_NAMES))
@@ -331,30 +361,37 @@ def main() -> None:
     ap.add_argument("--skip-inproc", action="store_true")
     ap.add_argument("--skip-calibration", action="store_true")
     ap.add_argument(
-        "--http-cases",
-        nargs="*",
-        default=None,
-        help="Subset of --cases to drive over HTTP (default: all)",
+        "--http-cases", nargs="*", default=None, help="Subset of --cases to drive over HTTP"
     )
-    ap.add_argument("--variants", nargs="*", default=list(HTTP_VARIANTS) + list(EXTRA_VARIANTS))
+    ap.add_argument(
+        "--variants", nargs="*", default=list(NAIVE_VARIANTS) + list(DOWNSHIFT_VARIANTS)
+    )
     ap.add_argument("--workers-sweep", nargs="*", type=int, default=[1, 2, 4])
     ap.add_argument("--workers-cases", nargs="*", default=["clean_mlp", "mlp_large", "bert_small"])
     ap.add_argument("--workers-concurrency", nargs="*", type=int, default=[1, 8, 32])
     ap.add_argument("--skip-workers", action="store_true")
     args = ap.parse_args()
 
+    versions = {t: target_version(t) for t in args.targets}
+    print("== downshift targets ==", flush=True)
+    for t, v in versions.items():
+        print(f"  {t:<10} {v}", flush=True)
+
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     report: dict = {
-        "environment": environment(),
+        "environment": environment(versions),
         "config": vars(args),
-        "runs": [],
-        "inproc": [],
         "verdicts": {},
+        "inproc": [],
+        "runs": [],
         "workers_runs": [],
     }
 
-    print("== verdicts ==", flush=True)
+    def save() -> None:
+        out_path.write_text(json.dumps(report, indent=1))
+
+    print("== verdicts (checkout) ==", flush=True)
     for case_name in args.cases:
         case = prepare(case_name, export=True)
         report["verdicts"][case_name] = {
@@ -384,155 +421,103 @@ def main() -> None:
                     cwd=str(ROOT),
                 )
                 if proc.returncode != 0 or not proc.stdout:
-                    print(
-                        f"  !! {case_name} b{batch}: {proc.stderr.decode('utf-8', 'replace')[-500:]}",
-                        flush=True,
-                    )
+                    err = proc.stderr.decode("utf-8", "replace")[-500:]
+                    print(f"  !! {case_name} b{batch}: {err}", flush=True)
                     continue
                 data = json.loads(proc.stdout)
                 report["inproc"].append(data)
                 t = data["torch"]["compute"]["p50_ms"]
-                t_j = data["torch"]["compute_json"]["p50_ms"]
-                t_b = data["torch"]["compute_binary"]["p50_ms"]
                 o = data.get("onnxruntime", {}).get("compute", {}).get("p50_ms")
+                ort_ms = "  n/a" if o is None else f"{o:8.3f}"
                 print(
-                    f"  {case_name:<28} b{batch:<3} torch {t:8.3f} ms  +json {t_j:8.3f} ms  "
-                    f"+binary {t_b:8.3f} ms   ort {o if o is None else f'{o:8.3f}'} ms",
-                    flush=True,
+                    f"  {case_name:<28} b{batch:<3} torch {t:8.3f} ms   ort {ort_ms} ms", flush=True
                 )
+        save()
 
-    plan: list[tuple[int, int]] = [(1, c) for c in args.concurrency]
-    for batch in args.batch:
-        if batch == 1:
-            continue
-        plan += [(batch, c) for c in args.batch_concurrency]
+    plan = [(1, c) for c in args.concurrency]
+    plan += [(b, c) for b in args.batch if b != 1 for c in args.batch_concurrency]
+    async_plan = [(1, c) for c in args.concurrency]
 
-    variants = list(args.variants)
     http_cases = args.http_cases if args.http_cases is not None else args.cases
-    total = len(http_cases) * len(variants)
-    done = 0
     for case_name in http_cases:
         case = prepare(case_name, export=True)
-        for variant in variants:
-            done += 1
+        print(f"== {case_name} ==", flush=True)
+        servers = [(v, None) for v in args.variants if v in NAIVE_VARIANTS]
+        for target in args.targets:
+            for v in args.variants:
+                if v not in DOWNSHIFT_VARIANTS:
+                    continue
+                if version_tuple(versions[target]) < NEW_IN.get(v, (0, 0)):
+                    continue
+                if v == "downshift_inline" and case_name not in INLINE_CASES:
+                    continue
+                servers.append((v, target))
+        for variant, target in servers:
             if variant == "naive_onnx" and case.onnx_bytes is None:
-                print(f"[{done}/{total}] skip {case_name}/{variant}: no ONNX graph", flush=True)
+                print(f"  skip {variant}: no ONNX graph", flush=True)
                 continue
-            print(f"[{done}/{total}] {case_name} / {variant}", flush=True)
+            version = versions[target] if target else None
+            label = f"{variant}@{version}" if version else variant
             try:
-                proc, port, ready_s = start_server(variant, case_name)
+                if target:
+                    encoding, extra = DOWNSHIFT_VARIANTS[variant]
+                    proc, port, ready_s = start_downshift(case_name, target, extra)
+                else:
+                    encoding = "json"
+                    proc, port, ready_s = start_naive(variant, case_name)
             except Exception as exc:
-                print(f"    !! failed to start: {exc}", flush=True)
+                print(f"  !! {label} failed to start: {exc}", flush=True)
                 continue
             try:
-                meta = None
-                if VARIANT_SERVER.get(variant, variant) == "downshift":
-                    try:
-                        with urllib.request.urlopen(
-                            f"http://127.0.0.1:{port}/metadata", timeout=30
-                        ) as r:
-                            meta = json.loads(r.read())
-                    except Exception:
-                        meta = None
-
-                steps = (
-                    plan if variant != "naive_torch_async" else [(1, c) for c in args.concurrency]
+                report["runs"] += sweep(
+                    port,
+                    case,
+                    async_plan if variant == "naive_torch_async" else plan,
+                    encoding,
+                    args,
+                    label,
+                    variant=variant,
+                    version=version,
+                    backend=served_backend(port) if target else variant.split("_")[1],
+                    server_ready_s=round(ready_s, 2),
+                    verdict=case.verdict_status,
                 )
-                for batch, concurrency in steps:
-                    feeds = make_inputs(case_name, batch, seed=7)
-                    payload = to_payload(feeds, encoding=VARIANT_ENCODING.get(variant, "json"))
-                    # correctness is scored on the raw feeds, independent of the wire encoding
-                    reference = torch_reference(case, feeds)
-                    try:
-                        single = post_once(port, payload)
-                        err = max_abs_err(single, reference)
-                    except Exception as exc:
-                        print(
-                            f"    !! b{batch} c{concurrency} single request failed: {exc}",
-                            flush=True,
-                        )
-                        continue
-                    res = run_load(
-                        f"http://127.0.0.1:{port}/predict",
-                        payload,
-                        concurrency,
-                        args.duration,
-                        args.warmup,
-                    )
-                    res.update(
-                        case=case_name,
-                        variant=variant,
-                        batch=batch,
-                        server_ready_s=round(ready_s, 2),
-                        max_abs_err=err,
-                        backend=(meta or {}).get("backend", {}).get("name") if meta else None,
-                        verdict=case.verdict_status,
-                        encoding=VARIANT_ENCODING.get(variant, "json"),
-                    )
-                    report["runs"].append(res)
-                    print(
-                        f"    b{batch:<3} c{concurrency:<3} {res['throughput_rps']:>9.1f} rps  "
-                        f"p50 {res['p50_ms']:>7.2f}  p99 {res['p99_ms']:>8.2f}  "
-                        f"err {res['errors']}  maxabs {err:.2e}",
-                        flush=True,
-                    )
-                    out_path.write_text(json.dumps(report, indent=1))
+                save()
             finally:
                 stop_server(proc)
 
     if not args.skip_workers:
         print("== workers sweep ==", flush=True)
+        steps = [(1, c) for c in args.workers_concurrency]
         for case_name in args.workers_cases:
             case = prepare(case_name, export=True)
-            for n in args.workers_sweep:
-                print(f"[workers] {case_name} / downshift_cli w{n}", flush=True)
-                try:
-                    proc, port, boot_s = start_server("downshift_cli", case_name, workers=n)
-                except Exception as exc:
-                    print(f"    !! failed to start: {exc}", flush=True)
-                    continue
-                try:
-                    for concurrency in args.workers_concurrency:
-                        feeds = make_inputs(case_name, 1, seed=7)
-                        payload = to_payload(feeds)
-                        reference = torch_reference(case, feeds)
-                        try:
-                            single = post_once(port, payload)
-                            err = max_abs_err(single, reference)
-                        except Exception as exc:
-                            print(
-                                f"    !! w{n} c{concurrency} single request failed: {exc}",
-                                flush=True,
-                            )
-                            continue
-                        res = run_load(
-                            f"http://127.0.0.1:{port}/predict",
-                            payload,
-                            concurrency,
-                            args.duration,
-                            args.warmup,
-                        )
-                        res.update(
-                            case=case_name,
-                            variant="downshift_cli",
+            for target in args.targets:
+                version = versions[target]
+                for n in args.workers_sweep:
+                    label = f"downshift@{version} w{n} {case_name}"
+                    try:
+                        proc, port, boot_s = start_downshift(case_name, target, [], workers=n)
+                    except Exception as exc:
+                        print(f"  !! {label} failed to start: {exc}", flush=True)
+                        continue
+                    try:
+                        report["workers_runs"] += sweep(
+                            port,
+                            case,
+                            steps,
+                            "json",
+                            args,
+                            label,
+                            variant="downshift",
+                            version=version,
                             workers=n,
-                            batch=1,
                             boot_s=round(boot_s, 2),
-                            max_abs_err=err,
-                            verdict=case.verdict_status,
                         )
-                        report["workers_runs"].append(res)
-                        print(
-                            f"    w{n:<2} c{concurrency:<3} {res['throughput_rps']:>9.1f} rps  "
-                            f"p50 {res['p50_ms']:>7.2f}  p99 {res['p99_ms']:>8.2f}  "
-                            f"err {res['errors']}  maxabs {err:.2e}  boot {boot_s:.2f}s",
-                            flush=True,
-                        )
-                        out_path.write_text(json.dumps(report, indent=1))
-                finally:
-                    stop_server(proc)
+                        save()
+                    finally:
+                        stop_server(proc)
 
-    out_path.write_text(json.dumps(report, indent=1))
+    save()
     print(f"\nwrote {out_path} ({len(report['runs'])} runs)", flush=True)
 
 

@@ -52,5 +52,5 @@ scripts/.validation/
 bench/LLAMA-GUARD/
 bench/all-MiniLM-L6-v2/
 bench/results.json
-bench/summary.json
+bench/results_hf.json
 bench/REPORT.md
