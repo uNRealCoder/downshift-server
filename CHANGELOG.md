@@ -23,6 +23,7 @@ All notable changes to this project are documented here. Format follows
 - Breaking: `ExportVerdict.status` is a `Status` string enum (`downshift.core.verdict.Status`). It still compares equal to `"CLEAN"` etc. and serializes the same.
 - Breaking: `NumericsReport.session` is gone. The ONNX Runtime session verify ran on is kept privately on the verdict and handed to the server once.
 - Breaking: `downshift.loading` no longer re-exports `IN_PROCESS_MODULE` and `SOURCE_KIND_HELP` (import them from `downshift.sources`), and `downshift.cli.main._serve_app_factory` is gone (it lives in `downshift.cli.runtime`).
+- Breaking: the `downshift.demo` models are no longer in the wheel. They live in `examples/` at the repo root, so the README commands run from a clone as `examples.scatter_include_self_false:make_model`.
 - `check`, `export` and `serve` on the command line no longer hash every weight for the in-process export memo, which one export per process can never reuse; with `--export-cache-dir` the key is still computed for the disk tier.
 - `export` writes the graph it already serialized instead of serializing it a second time.
 - `serve --workers N`: the parent reuses verify's ONNX Runtime session instead of building a second one only to print the banner, and workers boot from the parent's export the same way a cache hit does.

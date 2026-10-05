@@ -5,13 +5,13 @@ Serve a model you have already downloaded over HTTP with one command. Before the
 Everything downshift serves is already on the machine you run it on: a PyTorch checkpoint, an ONNX file, or a downloaded Hugging Face repo directory (one holding a `config.json`). Nothing is fetched — a hub id is rejected, not downloaded.
 
 ```
-$ downshift serve downshift.demo.scatter_include_self_false:make_model
+$ downshift serve examples.scatter_include_self_false:make_model
 
 2026-09-21 18:38:04 WARNING downshift.serve: DOWNSHIFT_SERVER_API_KEY is not set, so the endpoints are unauthenticated. Set it to require a fixed API key, or add your own authentication middleware.
-2026-09-21 18:38:04 INFO downshift.report: loading downshift.demo.scatter_include_self_false:make_model
+2026-09-21 18:38:04 INFO downshift.report: loading examples.scatter_include_self_false:make_model
 2026-09-21 18:38:04 INFO downshift.report: will listen on http://127.0.0.1:8000 (not ready yet)
 2026-09-21 18:38:10 INFO downshift.report: downshift v0.4.0
-  Model          downshift.demo.scatter_include_self_false:make_model
+  Model          examples.scatter_include_self_false:make_model
   Family         generic
   Verdict        DEGRADED  (strict=False, opset 20)
   Numerics       max abs err 1.15e+00 over 8 samples  6/8 failed
@@ -32,7 +32,7 @@ $ downshift serve downshift.demo.scatter_include_self_false:make_model
 2026-09-21 18:38:10 INFO downshift.report: ready in 5.4 s
 ```
 
-This graph exported without a single error and produces wrong numbers on 6 of 8 inputs. downshift caught it before the first request and is serving PyTorch instead.
+This graph exported without a single error and produces wrong numbers on 6 of 8 inputs. downshift caught it before the first request and is serving PyTorch instead. The model is [`examples/scatter_include_self_false.py`](examples/scatter_include_self_false.py); run the command from a clone of this repo.
 
 Everything downshift prints, the banner included, is plain text through Python `logging` on stdout: no colours, no box drawing, nothing a log shipper has to strip. See [Logging](#logging).
 
@@ -243,10 +243,10 @@ The gate also runs on its own, to gate CI and to write artifacts.
 ### `check`: is the export trustworthy?
 
 ```
-$ downshift check downshift.demo.scatter_include_self_false:make_model
+$ downshift check examples.scatter_include_self_false:make_model
 
 2026-09-21 18:37:52 INFO downshift.report: downshift v0.4.0
-  Model           downshift.demo.scatter_include_self_false:make_model
+  Model           examples.scatter_include_self_false:make_model
   Family          generic
   Export          DEGRADED  (strict=False, opset 20)
   Numerics        max abs err 1.15e+00 over 8 samples  6/8 failed

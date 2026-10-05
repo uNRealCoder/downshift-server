@@ -14,7 +14,7 @@ import urllib.request
 
 from tests.conftest import subprocess_env
 
-MODEL = "downshift.demo.clean_mlp:make_model"
+MODEL = "tests.models.clean_mlp:make_model"
 BOOT_TIMEOUT = 20
 
 

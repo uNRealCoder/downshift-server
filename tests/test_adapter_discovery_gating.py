@@ -25,11 +25,11 @@ def test_prepare_serving_on_clean_mlp_does_not_import_optional_families() -> Non
     script = """
 import sys
 
-from downshift.demo import clean_mlp
+from tests.models import clean_mlp
 from downshift.loading import LoadedModel
 from downshift.serve.engine import prepare_serving
 
-loaded = LoadedModel(source="downshift.demo.clean_mlp", model=clean_mlp.make_model(),
+loaded = LoadedModel(source="tests.models.clean_mlp", model=clean_mlp.make_model(),
                       example_inputs=clean_mlp.make_inputs())
 state = prepare_serving(loaded)
 assert state.verdict.status == "CLEAN", state.verdict.reason
