@@ -34,7 +34,7 @@ def test_clean_model_serves_via_onnxruntime(mlp_state):
 
 def test_serving_state_builds_an_executor_from_max_concurrency(mlp_state):
     assert isinstance(mlp_state.executor, ThreadPoolExecutor)
-    assert mlp_state.executor._max_workers == 1
+    assert mlp_state.executor._max_workers == mlp_state.options.max_concurrency == 4
     assert mlp_state.in_flight == 0
 
     wider = dataclasses.replace(
@@ -79,6 +79,15 @@ def test_torch_backend_option_skips_export(serve_fixture):
     assert state.verdict.onnx_program is None
     assert state.backend.name == "torch"
     assert state.input_names == ("x",)
+
+
+def test_auto_skips_the_export_for_all_bfloat16_weights(serve_fixture):
+    state = serve_fixture("bf16_weights")
+    assert state.verdict.status == "UNVERIFIED"
+    assert "bfloat16" in state.verdict.reason
+    assert state.verdict.onnx_program is None
+    assert state.backend.name == "torch"
+    assert state.backend_auto_selected
 
 
 def test_backends_agree_on_the_same_model():

@@ -43,14 +43,16 @@ class ServeOptions:
     axis_max: dict[str, int] | None = field(default_factory=lambda: dict(settings.AXIS_MAX) or None)
     # --export-cache-dir: where verified exports are saved for the next boot; None = never write
     export_cache_dir: str | None = settings.EXPORT_CACHE_DIR
-    intra_op_threads: int = settings.INTRA_OP_THREADS  # ORT SessionOptions; 0 = let ORT choose
+    intra_op_threads: int = (
+        settings.INTRA_OP_THREADS
+    )  # ORT SessionOptions or torch.set_num_threads; 0 = backend default
     inter_op_threads: int = settings.INTER_OP_THREADS
     output_encoding: OutputEncoding = OutputEncoding(settings.OUTPUT_ENCODING)  # per-call override
     max_input_bytes: int = settings.MAX_INPUT_BYTES  # cap on one decoded base64 tensor input
     max_body_bytes: int = settings.MAX_BODY_BYTES  # cap on the whole request body
     max_concurrency: int = settings.MAX_CONCURRENCY  # inferences allowed to run at once per worker
     execution: ExecutionChoice = ExecutionChoice(settings.EXECUTION)
-    prep_threads: int = settings.PREP_THREADS  # request decode/encode threads, not inference
+    prep_threads: int = settings.PREP_THREADS  # request parse/convert threads, not inference
     max_queue: int = settings.MAX_QUEUE  # admitted predicts allowed to wait past max_concurrency
     request_timeout: float = settings.REQUEST_TIMEOUT  # seconds queued before a 503; 0 = no limit
     atol: float | None = None  # None means "by the model's floating dtype"

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import torch
 
 from downshift.adapters.base import Prepared
 from downshift.adapters.embedding import EmbeddingRecipe
@@ -159,6 +160,11 @@ def _prepare(loaded: LoadedModel, opts: ServeOptions) -> Prepared:
     )
 
 
+def _all_bfloat16(model: torch.nn.Module) -> bool:
+    dtypes = {p.dtype for p in model.parameters() if p.is_floating_point()}
+    return dtypes == {torch.bfloat16}
+
+
 def _verdict_for(
     loaded: LoadedModel,
     reference: LoadedModel | None,
@@ -187,6 +193,15 @@ def _verdict_for(
         # Skip the export entirely; the user asked for eager.
         return unverified_verdict(
             prepared, "--backend torch: export skipped", eager_output_axes(prepared)
+        )
+    if opts.backend == BackendChoice.auto and _all_bfloat16(prepared.model):
+        # ORT's CPU kernels have no bf16 Gemm, so the export would run for a minute or more
+        # and then fail to load. Say so now and serve eagerly.
+        return unverified_verdict(
+            prepared,
+            "bfloat16 weights: ONNX Runtime has no bf16 kernels, so the export was skipped; "
+            "serving torch (pass --backend torch to silence this)",
+            eager_output_axes(prepared),
         )
     return build_verdict(
         prepared, k=opts.k, atol=opts.atol, rtol=opts.rtol, seed=opts.seed, timings=timings

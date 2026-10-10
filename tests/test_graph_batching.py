@@ -70,13 +70,14 @@ def test_batch_matches_single_requests(which, request):
         )
 
 
-def test_batch_records_graph_stats(gcn_client):
-    from downshift.serve.predict import _prepare_feeds
+def test_batch_layout_counts(gcn_client):
+    from downshift.serve.predict import _prepare_feeds, _Request
 
     state = gcn_client.app.state.serving
-    stats: dict[str, int] = {}
-    _prepare_feeds(state, {}, None, "", None, _graphs(), stats)
-    assert stats == {"graphs": 3, "nodes": 15, "edges": 19}
+    _, _, layout = _prepare_feeds(state, _Request(graphs=_graphs()))
+    assert layout is not None
+    nodes, edges = layout[0], layout[1]
+    assert (len(nodes), sum(nodes), sum(edges)) == (3, 15, 19)
 
 
 def test_batch_offsets_edge_indices():

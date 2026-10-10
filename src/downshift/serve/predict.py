@@ -9,18 +9,23 @@ import logging
 import time
 from collections.abc import Callable
 from concurrent.futures import Executor
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
 import orjson
 from fastapi import HTTPException, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ValidationError
 
 from downshift.core.axes import DimBound
 from downshift.serve.backends import FIRST_OUTPUT_NAME, InferenceInputError
-from downshift.serve.codec import b64encode, encode_safetensors
+from downshift.serve.codec import b64encode, decode_safetensors, encode_safetensors
 from downshift.serve.engine import ServingState
 from downshift.serve.graphs import (
+    GRAPH_COUNTS,
+    GRAPH_INPUTS,
     GRAPH_TENSORS,
     batch_graphs,
     binary_batch,
@@ -29,20 +34,28 @@ from downshift.serve.graphs import (
     split_outputs,
     split_refusal,
 )
-from downshift.serve.metrics import STAGES
-from downshift.serve.schemas import OutputEncoding, RequestOutputEncoding, normalize_dtype, to_numpy
+from downshift.serve.schemas import (
+    GraphPredictRequest,
+    OutputEncoding,
+    PredictRequest,
+    RequestOutputEncoding,
+    normalize_dtype,
+    to_numpy,
+)
 
 logger = logging.getLogger("downshift.serve")
 
 # Per-graph (node_counts, edge_counts) of a graph batch, what the response is split by.
 GraphLayout = tuple[list[int], list[int]]
 
-# The predict routes: the only ones OrjsonRoute admits against before reading the body (P1).
-PREDICT_PATHS = frozenset({"/predict", "/predict/graph"})
+# What a safetensors body on /predict/graph may name.
+_GRAPH_TENSOR_NAMES = frozenset((*GRAPH_TENSORS, *GRAPH_COUNTS))
 
 SAFETENSORS_MEDIA_TYPE = "application/vnd.safetensors"
 # What a binary request may be labelled; octet-stream is an alias for safetensors.
 BINARY_REQUEST_TYPES = frozenset({SAFETENSORS_MEDIA_TYPE, "application/octet-stream"})
+# The Server-Timing stages, in request order.
+STAGES = ("parse", "prep_wait", "prep", "infer_wait", "infer", "encode")
 
 # dtypes orjson's OPT_SERIALIZE_NUMPY writes straight from the array buffer (orjson >= 3.9).
 _ORJSON_DTYPES = frozenset(
@@ -162,18 +175,13 @@ def _bound_violation(state: ServingState, feeds: dict[str, np.ndarray]) -> str |
     return None
 
 
-class QueueTimeout(HTTPException):
-    """The 503 for a request that waited past --request-timeout; its own type so the route
-    can count it as a rejection."""
-
-
 def _check_timeout(state: ServingState, admitted_at: float) -> None:
     request_timeout = state.options.request_timeout
     if request_timeout > 0:
         waited = time.monotonic() - admitted_at
         if waited > request_timeout:
             # Only ever raised before infer() has begun: a request that sat in a queue.
-            raise QueueTimeout(
+            raise HTTPException(
                 503,
                 f"request waited {waited:.1f}s in queue, past the {request_timeout:.1f}s "
                 "--request-timeout",
@@ -233,44 +241,47 @@ def _batch_feeds(
     return {n: feeds[n] for n in state.input_names}, (node_counts, edge_counts)
 
 
+@dataclass
+class _Request:
+    """A predict body, decoded and validated: what _prepare_feeds takes, plus the encoding."""
+
+    inputs: dict[str, Any] = field(default_factory=dict)
+    text: list[str] | None = None
+    prompt: str = ""
+    tensors: dict[str, np.ndarray] | None = None
+    graphs: list[dict[str, Any]] | None = None
+    encoding: OutputEncoding | RequestOutputEncoding | None = None
+
+
 def _prepare_feeds(
-    state: ServingState,
-    inputs: dict[str, Any],
-    text: list[str] | None,
-    prompt: str = "",
-    tensors: dict[str, np.ndarray] | None = None,
-    graphs: list[dict[str, Any]] | None = None,
-    graph_stats: dict[str, int] | None = None,
+    state: ServingState, request: _Request
 ) -> tuple[dict[str, np.ndarray], float, GraphLayout | None]:
-    """Request body to the graph's own input arrays (base64 decode, to_numpy, tokenize) and
-    the checks that need them: vocab, edge index, axis bounds. Runs in state.prep_executor.
-    Returns the feeds, the milliseconds spent and, for a graph batch, its per-graph counts.
-    `tensors` (a safetensors body, already decoded) takes the place of `inputs`; `graphs` (or
-    a `tensors` body carrying num_nodes) is a batch of graphs, concatenated here into one feed
-    set, with its counts written to `graph_stats`.
+    """A validated request to the graph's own input arrays (base64 decode, to_numpy,
+    tokenize) and the checks that need them: vocab, edge index, axis bounds. Runs in
+    state.prep_executor. Returns the feeds, the milliseconds spent and, for a graph batch,
+    its per-graph counts. `request.tensors` (a safetensors body, already decoded) takes the
+    place of `inputs`; `request.graphs` (or a `tensors` body carrying num_nodes) is a batch of
+    graphs, concatenated here into one feed set.
 
     Raises HTTPException(400) for anything the client got wrong (bad shape/dtype/JSON).
     """
     declared = state.declared_dtypes
     max_bytes = state.options.max_input_bytes
+    tensors = request.tensors
     start = time.perf_counter()
     layout: GraphLayout | None = None
     try:
-        if graphs is not None or (
+        if request.graphs is not None or (
             tensors is not None and ("num_nodes" in tensors or "num_edges" in tensors)
         ):
-            feeds, layout = _batch_feeds(state, graphs, tensors, max_bytes)
-            if graph_stats is not None:
-                graph_stats.update(
-                    graphs=len(layout[0]), nodes=sum(layout[0]), edges=sum(layout[1])
-                )
+            feeds, layout = _batch_feeds(state, request.graphs, tensors, max_bytes)
         elif tensors is not None:
             feeds = _binary_feeds(state, tensors, declared)
-        elif text is not None:
-            feeds = _text_feeds(state, text, declared, prompt)
+        elif request.text is not None:
+            feeds = _text_feeds(state, request.text, declared, request.prompt)
         else:
             feeds = {
-                n: to_numpy(n, inputs[n], declared.get(n), max_bytes=max_bytes)
+                n: to_numpy(n, request.inputs[n], declared.get(n), max_bytes=max_bytes)
                 for n in state.input_names
             }
     except (ValueError, TypeError, KeyError) as exc:
@@ -292,7 +303,7 @@ def _prepare_feeds(
 def _infer(
     state: ServingState, feeds: dict[str, np.ndarray]
 ) -> tuple[dict[str, np.ndarray], float]:
-    """Only the backend call, so an inference slot is never held for conversion or encoding.
+    """Only the backend call; _encode_response follows it on the same inference thread.
     Runs in state.executor. Returns the outputs and the milliseconds spent.
 
     Anything but a client error (a backend bug, OOM, ...) propagates so the app-level handler
@@ -316,7 +327,7 @@ def _encode_response(
     accept_safetensors: bool = False,
     layout: GraphLayout | None = None,
 ) -> Response:
-    """Outputs to the response body, in state.prep_executor. `timings_ms` already holds the
+    """Outputs to the response body, right after _infer on the same thread. `timings_ms` already holds the
     earlier stages; the encode stage and the Server-Timing header are added here.
 
     A safetensors body (an `Accept` naming it, or output_encoding "safetensors") carries each
@@ -400,6 +411,118 @@ def _json_str(value: Any) -> str:
     return orjson.dumps(value, option=orjson.OPT_SERIALIZE_NUMPY).decode()
 
 
+def _validate_json[ModelT: BaseModel](model: type[ModelT], body: bytes) -> ModelT:
+    """orjson, then the route's pydantic model, with FastAPI's own 422s for both: an empty
+    body is the missing body, malformed JSON is json_invalid, the model's errors sit under
+    "body". The error dicts copy what FastAPI's request handler builds (fastapi/routing.py,
+    get_request_handler), which has no public helper for them; tests pin all three."""
+    if not body:
+        raise RequestValidationError(
+            [{"type": "missing", "loc": ("body",), "msg": "Field required", "input": None}]
+        )
+    try:
+        parsed = orjson.loads(body)
+    except orjson.JSONDecodeError as exc:
+        raise RequestValidationError(
+            [
+                {
+                    "type": "json_invalid",
+                    "loc": ("body", exc.pos),
+                    "msg": "JSON decode error",
+                    "input": {},
+                    "ctx": {"error": exc.msg},
+                }
+            ]
+        ) from None
+    try:
+        return model.model_validate(parsed)
+    except ValidationError as exc:
+        errors = exc.errors(include_url=False)
+        raise RequestValidationError(
+            [{**error, "loc": ("body", *error["loc"])} for error in errors]
+        ) from None
+
+
+def _json_request(state: ServingState, graph: bool, body: bytes) -> _Request:
+    if graph:
+        graph_req = _validate_json(GraphPredictRequest, body)
+        if graph_req.graphs is not None:
+            # No dtype hints needed: to_numpy takes the backend's declared dtype (int64 for
+            # edge_index on both backends), and integer lists default to int64 anyway.
+            graphs = [
+                {"x": g.x, "edge_index": g.edge_index, "edge_attr": g.edge_attr}
+                for g in graph_req.graphs
+            ]
+            return _Request(graphs=graphs, encoding=graph_req.output_encoding)
+        inputs = {"x": graph_req.x, "edge_index": graph_req.edge_index}
+        if graph_req.edge_attr is not None:
+            inputs["edge_attr"] = graph_req.edge_attr
+        return _Request(inputs=inputs, encoding=graph_req.output_encoding)
+
+    req = _validate_json(PredictRequest, body)
+    if req.text is not None and state.text is None:
+        raise HTTPException(
+            400,
+            "this model takes tensors only: it was not loaded from a Hugging Face repo "
+            "directory with tokenizer files. Send 'inputs' (see GET /schema).",
+        )
+    return _Request(
+        inputs=req.inputs,
+        text=as_batch(req.text) if req.text is not None else None,
+        prompt=resolve_prompt(state, req.prompt_name, req.text is not None),
+        encoding=req.output_encoding,
+    )
+
+
+def _binary_request(state: ServingState, graph: bool, body: bytes) -> _Request:
+    """A safetensors body: its arrays (only names this route takes), and the __metadata__
+    output_encoding."""
+    try:
+        arrays, metadata = decode_safetensors(body, max_input_bytes=state.options.max_input_bytes)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if "text" in metadata:
+        raise HTTPException(400, "text is JSON only; a safetensors body carries tensors")
+    allowed = _GRAPH_TENSOR_NAMES if graph else frozenset(state.input_names)
+    unknown = [name for name in arrays if name not in allowed]
+    if unknown:
+        raise HTTPException(
+            400, f"unknown tensor name {unknown[0]!r:.64}; this route takes {sorted(allowed)}"
+        )
+    encoding = metadata.get("output_encoding")
+    try:
+        return _Request(
+            tensors=arrays, encoding=RequestOutputEncoding(encoding) if encoding else None
+        )
+    except ValueError:
+        raise HTTPException(
+            400,
+            f"unknown output_encoding {encoding!r:.64} in __metadata__; this route takes "
+            f"{[e.value for e in RequestOutputEncoding]}",
+        ) from None
+
+
+def _parse(
+    state: ServingState, body: bytes, graph: bool, binary: bool, timings_ms: dict[str, float]
+) -> _Request:
+    """The request body (JSON or safetensors) to a validated _Request, its time recorded as
+    timings_ms["parse"]. Raises the client's 422 or 400."""
+    start = time.perf_counter()
+    if graph and not GRAPH_INPUTS.issubset(state.input_names):
+        raise HTTPException(
+            400,
+            f"model is not graph-shaped: inputs are {list(state.input_names)}, "
+            "expected at least 'x' and 'edge_index'",
+        )
+    request = (_binary_request if binary else _json_request)(state, graph, body)
+    if request.text is None and request.graphs is None:
+        missing = [n for n in state.input_names if n not in (request.tensors or request.inputs)]
+        if missing:
+            raise HTTPException(400, f"missing inputs: {missing}")
+    timings_ms["parse"] = round((time.perf_counter() - start) * 1000, 2)
+    return request
+
+
 async def _run_in(
     executor: Executor | None,
     wait_key: str,
@@ -409,16 +532,15 @@ async def _run_in(
 ) -> Any:
     """fn(*args) in `executor`, carrying contextvars (run_in_executor does not; without this,
     log lines from the executor thread would lose the request id). The time from submit to
-    start is added to timings_ms[wait_key]. `executor` None (--execution inline) calls fn
-    right here on the event loop, with no wait."""
+    start is timings_ms[wait_key]. `executor` None (--execution inline) calls fn right here on
+    the event loop, with no wait."""
     if executor is None:
-        timings_ms.setdefault(wait_key, 0.0)
+        timings_ms[wait_key] = 0.0
         return fn(*args)
     submitted = time.perf_counter()
 
     def call() -> Any:
-        waited = (time.perf_counter() - submitted) * 1000
-        timings_ms[wait_key] = round(timings_ms.get(wait_key, 0.0) + waited, 2)
+        timings_ms[wait_key] = round((time.perf_counter() - submitted) * 1000, 2)
         return fn(*args)
 
     loop = asyncio.get_running_loop()
@@ -427,109 +549,64 @@ async def _run_in(
 
 async def run_predict(
     state: ServingState,
-    inputs: dict[str, Any],
-    encoding: OutputEncoding | RequestOutputEncoding | None,
-    text: list[str] | None = None,
-    prompt_name: str | None = None,
+    body: bytes,
     *,
+    graph: bool,
+    binary: bool,
+    inline: bool,
     admitted_at: float,
-    parse_ms: float,
     timings_ms: dict[str, float],
-    inline: bool = False,
-    tensors: dict[str, np.ndarray] | None = None,
-    accept_safetensors: bool = False,
-    graphs: list[dict[str, Any]] | None = None,
-    graph_stats: dict[str, int] | None = None,
-    on_infer_start: Callable[[], None] | None = None,
+    accept_safetensors: bool,
 ) -> Response:
-    """Missing-input check happens here, on the loop; the rest is three stages so only the
-    middle one holds an inference thread: _prepare_feeds (prep pool), _infer (inference
-    executor), _encode_response (prep pool). A slow body or encode therefore never blocks
-    /health or /ready (they share this process's single event loop) nor another request's
-    inference. Admission itself already happened in OrjsonRoute, before the body was even
-    read (P1); `admitted_at` is when that happened, and the request keeps its slot until
-    the response is built.
+    """One /predict (or, with `graph`, /predict/graph) request, from its raw body, in two
+    hops: _parse + _prepare_feeds in the prep pool, then _infer + _encode_response on an
+    inference thread, so encoding holds the inference slot. The event loop does neither, so a
+    large body never blocks /health or /ready (they share this process's single event loop).
+    Admission already happened in PredictRoute, before the body was even read (P1);
+    `admitted_at` is when that happened, and the request keeps its slot until the response
+    is built.
+
+    `binary` means a safetensors body. `inline` (--execution inline, a small JSON body) runs
+    everything on the event loop instead, with zero waits; a `text` request still tokenizes in
+    the prep pool.
 
     `timings_ms` collects the per-stage milliseconds (parse, prep_wait, prep, infer_wait,
-    infer, encode) for Server-Timing and the request log line (U1).
+    infer, encode) for Server-Timing and the request log line (U1). With
+    `accept_safetensors` the response is safetensors.
 
-    `inline` (--execution inline, a small JSON body; see OrjsonRoute) runs all three stages
-    on the event loop instead, with zero waits.
-
-    `tensors` is a decoded safetensors request body, used instead of `inputs`; with
-    `accept_safetensors` the response is safetensors too.
-
-    `graphs` is a /predict/graph batch (a list of {x, edge_index, edge_attr?} JSON values; a
-    `tensors` body with num_nodes/num_edges is one too). It is batched in the prep pool, run
-    as one inference and split in the encode stage; its graph/node/edge counts land in
-    `graph_stats` for whoever wants them (metrics), which also gets `rows`, axis 0 of the
-    first feed, for every request. `on_infer_start` is called as inference begins, before
-    the timeout re-check: the moment the request stops waiting for a slot.
+    A graph batch (a `graphs` list, or a safetensors body with num_nodes/num_edges) is
+    batched in prep, run as one inference and split in encode.
     """
-    prep_pool = None if inline else state.prep_executor
-    infer_pool = None if inline else state.executor
-    if text is not None:
-        if state.text is None:
-            raise HTTPException(
-                400,
-                "this model takes tensors only: it was not loaded from a Hugging Face repo "
-                "directory with tokenizer files. Send 'inputs' (see GET /schema).",
-            )
-    elif graphs is None:
-        missing = [n for n in state.input_names if n not in (tensors or inputs)]
-        if missing:
-            raise HTTPException(400, f"missing inputs: {missing}")
+    parsed = _parse(state, body, graph, binary, timings_ms) if inline else None
+    run_here = parsed is not None and parsed.text is None
 
-    prompt = resolve_prompt(state, prompt_name, text is not None)
+    def prepare() -> tuple[Any, dict[str, np.ndarray], GraphLayout | None]:
+        # Only the encoding outlives this: the parsed body is freed before inference.
+        request = parsed or _parse(state, body, graph, binary, timings_ms)
+        feeds, prep_ms, layout = _prepare_feeds(state, request)
+        timings_ms["prep"] = round(prep_ms, 2)
+        return request.encoding, feeds, layout
 
-    timings_ms["parse"] = round(parse_ms, 2)
-    feeds, prep_ms, layout = await _run_in(
-        prep_pool,
-        "prep_wait",
-        timings_ms,
-        _prepare_feeds,
-        state,
-        inputs,
-        text,
-        prompt,
-        tensors,
-        graphs,
-        graph_stats,
+    encoding, feeds, layout = await _run_in(
+        None if run_here else state.prep_executor, "prep_wait", timings_ms, prepare
     )
-    timings_ms["prep"] = round(prep_ms, 2)
-    if graph_stats is not None:
-        first = next(iter(feeds.values()), None)
-        graph_stats["rows"] = int(first.shape[0]) if first is not None and first.ndim else 1
 
     _check_timeout(state, admitted_at)
 
-    def infer() -> tuple[dict[str, np.ndarray], float]:
-        if on_infer_start is not None:
-            on_infer_start()
+    def infer_and_encode() -> Response:
         # Re-checked at start: the request may have queued behind a running inference.
         _check_timeout(state, admitted_at)
-        return _infer(state, feeds)
-
-    outputs, infer_ms = await _run_in(infer_pool, "infer_wait", timings_ms, infer)
-    timings_ms["infer"] = round(infer_ms, 2)
+        outputs, infer_ms = _infer(state, feeds)
+        timings_ms["infer"] = round(infer_ms, 2)
+        return _encode_response(state, outputs, encoding, timings_ms, accept_safetensors, layout)
 
     response: Response = await _run_in(
-        prep_pool,
-        "prep_wait",
-        timings_ms,
-        _encode_response,
-        state,
-        outputs,
-        encoding,
-        timings_ms,
-        accept_safetensors,
-        layout,
+        None if run_here else state.executor, "infer_wait", timings_ms, infer_and_encode
     )
     return response
 
 
 __all__ = [
-    "PREDICT_PATHS",
     "NumpyJSONResponse",
     "as_batch",
     "run_predict",

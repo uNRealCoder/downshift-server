@@ -44,7 +44,7 @@ def test_defaults_with_no_env_set(monkeypatch: pytest.MonkeyPatch) -> None:
         "json",
         256 * 1024 * 1024,
         32 * 1024 * 1024,
-        1,
+        4,
         64,
         30.0,
     )
@@ -57,7 +57,7 @@ def test_env_vars_override_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DOWNSHIFT_OUTPUT_ENCODING", "base64")
     monkeypatch.setenv("DOWNSHIFT_MAX_INPUT_BYTES", "4096")
     monkeypatch.setenv("DOWNSHIFT_MAX_BODY_BYTES", "8192")
-    monkeypatch.setenv("DOWNSHIFT_MAX_CONCURRENCY", "4")
+    monkeypatch.setenv("DOWNSHIFT_MAX_CONCURRENCY", "2")
     mod = importlib.reload(settings)
     assert mod.HOST == "127.0.0.1"
     assert mod.PORT == 9000
@@ -65,7 +65,7 @@ def test_env_vars_override_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert mod.OUTPUT_ENCODING == "base64"
     assert mod.MAX_INPUT_BYTES == 4096
     assert mod.MAX_BODY_BYTES == 8192
-    assert mod.MAX_CONCURRENCY == 4
+    assert mod.MAX_CONCURRENCY == 2
 
 
 def test_bad_int_env_var_raises_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:

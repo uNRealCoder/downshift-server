@@ -99,7 +99,7 @@ app = typer.Typer(
 
 def _print_version(value: bool) -> None:
     if value:
-        typer.echo(f"downshift v{__version__}")
+        typer.echo(__version__)
         raise typer.Exit(0)
 
 
@@ -318,28 +318,6 @@ def export_cmd(
         raise typer.Exit(verdict.exit_code)
 
 
-def _worker_metrics_dir() -> str | None:
-    """A fresh 0700 directory for the workers' shared metric files, put in the env they are
-    spawned with. prometheus_client reads PROMETHEUS_MULTIPROC_DIR once, at import, so this
-    must run before any worker starts; whatever was inherited is overridden (a stale
-    directory would leak other runs' series). The caller removes the directory afterwards.
-    If no temp directory can be made, the workers keep their own counters and /metrics
-    answers per worker."""
-    import tempfile
-
-    os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
-    try:
-        metrics_dir = tempfile.mkdtemp(prefix="downshift-metrics-")
-    except OSError as exc:
-        render.warn(
-            f"no writable temp directory ({exc}): /metrics reports one worker's own counts, "
-            "not the total across --workers"
-        )
-        return None
-    os.environ["PROMETHEUS_MULTIPROC_DIR"] = metrics_dir
-    return metrics_dir
-
-
 @app.command("serve")
 def serve_cmd(
     model: ModelArg,
@@ -396,9 +374,6 @@ def serve_cmd(
     import uvicorn
 
     _setup_logging(log_level)
-    if workers <= 1:
-        # One process never uses prometheus_client's multiprocess mode, whatever the env says.
-        os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
     with _exit_on_error(log_level is LogLevel.debug):
         if export_cache_dir:
             from downshift.core.export_cache import check_dir
@@ -460,6 +435,19 @@ def serve_cmd(
             access_log=access_log,
             tokenizer_from=resolved_tokenizer_from,
         )
+
+        def print_config(state: ServingState, workers: int = 1) -> None:
+            render.print_config(
+                state,
+                host,
+                port,
+                workers=workers,
+                log_level=log_level.value,
+                access_log=access_log,
+                middleware=middleware or (),
+                api_key_set=bool(settings.API_KEY),
+            )
+
         if workers <= 1:
             from downshift.serve.app import build_app
 
@@ -480,6 +468,7 @@ def serve_cmd(
                     server.should_exit = True
                     raise
                 render.print_banner(state, host, port)
+                print_config(state)
                 render.print_ready(state)
                 return state
 
@@ -512,6 +501,7 @@ def serve_cmd(
             state = _build_serving_state(replace(args, options=parent_options))
             state.options = args.options  # the banner reports what the workers will use
             render.print_banner(state, host, port, workers=workers)
+            print_config(state, workers=workers)
             temp_dir: Path | None = None
             onnx_path_str: str | None = None
             feeds_path_str: str | None = None
@@ -541,7 +531,6 @@ def serve_cmd(
             # The verdict is shipped, so workers never need --reference.
             args = replace(args, artifact=artifact, reference=None)
             os.environ[_SERVE_ARGS_ENV] = args.to_json()
-            metrics_dir = _worker_metrics_dir()
             try:
                 uvicorn.run(
                     "downshift.cli.runtime:_serve_app_factory",
@@ -554,9 +543,6 @@ def serve_cmd(
                     factory=True,
                 )
             finally:
-                if metrics_dir is not None:
-                    os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
-                    shutil.rmtree(metrics_dir, ignore_errors=True)
                 if temp_dir is not None:
                     shutil.rmtree(temp_dir, ignore_errors=True)
 

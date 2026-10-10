@@ -161,12 +161,15 @@ def test_predict_missing_input(mlp_client):
 
 
 def test_predict_malformed_json_body_is_422(mlp_client):
-    # Bodies are parsed by orjson (OrjsonRoute); its decode error must still map to FastAPI's 422.
+    # Bodies are parsed by orjson (run_predict); its decode error must still be FastAPI's 422.
     resp = mlp_client.post(
         "/predict", content=b'{"inputs": ', headers={"content-type": "application/json"}
     )
     assert resp.status_code == 422, resp.text
-    assert resp.json()["detail"][0]["msg"] == "JSON decode error"
+    error = resp.json()["detail"][0]
+    assert error["type"] == "json_invalid"
+    assert error["loc"] == ["body", 11]
+    assert error["msg"] == "JSON decode error"
 
 
 def test_predict_wrong_feature_size(mlp_client):
@@ -308,7 +311,7 @@ def test_predict_base64_output_of_non_contiguous_and_scalar_arrays(mlp_state, mo
 def test_predict_rejects_unknown_output_encoding(mlp_client):
     resp = mlp_client.post("/predict", json=MLP_INPUT | {"output_encoding": "hex"})
     assert resp.status_code == 422
-    assert "output_encoding" in resp.text
+    assert resp.json()["detail"][0]["loc"] == ["body", "output_encoding"]
 
 
 def test_openapi_documents_predict_contract(mlp_client):
@@ -465,6 +468,21 @@ class AddClassHeader(BaseHTTPMiddleware):
         return response
 
 
+class AddAsgiHeader:
+    """Pure ASGI middleware: no BaseHTTPMiddleware in sight."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        async def send_with_header(message):
+            if message["type"] == "http.response.start":
+                message.setdefault("headers", []).append((b"x-asgi", b"1"))
+            await send(message)
+
+        await self.app(scope, receive, send_with_header)
+
+
 def not_middleware():
     return None
 
@@ -472,12 +490,23 @@ def not_middleware():
 def test_middleware_specs(mlp_state):
     app = build_app(
         mlp_state,
-        middleware=["tests.test_serve:add_test_header", "tests.test_serve:AddClassHeader"],
+        middleware=[
+            "tests.test_serve:add_test_header",
+            "tests.test_serve:AddClassHeader",
+            "tests.test_serve:AddAsgiHeader",
+            "starlette.middleware.gzip:GZipMiddleware",
+        ],
     )
     resp = TestClient(app).get("/health")
     assert resp.status_code == 200
     assert resp.headers["x-test"] == "1"
     assert resp.headers["x-class"] == "1"
+    assert resp.headers["x-asgi"] == "1"
+
+    big = {"inputs": {"x": np.random.randn(64, 16).tolist()}}
+    resp = TestClient(app).post("/predict", json=big, headers={"Accept-Encoding": "gzip"})
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-encoding"] == "gzip"
 
     with pytest.raises(ValueError, match="not middleware"):
         build_app(mlp_state, middleware=["tests.test_serve:not_middleware"])

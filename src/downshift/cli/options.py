@@ -108,7 +108,13 @@ TokenizerFromOpt = Annotated[
 IntraOpThreadsOpt = Annotated[
     int,
     typer.Option(
-        "--intra-op-threads", min=0, help="ORT threads within one op; 0 = let ONNX Runtime choose"
+        "--intra-op-threads",
+        min=0,
+        help=(
+            "Threads inside one op, for whichever backend serves (ONNX Runtime or torch); "
+            "0 = the backend's default. More threads cut single-request latency but cost "
+            "throughput under concurrent load"
+        ),
     ),
 ]
 InterOpThreadsOpt = Annotated[
@@ -154,9 +160,9 @@ MaxConcurrencyOpt = Annotated[
     typer.Option(
         "--max-concurrency",
         min=1,
-        help="Inferences allowed to run at once per worker process (default 1). Small models "
-        "often serve more requests per second at 2-4, since one inference does not fill every "
-        "core; each extra one holds its own activation memory",
+        help="Inferences allowed to run at once per worker process. One inference rarely fills "
+        "every core, so several in flight serve more requests per second; each one holds its "
+        "own activation memory, so lower it if large requests run out of memory",
     ),
 ]
 ExecutionOpt = Annotated[
@@ -173,7 +179,7 @@ PrepThreadsOpt = Annotated[
     typer.Option(
         "--prep-threads",
         min=1,
-        help="Threads per worker process that decode request bodies and encode responses, "
+        help="Threads per worker process that parse and convert request bodies, "
         "apart from the inference threads (default: min(4, usable CPUs))",
     ),
 ]

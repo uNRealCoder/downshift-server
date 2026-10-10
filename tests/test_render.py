@@ -476,6 +476,58 @@ def test_print_booting_says_where_it_will_listen(caplog):
     assert "will listen on http://127.0.0.1:9000 (not ready yet)" in caplog.text
 
 
+def test_print_booting_names_a_path_by_its_file_name(caplog):
+    render.print_booting("C:\\models\\private\\bert", "127.0.0.1", 9000)
+    assert "loading bert" in caplog.text
+    assert "private" not in caplog.text
+
+
+def _print_config(state, caplog, **overrides):
+    kwargs = dict(log_level="info", access_log=True, api_key_set=False) | overrides
+    with caplog.at_level(logging.INFO, logger="downshift.cli"):
+        render.print_config(state, "127.0.0.1", 8000, **kwargs)
+    return caplog.text
+
+
+def test_print_config_lists_every_serve_option(caplog):
+    state = _serving_state(_verdict(), options=ServeOptions(max_concurrency=4, warmup=7))
+    out = _print_config(state, caplog, workers=2, middleware=["pkg.mod:Mw"])
+    rows = dict(
+        (key.strip(), value.strip())
+        for key, value in (line.split(" = ", 1) for line in out.splitlines() if " = " in line)
+    )
+    assert rows["port"] == "8000"
+    assert rows["workers"] == "2"
+    assert rows["middleware"] == "pkg.mod:Mw"
+    assert rows["max_concurrency"] == "4"
+    assert rows["warmup"] == "7"
+    assert set(ServeOptions.__dataclass_fields__) <= set(rows)
+
+
+def test_print_config_redacts_the_api_key_and_hides_the_model_path(caplog):
+    state = _serving_state(
+        _verdict(), source="C:\\models\\private\\bert", source_kind="hf-repo-dir"
+    )
+    out = _print_config(state, caplog, api_key_set=True)
+    assert "api_key" in out
+    assert "= set" in out
+    assert "= bert" in out
+    assert "private" not in out
+
+
+def test_print_config_is_hidden_at_the_default_log_level(caplog):
+    with caplog.at_level(logging.WARNING, logger="downshift.cli"):
+        render.print_config(
+            _serving_state(_verdict()),
+            "127.0.0.1",
+            8000,
+            log_level="warning",
+            access_log=True,
+            api_key_set=False,
+        )
+    assert "serving with" not in caplog.text
+
+
 def test_print_ready_reports_the_total_boot_time(caplog):
     state = _serving_state(_verdict())
     state.timings = {"load": 0.5, "export": 1.0}

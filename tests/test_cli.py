@@ -584,7 +584,7 @@ def test_serve_app_factory_from_onnx_artifact_never_calls_capture(monkeypatch, t
 def test_version_eager_flag():
     result = run("--version")
     assert result.exit_code == 0
-    assert main.__version__ in result.stdout
+    assert result.stdout.strip() == main.__version__
 
 
 def test_help_still_works_with_no_args_is_help():

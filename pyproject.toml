@@ -35,7 +35,6 @@ dependencies = [
     "numpy>=1.24",
     "pydantic>=2.0",
     "orjson>=3.9",
-    "prometheus_client>=0.17",  # /metrics; pure Python, always on
 ]
 
 [project.optional-dependencies]

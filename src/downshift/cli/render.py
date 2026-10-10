@@ -10,6 +10,8 @@ together. That logger is forced to INFO, so reports print at any `--log-level`.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
+from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -18,7 +20,14 @@ from downshift.core.phase import Phase
 from downshift.logs import REPORT_LOGGER
 from downshift.serve.codec import BASE64_CODEC
 from downshift.serve.options import ExecutionChoice
-from downshift.sources import HF_REPO_DIR, IN_PROCESS_MODULE, ONNX_FILE, TORCH_CHECKPOINT
+from downshift.sources import (
+    HF_REPO_DIR,
+    IN_PROCESS_MODULE,
+    ONNX_FILE,
+    TORCH_CHECKPOINT,
+    display_source,
+    path_basename,
+)
 
 if TYPE_CHECKING:
     from downshift.core.verdict import ExportVerdict
@@ -266,7 +275,8 @@ _SOURCE_LABEL = {
 
 def _model_text(state: ServingState) -> str:
     label = _SOURCE_LABEL.get(state.source_kind)
-    return state.source if label is None else f"{state.source}  ({label})"
+    name = display_source(state.source, state.source_kind)
+    return name if label is None else f"{name}  ({label})"
 
 
 def _backend_text(state: ServingState) -> str:
@@ -392,10 +402,43 @@ def print_banner(state: ServingState, host: str, port: int, workers: int = 1) ->
     _log_report(rows, f"downshift v{__version__}")
 
 
+def print_config(
+    state: ServingState,
+    host: str,
+    port: int,
+    *,
+    workers: int = 1,
+    log_level: str,
+    access_log: bool,
+    middleware: Sequence[str] = (),
+    api_key_set: bool,
+) -> None:
+    """Every setting the server runs with, one `name = value` line each, at INFO (so only
+    `--log-level info` or lower shows it), right before `ready`. The whole of ServeOptions
+    goes out as it is, so a new option shows up here without touching this function. Names
+    only: the model is its file name, and the API key is `set` or `unset`, never its value."""
+    values = {
+        "model": display_source(state.source, state.source_kind),
+        "host": host,
+        "port": port,
+        "workers": workers,
+        "log_level": log_level,
+        "access_log": access_log,
+        "api_key": "set" if api_key_set else "unset",
+        "middleware": ", ".join(middleware) or None,
+        **asdict(state.options),
+    }
+    width = max(len(name) for name in values)
+    lines = [
+        f"  {name:<{width}} = {'-' if value is None else value}" for name, value in values.items()
+    ]
+    logger.info("serving with:\n%s", "\n".join(lines))
+
+
 def print_booting(model: str, host: str, port: int) -> None:
     """Logged once, before uvicorn binds; the full banner (print_banner) follows once the
     loader thread lands a verdict."""
-    report_logger.info("loading %s", model)
+    report_logger.info("loading %s", path_basename(model))
     report_logger.info("will listen on %s (not ready yet)", _client_url(host, port))
 
 

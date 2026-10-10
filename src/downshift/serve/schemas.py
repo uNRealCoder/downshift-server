@@ -11,6 +11,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from downshift.serve.codec import b64decode
 from downshift.settings import DEFAULT_MAX_INPUT_BYTES
 
+# --------------------------------------------------------------------------------------------------
+# Output encodings
+# --------------------------------------------------------------------------------------------------
+
 
 class OutputEncoding(StrEnum):
     """How response tensors are written: nested lists, or {data, dtype, shape} base64 dicts."""
@@ -41,6 +45,10 @@ OutputEncodingField = Annotated[
         ),
     ),
 ]
+
+# --------------------------------------------------------------------------------------------------
+# Dtype names
+# --------------------------------------------------------------------------------------------------
 
 # ORT reports dtypes as "tensor(float)"; map those names onto numpy ones. bfloat16 has no
 # numpy dtype of its own; the wire contract for it is float32, same as the torch backend's
@@ -73,6 +81,11 @@ def normalize_dtype(dtype: str | None) -> str | None:
         return np.dtype(name).name
     except TypeError:
         return None
+
+
+# --------------------------------------------------------------------------------------------------
+# Predict requests and responses
+# --------------------------------------------------------------------------------------------------
 
 
 class TypedArray(BaseModel):
@@ -161,6 +174,11 @@ class GraphPredictRequest(BaseModel):
         elif self.x is None or self.edge_index is None:
             raise ValueError("send 'x' and 'edge_index' for one graph, or 'graphs' for a batch")
         return self
+
+
+# --------------------------------------------------------------------------------------------------
+# /metadata (AxisInfo and Limits are shared with /schema)
+# --------------------------------------------------------------------------------------------------
 
 
 class WorstMismatchInfo(BaseModel):
@@ -264,6 +282,11 @@ class MetadataResponse(BaseModel):
     warmup: dict | None = None
 
 
+# --------------------------------------------------------------------------------------------------
+# /schema
+# --------------------------------------------------------------------------------------------------
+
+
 class AxisBound(BaseModel):
     """min/max the adapter's export traced this axis for (torch.export.Dim's own bounds).
 
@@ -363,6 +386,11 @@ class SchemaResponse(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+# --------------------------------------------------------------------------------------------------
+# Health and readiness
+# --------------------------------------------------------------------------------------------------
+
+
 class HealthResponse(BaseModel):
     status: str = "ok"
 
@@ -372,6 +400,11 @@ class ReadyResponse(BaseModel):
     # The loader's current phase while not ready (U4); None once ready, or when the app was
     # built with state= directly (no loader, so no not-ready window to report on).
     phase: str | None = None
+
+
+# --------------------------------------------------------------------------------------------------
+# JSON -> numpy conversion
+# --------------------------------------------------------------------------------------------------
 
 
 def _from_base64(

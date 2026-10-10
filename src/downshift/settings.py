@@ -98,7 +98,8 @@ BACKEND = _env_choice("DOWNSHIFT_BACKEND", "auto", ("auto", "onnxruntime", "torc
 WARMUP = _env_int("DOWNSHIFT_WARMUP", 3)
 SAMPLES = _env_int("DOWNSHIFT_SAMPLES", DEFAULT_SAMPLES)
 
-# 0 means "let ONNX Runtime pick" (its own default: physical cores for intra-op, 1 for inter-op).
+# 0 means "the backend's default" (ONNX Runtime: physical cores for intra-op, 1 for inter-op;
+# torch: its own thread count). Intra-op applies to both backends, inter-op to ONNX Runtime only.
 INTRA_OP_THREADS = _env_int("DOWNSHIFT_INTRA_OP_THREADS", 0)
 INTER_OP_THREADS = _env_int("DOWNSHIFT_INTER_OP_THREADS", 0)
 
@@ -114,11 +115,11 @@ MAX_INPUT_BYTES = _env_int("DOWNSHIFT_MAX_INPUT_BYTES", DEFAULT_MAX_INPUT_BYTES)
 # Largest request body the server will read before parsing it as JSON; bigger ones get a 413.
 MAX_BODY_BYTES = _env_int("DOWNSHIFT_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES)
 
-# Inferences allowed to run at once per worker process. Measured on all-MiniLM-L6-v2, batch 8,
-# 8 concurrent clients: 52 req/s at 1, 134 req/s at 4. Small encoders usually gain from 2-4,
-# because one small inference does not fill every core; a large model that already does gains
-# nothing. Each extra concurrent inference holds its own activation memory.
-MAX_CONCURRENCY = _env_int("DOWNSHIFT_MAX_CONCURRENCY", 1)
+# Inferences allowed to run at once per worker process. Measured with 4-8 concurrent clients:
+# all-MiniLM-L6-v2 (batch 8) 52 req/s at 1, 134 at 4; Qwen3-Embedding-0.6B (one query) 7.2
+# at 1, 14.6 at 4, with no slower single request. One inference rarely fills every core. Each
+# extra concurrent inference holds its own activation memory; set 1 to cap it.
+MAX_CONCURRENCY = _env_int("DOWNSHIFT_MAX_CONCURRENCY", 4)
 
 # "threadpool" runs every request's parse, inference and encode on worker threads; "inline"
 # runs small JSON bodies on the event loop itself, which only pays off for very fast models.

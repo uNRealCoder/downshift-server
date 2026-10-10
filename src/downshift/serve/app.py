@@ -1,6 +1,5 @@
 """FastAPI app over a ServingState. The same routes regardless of which backend is behind it."""
 
-import asyncio
 import contextvars
 import hmac
 import logging
@@ -10,33 +9,24 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import asdict
-from functools import partial
 from typing import Any
 
-import orjson
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
-from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 import downshift
-from downshift.core.phase import CURRENT_PROGRESS, LoadProgress, Phase
+from downshift.core.phase import CURRENT_PROGRESS, LoadProgress
 from downshift.logs import request_id_var
-from downshift.serve.codec import decode_safetensors
 from downshift.serve.engine import ServingState
-from downshift.serve.graphs import GRAPH_COUNTS, GRAPH_INPUTS, GRAPH_TENSORS
-from downshift.serve.metrics import Metrics
 from downshift.serve.middleware import load_middleware
 from downshift.serve.options import ExecutionChoice
 from downshift.serve.predict import (
     BINARY_REQUEST_TYPES,
-    PREDICT_PATHS,
     SAFETENSORS_MEDIA_TYPE,
     NumpyJSONResponse,
-    QueueTimeout,
-    as_batch,
     run_predict,
 )
 from downshift.serve.schemas import (
@@ -47,11 +37,10 @@ from downshift.serve.schemas import (
     PredictRequest,
     PredictResponse,
     ReadyResponse,
-    RequestOutputEncoding,
     SchemaResponse,
     VerdictInfo,
 )
-from downshift.settings import API_KEY, DEFAULT_MAX_BODY_BYTES
+from downshift.settings import API_KEY
 from downshift.sources import LABEL_KINDS, display_source, hide_paths
 
 logger = logging.getLogger("downshift.serve")
@@ -61,50 +50,6 @@ NOT_READY_RETRY_AFTER = 2  # seconds a client should wait before asking again
 
 # Probes: exempt from the API key, and logged at DEBUG so they don't flood the default output.
 _PROBE_PATHS = frozenset({"/health", "/ready"})
-# Not logged per request: a scraper hits /metrics every few seconds. Unlike the probes it
-# stays behind the API key.
-_UNLOGGED_PATHS = _PROBE_PATHS | {"/metrics"}
-
-
-class _QueueSlot:
-    """One request's share of the `queued` gauge: counted from admission until inference
-    starts (or the request ends first), and left exactly once whichever comes first."""
-
-    def __init__(self, gauge: Any) -> None:
-        self._gauge = gauge
-        self._lock = threading.Lock()
-        self._waiting = True
-        gauge.inc()
-
-    def leave(self) -> None:
-        with self._lock:
-            if not self._waiting:
-                return
-            self._waiting = False
-        self._gauge.dec()
-
-
-def _reject(request: Request, reason: str) -> None:
-    request.app.state.metrics.reject(reason)
-
-
-def _publish_state(metrics: Metrics, current: ServingState) -> None:
-    """What `ready`, `info`, `boot_seconds` and `concurrency` say once a model is serving."""
-    adapter = current.verdict.model_family
-    metrics.set_info(
-        version=downshift.__version__,
-        source=current.source,
-        backend=current.backend.name,
-        verdict=str(current.verdict.status),
-        execution=current.execution.value,
-        adapter=adapter,
-    )
-    for phase in Phase:
-        seconds = current.timings.get(phase)
-        if seconds is not None:
-            metrics.boot_seconds.labels(phase.value).set(seconds)
-    metrics.concurrency.set(current.options.max_concurrency)
-    metrics.ready.set(1 if current.ready else 0)
 
 
 def _route_path(scope: Scope) -> str:
@@ -113,41 +58,6 @@ def _route_path(scope: Scope) -> str:
     still count as the /health probe."""
     path: str = scope["path"]
     return path.removeprefix(scope.get("root_path", ""))
-
-
-class _OrjsonRequest(Request):
-    def stash(self, parsed: Any, parse_start: float) -> None:
-        """Keep `parsed` as the body json() returns, and its time as the request's `parse`."""
-        self._json = parsed
-        self.state.parse_ms = (time.perf_counter() - parse_start) * 1000
-
-    async def json(self) -> Any:
-        if not hasattr(self, "_json"):
-            parse_start = time.perf_counter()
-            self.stash(orjson.loads(await self.body()), parse_start)
-        return self._json
-
-    async def parse_in(self, executor: Any) -> None:
-        """Pre-parse the body in `executor`, off the event loop; json() (called later, as
-        part of FastAPI's own request-body-to-Pydantic resolution) then just returns the
-        cached result instead of doing the parse itself. Used for the predict routes (P3):
-        without this, a body near --max-body-bytes runs orjson.loads() straight on the loop,
-        stalling /health, /ready and every other in-flight request for however long that
-        takes.
-
-        Malformed JSON is left for json() to raise the usual way: self._json stays unset, so
-        FastAPI's own request-body-to-Pydantic resolution calls json() itself and gets the
-        same orjson.JSONDecodeError (a json.JSONDecodeError subclass) it already turns into a
-        422 - paying for a second, synchronous parse only on that error path.
-        """
-        parse_start = time.perf_counter()
-        body = await self.body()
-        loop = asyncio.get_running_loop()
-        try:
-            parsed = await loop.run_in_executor(executor, orjson.loads, body)
-        except ValueError:
-            return
-        self.stash(parsed, parse_start)
 
 
 def _body_too_large(observed: int, limit: int) -> JSONResponse:
@@ -193,166 +103,102 @@ async def _read_body_limited(request: Request, limit: int) -> bytes | JSONRespon
     return b"".join(chunks)
 
 
-# Largest declared body --execution inline will parse on the event loop.
+# Largest body --execution inline will parse on the event loop; a chunked one (no
+# Content-Length) always takes the pools.
 INLINE_MAX_BODY_BYTES = 64 * 1024
-
-
-async def _try_inline(
-    wrapped: _OrjsonRequest, state: ServingState, content_length: str | None
-) -> bool:
-    """--execution inline: parse a small JSON tensor body right here on the loop and mark the
-    request so run_predict prepares, infers and encodes it on the loop too. A chunked body
-    (no Content-Length), a larger one, a non-JSON content type or a `text` request returns
-    False and takes the pools; the body is already buffered by then, so nothing is re-read."""
-    if (
-        state.execution != ExecutionChoice.inline
-        or content_length is None
-        or not content_length.isdigit()
-        or int(content_length) > INLINE_MAX_BODY_BYTES
-        or "json" not in wrapped.headers.get("content-type", "").lower()
-    ):
-        return False
-    parse_start = time.perf_counter()
-    try:
-        parsed = orjson.loads(await wrapped.body())
-    except ValueError:
-        return False
-    if not isinstance(parsed, dict) or parsed.get("text") is not None:
-        return False
-    wrapped.stash(parsed, parse_start)
-    wrapped.state.inline = True
-    return True
 
 
 _UNSUPPORTED_MEDIA_TYPE = (
     "unsupported Content-Type; send JSON (application/json) or safetensors "
     f"({SAFETENSORS_MEDIA_TYPE}, or application/octet-stream)"
 )
-_GRAPH_TENSOR_NAMES = frozenset((*GRAPH_TENSORS, *GRAPH_COUNTS))
 
 
 def _content_type(request: Request) -> str:
     return request.headers.get("content-type", "").split(";")[0].strip().lower()
 
 
-async def _load_binary(
-    wrapped: _OrjsonRequest, state: ServingState, path: str, body: bytes
-) -> None:
-    """Decode a safetensors body in the prep pool (its time is the request's `parse`) and hand
-    the arrays to the endpoint as request.state.tensors, with the __metadata__ output_encoding
-    as request.state.output_encoding. The body is then emptied, so FastAPI has nothing to
-    parse and the endpoint's JSON model comes through as None."""
-    parse_start = time.perf_counter()
-    loop = asyncio.get_running_loop()
-    try:
-        arrays, metadata = await loop.run_in_executor(
-            state.prep_executor,
-            partial(decode_safetensors, body, max_input_bytes=state.options.max_input_bytes),
-        )
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    if "text" in metadata:
-        raise HTTPException(400, "text is JSON only; a safetensors body carries tensors")
-    graph = path == "/predict/graph"
-    allowed = _GRAPH_TENSOR_NAMES if graph else frozenset(state.input_names)
-    unknown = [name for name in arrays if name not in allowed]
-    if unknown:
-        raise HTTPException(
-            400, f"unknown tensor name {unknown[0]!r:.64}; this route takes {sorted(allowed)}"
-        )
-    encoding = metadata.get("output_encoding")
-    try:
-        wrapped.state.output_encoding = RequestOutputEncoding(encoding) if encoding else None
-    except ValueError:
-        raise HTTPException(
-            400,
-            f"unknown output_encoding {encoding!r:.64} in __metadata__; this route takes "
-            f"{[e.value for e in RequestOutputEncoding]}",
-        ) from None
-    wrapped.state.tensors = arrays
-    wrapped.state.parse_ms = (time.perf_counter() - parse_start) * 1000
-    wrapped._body = b""
+async def _predict(
+    request: Request,
+    state: ServingState,
+    graph: bool,
+    admitted_at: float,
+) -> Response:
+    """An admitted predict: content type, --max-body-bytes, then run_predict on the raw body.
+
+    A Content-Length over the limit is refused without reading the body; a chunked body is
+    read as it lands and refused the moment its running total passes the limit (P2), not
+    after the whole body arrived. The per-stage timings live in the scope's state, where
+    RequestIdMiddleware reads them back for the request line (U1)."""
+    content_type = _content_type(request)
+    binary = content_type in BINARY_REQUEST_TYPES
+    if content_type and not binary and "json" not in content_type:
+        return JSONResponse({"detail": _UNSUPPORTED_MEDIA_TYPE}, status_code=415)
+    limit = state.options.max_body_bytes
+    content_length = request.headers.get("content-length")
+    if content_length is not None and content_length.isdigit():
+        if int(content_length) > limit:
+            return _body_too_large(int(content_length), limit)
+        body = await request.body()
+    else:
+        read = await _read_body_limited(request, limit)
+        if isinstance(read, JSONResponse):
+            return read
+        body = read
+
+    timings: dict[str, float] = {}
+    request.state.timings_ms = timings
+    return await run_predict(
+        state,
+        body,
+        graph=graph,
+        binary=binary,
+        inline=state.execution == ExecutionChoice.inline
+        and not binary
+        and content_length is not None
+        and len(body) <= INLINE_MAX_BODY_BYTES,
+        admitted_at=admitted_at,
+        timings_ms=timings,
+        accept_safetensors=SAFETENSORS_MEDIA_TYPE in request.headers.get("accept", "").lower(),
+    )
 
 
-class OrjsonRoute(APIRoute):
-    """Parse request bodies with orjson: several times faster than stdlib on MiB-scale bodies.
+class PredictRoute(APIRoute):
+    """/predict and /predict/graph, served by _predict straight from the raw body rather than
+    by FastAPI's own body resolution: run_predict parses (orjson), validates (the route's
+    pydantic model) and prepares the body in one prep-pool hop, never on the loop (P3). The
+    endpoint functions only document the JSON body in the OpenAPI schema.
 
-    orjson's JSONDecodeError subclasses the stdlib one, so malformed JSON still maps to 422.
-    Also enforces --max-body-bytes: a Content-Length over the limit is rejected without
-    reading the body; without one (chunked), the body is read as it lands and the 413 fires
-    the moment the running total passes the limit (P2), not after the whole body arrived.
-
-    For /predict and /predict/graph, a slot is admitted *before* any of that (P1): an
-    overloaded server answers 503 without buffering or parsing a byte. The slot is released
-    in `finally`, so every exit (413, 400, a validation error, the client disconnecting)
-    releases it exactly once. Once the body is in hand, orjson.loads() itself also runs in
-    state.executor rather than on the loop (P3): a body near --max-body-bytes would otherwise
-    block /health, /ready and every other in-flight request for the parse.
+    A slot is admitted first (P1): an overloaded server answers 503 without buffering or
+    parsing a byte. It is released in `finally`, so every exit (413, 400, a validation error,
+    the client disconnecting) releases it exactly once.
     """
 
     def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
-        handler = super().get_route_handler()
-        is_predict = self.path in PREDICT_PATHS
+        graph = self.path == "/predict/graph"
 
         async def route_handler(request: Request) -> Response:
-            current: ServingState | None = request.app.state.serving
-            # Before the loader lands there is no ServingState to read a limit from yet;
-            # fall back to the default so a large body is still rejected before parsing.
-            limit = (
-                current.options.max_body_bytes if current is not None else DEFAULT_MAX_BODY_BYTES
-            )
-            content_type = _content_type(request) if is_predict else ""
-            binary = content_type in BINARY_REQUEST_TYPES
-            wrapped = _OrjsonRequest(request.scope, request.receive)
-
-            metrics: Metrics = request.app.state.metrics
-            admitted = False
-            slot: _QueueSlot | None = None
-            if is_predict:
-                if current is None:
-                    metrics.reject("not_ready")
-                    raise _not_ready_error()
-                if not current.try_admit():
-                    metrics.reject("capacity")
-                    raise _capacity_error(current)
-                admitted = True
-                metrics.in_flight.inc()
-                slot = _QueueSlot(metrics.queued)
-                wrapped.state.admitted_at = time.monotonic()
-                wrapped.state.on_infer_start = slot.leave
-
+            state: ServingState | None = request.app.state.serving
+            if state is None:
+                raise _not_ready_error()
+            if not state.try_admit():
+                raise _capacity_error(state)
             try:
-                if content_type and not binary and "json" not in content_type:
-                    return JSONResponse({"detail": _UNSUPPORTED_MEDIA_TYPE}, status_code=415)
-                content_length = request.headers.get("content-length")
-                if content_length is not None and content_length.isdigit():
-                    if int(content_length) > limit:
-                        metrics.reject("body_too_large")
-                        return _body_too_large(int(content_length), limit)
-                else:
-                    result = await _read_body_limited(request, limit)
-                    if isinstance(result, JSONResponse):
-                        metrics.reject("body_too_large")
-                        return result
-                    wrapped._body = result
-                if is_predict:
-                    assert current is not None
-                    if binary:
-                        await _load_binary(wrapped, current, self.path, await wrapped.body())
-                    elif not await _try_inline(wrapped, current, content_length):
-                        await wrapped.parse_in(current.prep_executor)
-                return await handler(wrapped)
-            except QueueTimeout:
-                metrics.reject("timeout")
-                raise
+                return await _predict(request, state, graph, time.monotonic())
             finally:
-                if admitted:
-                    assert current is not None and slot is not None
-                    slot.leave()
-                    metrics.in_flight.dec()
-                    current.release()
+                state.release()
 
         return route_handler
+
+
+async def predict(req: PredictRequest | None = None) -> Response:
+    """Never called (PredictRoute serves the route): documents the JSON body for OpenAPI."""
+    raise NotImplementedError
+
+
+async def predict_graph(req: GraphPredictRequest | None = None) -> Response:
+    """Never called (PredictRoute serves the route): documents the JSON body for OpenAPI."""
+    raise NotImplementedError
 
 
 # The predict routes: orjson response, and PredictResponse kept in the OpenAPI schema without
@@ -386,52 +232,8 @@ def require_serving(request: Request) -> ServingState:
     """
     current: ServingState | None = request.app.state.serving
     if current is None:
-        _reject(request, "not_ready")
         raise _not_ready_error()
     return current
-
-
-def _predict_context(request: Request) -> dict[str, Any]:
-    """run_predict's per-request keywords. The parse/codec/infer split dict it fills lives in
-    the scope's state, which is where RequestIdMiddleware reads it back for the request
-    line (U1)."""
-    timings: dict[str, float] = {}
-    request.state.timings_ms = timings
-    # Filled by a graph batch with graphs/nodes/edges, and with `rows` for every request.
-    graph_stats: dict[str, int] = {}
-    request.state.graph_stats = graph_stats
-    return {
-        "on_infer_start": getattr(request.state, "on_infer_start", None),
-        "admitted_at": request.state.admitted_at,
-        "parse_ms": getattr(request.state, "parse_ms", 0.0),
-        "inline": getattr(request.state, "inline", False),
-        "timings_ms": timings,
-        "tensors": getattr(request.state, "tensors", None),
-        "accept_safetensors": SAFETENSORS_MEDIA_TYPE in request.headers.get("accept", "").lower(),
-        "graph_stats": graph_stats,
-    }
-
-
-def _binary_encoding(request: Request) -> RequestOutputEncoding | None:
-    """A request with no JSON model: a decoded safetensors body, or else no body at all,
-    which is the same 422 FastAPI gives a required body that is missing."""
-    if getattr(request.state, "tensors", None) is None:
-        raise RequestValidationError(
-            [{"type": "missing", "loc": ("body",), "msg": "Field required", "input": None}]
-        )
-    encoding: RequestOutputEncoding | None = request.state.output_encoding
-    return encoding
-
-
-def _observe_predict(request: Request, graph: bool = False) -> None:
-    """The stage split and batch sizes of a predict that succeeded."""
-    metrics: Metrics = request.app.state.metrics
-    metrics.observe_stages(request.state.timings_ms)
-    stats = request.state.graph_stats
-    if "rows" in stats:
-        metrics.batch_size.observe(stats["rows"])
-    if graph:
-        metrics.graphs_per_request.observe(stats.get("graphs", 1))
 
 
 class RequestIdMiddleware:
@@ -448,12 +250,9 @@ class RequestIdMiddleware:
     INFO otherwise.
     """
 
-    def __init__(
-        self, app: ASGIApp, access_log: bool = True, metrics: Metrics | None = None
-    ) -> None:
+    def __init__(self, app: ASGIApp, access_log: bool = True) -> None:
         self.app = app
         self.access_log = access_log
-        self.metrics = metrics
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -483,11 +282,6 @@ class RequestIdMiddleware:
             raise
         finally:
             try:
-                if self.metrics is not None and status is not None:
-                    # scope["route"] is set by routing: the template, never the client's path,
-                    # so a scanner's random URLs cannot mint series.
-                    route = getattr(scope.get("route"), "path", None) or "unmatched"
-                    self.metrics.observe_request(route, status, time.perf_counter() - start)
                 if self.access_log and status is not None:
                     self._log(scope, status, (time.perf_counter() - start) * 1000, state)
             finally:
@@ -496,7 +290,7 @@ class RequestIdMiddleware:
     @staticmethod
     def _log(scope: Scope, status: int, duration_ms: float, state: dict[str, Any]) -> None:
         path = scope["path"]
-        if _route_path(scope) in _UNLOGGED_PATHS:
+        if _route_path(scope) in _PROBE_PATHS:
             level = logging.DEBUG
         elif status >= 400:
             level = logging.WARNING
@@ -525,10 +319,9 @@ class ApiKeyMiddleware:
     probe never needs the key.
     """
 
-    def __init__(self, app: ASGIApp, api_key: str | None, metrics: Metrics | None = None) -> None:
+    def __init__(self, app: ASGIApp, api_key: str | None) -> None:
         self.app = app
         self.api_key = api_key
-        self.metrics = metrics
         self._key_bytes = api_key.encode("utf-8") if api_key is not None else b""
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -543,8 +336,6 @@ class ApiKeyMiddleware:
         if scheme.lower() != "bearer" or not hmac.compare_digest(
             token.encode("latin-1"), self._key_bytes
         ):
-            if self.metrics is not None:
-                self.metrics.reject("auth")
             response = JSONResponse(
                 {"detail": "Authorization header is not set or incorrect"},
                 status_code=401,
@@ -577,9 +368,7 @@ def _loader_lifespan(
             # through every builder and the CLI's own loader closure.
             CURRENT_PROGRESS.set(progress)
             try:
-                loaded = loader()
-                _publish_state(app.state.metrics, loaded)
-                app.state.serving = loaded
+                app.state.serving = loader()
             except Exception:
                 # Not logged at error/exception level: a caller with a reporting path of its
                 # own (serve_cmd re-raises this on the main thread) would otherwise print the
@@ -625,8 +414,8 @@ def build_app(
     api_key = api_key or None
     if api_key is None:
         logger.warning(
-            "DOWNSHIFT_SERVER_API_KEY is not set, so the endpoints (including /metadata and "
-            "/metrics) are unauthenticated. Set it to require a fixed API key, or add your own "
+            "DOWNSHIFT_SERVER_API_KEY is not set, so the endpoints (including /metadata) are "
+            "unauthenticated. Set it to require a fixed API key, or add your own "
             "authentication middleware."
         )
 
@@ -635,20 +424,15 @@ def build_app(
         version=downshift.__version__,
         lifespan=_loader_lifespan(loader) if loader is not None else None,
     )
-    app.router.route_class = OrjsonRoute
     app.state.serving = state
-    metrics = Metrics()
-    app.state.metrics = metrics
-    if state is not None:
-        _publish_state(metrics, state)
     # Starlette makes the *last*-registered middleware the outermost layer, so registration
     # order here is back to front: load_middleware's user middleware goes on first (innermost,
     # right next to the routes, so it only ever sees authenticated traffic), ApiKeyMiddleware
     # next (the gate), and RequestIdMiddleware last (outermost, so access logging and the
     # X-Request-Id header still cover 401s and everything else uniformly).
     load_middleware(app, middleware)
-    app.add_middleware(ApiKeyMiddleware, api_key=api_key, metrics=metrics)
-    app.add_middleware(RequestIdMiddleware, access_log=access_log, metrics=metrics)
+    app.add_middleware(ApiKeyMiddleware, api_key=api_key)
+    app.add_middleware(RequestIdMiddleware, access_log=access_log)
 
     @app.exception_handler(Exception)
     async def _unhandled_exception(request: Request, exc: Exception) -> JSONResponse:
@@ -691,12 +475,6 @@ def build_app(
         status = 200 if current.ready else 503
         return JSONResponse({"ready": current.ready}, status_code=status)
 
-    @app.get("/metrics", include_in_schema=False)
-    async def metrics_endpoint(request: Request) -> Response:
-        # Served before the model is ready and never admission-controlled; behind the API key.
-        body, content_type = request.app.state.metrics.render()
-        return Response(body, media_type=content_type)
-
     @app.get("/metadata", response_model=MetadataResponse)
     async def metadata(current: ServingState = Depends(require_serving)) -> MetadataResponse:
         # Free-text fields quote the path an exception was handed (ORT's "Load model from
@@ -733,64 +511,9 @@ def build_app(
 
         return describe(current, f"{str(request.base_url).rstrip('/')}/predict")
 
-    # Each predict route's JSON body is its pydantic model; a safetensors body arrives decoded
-    # in request.state.tensors instead, with the model None (see _load_binary).
-    @app.post("/predict", **_PREDICT_ROUTE)
-    async def predict(
-        request: Request,
-        current: ServingState = Depends(require_serving),
-        req: PredictRequest | None = None,
-    ) -> Response:
-        if req is None:
-            response = await run_predict(
-                current, {}, _binary_encoding(request), **_predict_context(request)
-            )
-        else:
-            text = as_batch(req.text) if req.text is not None else None
-            response = await run_predict(
-                current,
-                req.inputs,
-                req.output_encoding,
-                text,
-                req.prompt_name,
-                **_predict_context(request),
-            )
-        _observe_predict(request)
-        return response
-
-    @app.post("/predict/graph", **_PREDICT_ROUTE)
-    async def predict_graph(
-        request: Request,
-        current: ServingState = Depends(require_serving),
-        req: GraphPredictRequest | None = None,
-    ) -> Response:
-        if not GRAPH_INPUTS <= set(current.input_names):
-            raise HTTPException(
-                400,
-                f"model is not graph-shaped: inputs are {list(current.input_names)}, "
-                "expected at least 'x' and 'edge_index'",
-            )
-        inputs: dict[str, Any] = {}
-        graphs = None
-        if req is None:
-            encoding = _binary_encoding(request)
-        else:
-            encoding = req.output_encoding
-            # No dtype hints needed: to_numpy takes the backend's declared dtype (int64 for
-            # edge_index on both backends), and integer lists default to int64 anyway.
-            if req.graphs is not None:
-                graphs = [
-                    {"x": g.x, "edge_index": g.edge_index, "edge_attr": g.edge_attr}
-                    for g in req.graphs
-                ]
-            else:
-                inputs = {"x": req.x, "edge_index": req.edge_index}
-                if req.edge_attr is not None:
-                    inputs["edge_attr"] = req.edge_attr
-        response = await run_predict(
-            current, inputs, encoding, graphs=graphs, **_predict_context(request)
+    for path, endpoint in (("/predict", predict), ("/predict/graph", predict_graph)):
+        app.router.add_api_route(
+            path, endpoint, methods=["POST"], route_class_override=PredictRoute, **_PREDICT_ROUTE
         )
-        _observe_predict(request, graph=True)
-        return response
 
     return app

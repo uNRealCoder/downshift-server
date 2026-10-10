@@ -197,7 +197,8 @@ def test_a_client_error_is_logged_at_warning(client, caplog):
     (record,) = _access_records(caplog)
     assert record.levelno == logging.WARNING
     assert record.status == 400
-    assert not hasattr(record, "timings_ms")
+    # Rejected while parsing in the prep pool: only the wait for that pool is logged.
+    assert set(record.timings_ms) == {"prep_wait"}
 
 
 def test_access_log_off_logs_nothing_but_still_echoes_the_request_id(mlp_state, caplog):
