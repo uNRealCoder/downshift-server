@@ -2,7 +2,7 @@
 text-serving throughput for each downshift version against a hand-rolled FastAPI + transformers
 server, with a /health probe running during every load window.
 
-  python -m bench.hf_models --out bench/results_hf_v0.5.0.json
+  python -m bench.hf_models --out bench/results/v0.5.0/results_hf.json
 
 Same request bytes and the same tokenizer files for every server. Each downshift variant runs once
 per `--targets` entry (the checkout and the pip-installed previous release).
@@ -27,14 +27,15 @@ from bench.run import (
     environment,
     free_port,
     run_load,
+    stage_split,
     stop_server,
     version_tuple,
     wait_ready,
 )
 
 MODELS = {
-    "all-MiniLM-L6-v2": "bench/all-MiniLM-L6-v2/all-MiniLM-L6-v2",
-    "prompt-guard-86m": "bench/LLAMA-GUARD",
+    "all-MiniLM-L6-v2": "bench/models/all-MiniLM-L6-v2",
+    "prompt-guard-86m": "bench/models/Prompt-Guard-86M",
 }
 SHORT = [
     "What is the capital of France?",
@@ -194,7 +195,7 @@ def compare(name: str, responses: dict[str, dict], ref_name: str) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="bench/results_hf.json")
+    ap.add_argument("--out", default="bench/scratch/results_hf.json")
     ap.add_argument("--targets", nargs="*", default=list(TARGETS), choices=TARGETS)
     ap.add_argument("--duration", type=float, default=5.0)
     ap.add_argument("--warmup", type=float, default=1.0)
@@ -204,6 +205,7 @@ def main() -> None:
     )
     ap.add_argument("--models", nargs="*", default=list(MODELS))
     args = ap.parse_args()
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
 
     versions = {t: target_version(t) for t in args.targets}
     out: dict = {"environment": environment(versions), "config": vars(args), "models": {}}
@@ -246,6 +248,9 @@ def main() -> None:
                     "ready_s": round(ready_s, 2),
                     "served_by": served_by,
                     "runs": [],
+                    "stages_short_b1": stage_split(
+                        port, json.dumps(PAYLOADS["short_b1"]).encode(), JSON
+                    ),
                 }
                 for pname, payload in PAYLOADS.items():
                     body = json.dumps(payload).encode()

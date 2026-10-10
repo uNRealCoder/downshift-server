@@ -1,7 +1,9 @@
-"""Turn the two results files into one Markdown report: naive vs previous release vs this one.
+"""Turn the two results files into one Markdown report: naive vs previous release vs this one,
+plus two long-format CSV files to draw charts from.
 
-  python -m bench.report --results bench/results_v0.5.0.json \
-      --hf-results bench/results_hf_v0.5.0.json --out bench/REPORT_v0.5.0.md
+  python -m bench.report --results bench/results/v0.5.0/results.json \
+      --hf-results bench/results/v0.5.0/results_hf.json --out bench/results/v0.5.0/REPORT.md \
+      --csv bench/results/v0.5.0/chart_runs.csv --stages-csv bench/results/v0.5.0/chart_stages.csv
 
 Every number in the report is read from the JSON; nothing is typed in by hand.
 """
@@ -9,6 +11,7 @@ Every number in the report is read from the JSON; nothing is typed in by hand.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 from collections import defaultdict
 from pathlib import Path
@@ -36,6 +39,16 @@ def name(variant: str, version: str | None) -> str:
     if version is None:
         return NAIVE_NAMES[variant]
     return f"downshift {version}{DOWNSHIFT_NAMES[variant]}"
+
+
+def plain(variant: str, version: str | None) -> str:
+    """name() without Markdown, for CSV labels and chart legends."""
+    return name(variant, version).replace("`", "")
+
+
+# Server-Timing stages in pipeline order. 0.4.0 reports `codec` (decode and encode together)
+# where 0.5.0 splits prep_wait, prep, infer_wait and encode.
+STAGE_ORDER = ("parse", "codec", "prep_wait", "prep", "infer_wait", "infer", "encode")
 
 
 def server_order(keys, versions: list[str]) -> list[tuple[str, str | None]]:
@@ -287,6 +300,174 @@ def hf_section(hf: dict) -> list[str]:
     return out
 
 
+def stage_entries(report: dict, hf: dict | None) -> list[dict]:
+    """Every stage split in both files, flattened: model, server, encoding and the split."""
+    entries = [
+        {"suite": "fixture", "model": e["case"], "server": plain(e["variant"], e["version"]), **e}
+        for e in report.get("stages", [])
+    ]
+    for model, entry in (hf or {}).get("models", {}).items():
+        for srv in entry["servers"].values():
+            split = srv.get("stages_short_b1")
+            if split:
+                entries.append(
+                    {
+                        "suite": "hf",
+                        "model": model,
+                        "server": plain(srv["variant"], srv["version"]),
+                        "variant": srv["variant"],
+                        "version": srv["version"],
+                        "encoding": "json",
+                        "batch": 1,
+                        **split,
+                    }
+                )
+    return entries
+
+
+def stage_table(entries: list[dict]) -> str:
+    """One row per server: client total, each Server-Timing stage, and the unaccounted rest."""
+    present = [st for st in STAGE_ORDER if any(st in e["stages_ms"] for e in entries)]
+    rows = [
+        [e["server"], fmt(e["client_ms"], "{:.2f}")]
+        + [fmt(e["stages_ms"].get(st), "{:.2f}") for st in present]
+        + [fmt(e["unaccounted_ms"], "{:.2f}")]
+        for e in entries
+    ]
+    return table(rows, ["server", "total ms", *present, "HTTP + hand-offs ms"])
+
+
+def stages_section(report: dict, hf: dict | None) -> list[str]:
+    rank = {v: i for i, v in enumerate([*NAIVE_NAMES, *DOWNSHIFT_NAMES])}
+    by_model: dict[str, list[dict]] = defaultdict(list)
+    for e in sorted(
+        stage_entries(report, hf),
+        key=lambda e: (e["version"] is not None, e["version"] or "", rank[e["variant"]]),
+    ):
+        by_model[e["model"]].append(e)
+    if not by_model:
+        return []
+    out = ["## Where the time goes\n"]
+    out.append(
+        "Median of 300 sequential requests on one keep-alive connection, batch 1 (HF: one "
+        "sentence). `total` is what the client measured; the stage columns are the server's own "
+        "`Server-Timing`; `HTTP + hand-offs` is the rest: uvicorn, routing, middleware and thread "
+        "hand-offs back to the event loop. Naive servers have no `Server-Timing`, so their total "
+        "is all in the last column. 0.4.0 reports one `codec` stage (decode and encode); 0.5.0 "
+        "splits it, and its `encode` includes serializing the response.\n"
+    )
+    for model, entries in by_model.items():
+        out.append(f"### {model}\n")
+        out.append(stage_table(entries))
+    return out
+
+
+RUN_FIELDS = [
+    "suite",
+    "model",
+    "server",
+    "variant",
+    "version",
+    "backend",
+    "encoding",
+    "payload",
+    "batch",
+    "workers",
+    "concurrency",
+    "throughput_rps",
+    "rows_per_s",
+    "p50_ms",
+    "p95_ms",
+    "p99_ms",
+    "mean_ms",
+    "errors",
+    "window_s",
+    "request_bytes",
+    "ready_s",
+    "max_abs_err",
+    "health_p50_ms",
+    "health_p99_ms",
+]
+
+
+def run_rows(report: dict, hf: dict | None) -> list[dict]:
+    """One row per measured load window, fixture, --workers and HF alike (long format)."""
+    rows = []
+    for suite, key in (("fixture", "runs"), ("workers", "workers_runs")):
+        for r in report.get(key, []):
+            workers = r.get("workers", 1)
+            server = plain(r["variant"], r["version"])
+            rows.append(
+                {
+                    **r,
+                    "suite": suite,
+                    "model": r["case"],
+                    "server": f"{server} --workers {workers}" if suite == "workers" else server,
+                    "version": r["version"] or "",
+                    "workers": workers,
+                    "rows_per_s": round(r["throughput_rps"] * r["batch"], 1),
+                    "ready_s": r.get("server_ready_s", r.get("boot_s")),
+                }
+            )
+    for model, entry in (hf or {}).get("models", {}).items():
+        for srv in entry["servers"].values():
+            for r in srv["runs"]:
+                batch = int(r["payload"].rsplit("_b", 1)[1])
+                rows.append(
+                    {
+                        **r,
+                        "suite": "hf",
+                        "model": model,
+                        "server": plain(srv["variant"], srv["version"]),
+                        "variant": srv["variant"],
+                        "version": srv["version"] or "",
+                        "backend": srv["served_by"],
+                        "encoding": "json",
+                        "batch": batch,
+                        "workers": 1,
+                        "rows_per_s": round(r["throughput_rps"] * batch, 1),
+                        "ready_s": srv["ready_s"],
+                        "health_p50_ms": r["health"].get("p50_ms"),
+                        "health_p99_ms": r["health"].get("p99_ms"),
+                    }
+                )
+    return rows
+
+
+STAGE_FIELDS = [
+    "suite",
+    "model",
+    "server",
+    "variant",
+    "version",
+    "encoding",
+    "batch",
+    "client_ms",
+    "stage",
+    "ms",
+]
+
+
+def stage_rows(report: dict, hf: dict | None) -> list[dict]:
+    """One row per (server, stage), with the unaccounted rest as stage `http_and_handoffs`:
+    the shape a stacked bar chart wants."""
+    rows = []
+    for e in stage_entries(report, hf):
+        base = {k: e.get(k) for k in STAGE_FIELDS[:8]}
+        base["version"] = base["version"] or ""
+        parts = [(st, e["stages_ms"][st]) for st in STAGE_ORDER if st in e["stages_ms"]]
+        for stage, ms in [*parts, ("http_and_handoffs", e["unaccounted_ms"])]:
+            rows.append({**base, "stage": stage, "ms": ms})
+    return rows
+
+
+def write_csv(path: str, fields: list[str], rows: list[dict]) -> None:
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore", lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def build(report: dict, hf: dict | None) -> str:
     env = report["environment"]
     targets = env["downshift_targets"]
@@ -308,19 +489,28 @@ def build(report: dict, hf: dict | None) -> str:
     out += fixture_section(report)
     if hf:
         out += hf_section(hf)
+    out += stages_section(report, hf)
     return "\n".join(out)
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--results", default="bench/results.json")
+    ap.add_argument("--results", default="bench/scratch/results.json")
     ap.add_argument("--hf-results", default=None)
-    ap.add_argument("--out", default="bench/REPORT.md")
+    ap.add_argument("--out", default="bench/scratch/REPORT.md")
+    ap.add_argument("--csv", default=None, help="Every load window as one CSV row")
+    ap.add_argument("--stages-csv", default=None, help="Every (server, stage) as one CSV row")
     args = ap.parse_args()
     report = json.loads(Path(args.results).read_text())
     hf = json.loads(Path(args.hf_results).read_text()) if args.hf_results else None
-    Path(args.out).write_text(build(report, hf), encoding="utf-8")
+    Path(args.out).write_text(build(report, hf), encoding="utf-8", newline="\n")
     print(f"wrote {args.out}")
+    if args.csv:
+        write_csv(args.csv, RUN_FIELDS, run_rows(report, hf))
+        print(f"wrote {args.csv}")
+    if args.stages_csv:
+        write_csv(args.stages_csv, STAGE_FIELDS, stage_rows(report, hf))
+        print(f"wrote {args.stages_csv}")
 
 
 if __name__ == "__main__":

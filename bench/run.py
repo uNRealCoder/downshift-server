@@ -1,6 +1,6 @@
 """Run the fixture and compute-heavy matrix and write one results JSON.
 
-  python -m bench.run --out bench/results_v0.5.0.json
+  python -m bench.run --out bench/results/v0.5.0/results.json
 
 For each case it starts one server process per variant, waits for it to be ready, then sweeps
 concurrency and batch size against it. The naive servers run once; every downshift variant runs
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import http.client
 import json
 import os
 import socket
@@ -98,6 +99,9 @@ def wait_ready(
             time.sleep(0.25)
         except (urllib.error.URLError, ConnectionError, OSError, TimeoutError):
             time.sleep(0.25)
+    # Not left running: a hung server (and its --workers children) would hold memory and CPU
+    # through every later measurement.
+    stop_server(proc)
     raise TimeoutError(f"server on port {port} never became ready")
 
 
@@ -181,6 +185,39 @@ def run_load(
         "p99_ms": round(percentile(latencies, 0.99), 3),
         "mean_ms": round(statistics.fmean(latencies), 3) if latencies else float("nan"),
         "request_bytes": results[0]["request_bytes"],
+    }
+
+
+def stage_split(port: int, body: bytes, headers: dict, n: int = 300) -> dict:
+    """Where one request's time goes: `n` sequential requests on one keep-alive connection
+    (after 30 unmeasured), medians of the client-measured total, of each Server-Timing stage,
+    and of the remainder no stage accounts for (HTTP, routing, thread hand-offs). A server
+    without Server-Timing (the naive ones) gets the client total only."""
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=120)
+    rows: list[tuple[float, dict[str, float]]] = []
+    for i in range(n + 30):
+        start = time.perf_counter()
+        conn.request("POST", "/predict", body=body, headers=headers)
+        resp = conn.getresponse()
+        resp.read()
+        ms = (time.perf_counter() - start) * 1000
+        timing: dict[str, float] = {}
+        for part in (resp.getheader("server-timing") or "").split(","):
+            stage, _, dur = part.strip().partition(";dur=")
+            if dur:
+                timing[stage] = float(dur)
+        if i >= 30:
+            rows.append((ms, timing))
+    conn.close()
+    stages = {
+        stage: round(statistics.median(t.get(stage, 0.0) for _, t in rows), 3)
+        for stage in dict.fromkeys(k for _, t in rows for k in t)
+    }
+    return {
+        "requests": n,
+        "client_ms": round(statistics.median(ms for ms, _ in rows), 3),
+        "stages_ms": stages,
+        "unaccounted_ms": round(statistics.median(ms - sum(t.values()) for ms, t in rows), 3),
     }
 
 
@@ -349,7 +386,7 @@ def sweep(port, case, steps, encoding, args, label: str, **tags) -> list[dict]:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="bench/results.json")
+    ap.add_argument("--out", default="bench/scratch/results.json")
     ap.add_argument("--targets", nargs="*", default=list(TARGETS), choices=TARGETS)
     ap.add_argument("--duration", type=float, default=3.0)
     ap.add_argument("--warmup", type=float, default=1.0)
@@ -385,6 +422,7 @@ def main() -> None:
         "verdicts": {},
         "inproc": [],
         "runs": [],
+        "stages": [],
         "workers_runs": [],
     }
 
@@ -469,6 +507,23 @@ def main() -> None:
                 print(f"  !! {label} failed to start: {exc}", flush=True)
                 continue
             try:
+                body, headers = encode_request(make_inputs(case.name, 1, seed=7), encoding)
+                split = stage_split(port, body, headers)
+                report["stages"].append(
+                    {
+                        "case": case_name,
+                        "variant": variant,
+                        "version": version,
+                        "encoding": encoding,
+                        "batch": 1,
+                        **split,
+                    }
+                )
+                print(
+                    f"    {label:<34} stages c1: {split['client_ms']:.3f} ms = "
+                    f"{split['stages_ms']} + {split['unaccounted_ms']:.3f} unaccounted",
+                    flush=True,
+                )
                 report["runs"] += sweep(
                     port,
                     case,

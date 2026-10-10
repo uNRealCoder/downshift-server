@@ -1,0 +1,369 @@
+suite,model,server,variant,version,encoding,batch,client_ms,stage,ms
+fixture,clean_mlp,naive FastAPI + torch,naive_torch,,json,1,0.77,http_and_handoffs,0.77
+fixture,clean_mlp,naive FastAPI + ONNX Runtime,naive_onnx,,json,1,0.686,http_and_handoffs,0.686
+fixture,clean_mlp,"naive torch, async def",naive_torch_async,,json,1,0.543,http_and_handoffs,0.543
+fixture,clean_mlp,downshift 0.5.0,downshift,0.5.0,json,1,1.001,parse,0.02
+fixture,clean_mlp,downshift 0.5.0,downshift,0.5.0,json,1,1.001,prep_wait,0.04
+fixture,clean_mlp,downshift 0.5.0,downshift,0.5.0,json,1,1.001,prep,0.02
+fixture,clean_mlp,downshift 0.5.0,downshift,0.5.0,json,1,1.001,infer_wait,0.04
+fixture,clean_mlp,downshift 0.5.0,downshift,0.5.0,json,1,1.001,infer,0.19
+fixture,clean_mlp,downshift 0.5.0,downshift,0.5.0,json,1,1.001,encode,0.03
+fixture,clean_mlp,downshift 0.5.0,downshift,0.5.0,json,1,1.001,http_and_handoffs,0.634
+fixture,clean_mlp,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.033,parse,0.02
+fixture,clean_mlp,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.033,prep_wait,0.04
+fixture,clean_mlp,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.033,prep,0.04
+fixture,clean_mlp,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.033,infer_wait,0.04
+fixture,clean_mlp,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.033,infer,0.18
+fixture,clean_mlp,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.033,encode,0.03
+fixture,clean_mlp,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.033,http_and_handoffs,0.658
+fixture,clean_mlp,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.059,parse,0.04
+fixture,clean_mlp,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.059,prep_wait,0.04
+fixture,clean_mlp,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.059,prep,0.02
+fixture,clean_mlp,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.059,infer_wait,0.05
+fixture,clean_mlp,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.059,infer,0.19
+fixture,clean_mlp,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.059,encode,0.04
+fixture,clean_mlp,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.059,http_and_handoffs,0.66
+fixture,clean_mlp,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,0.739,parse,0.02
+fixture,clean_mlp,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,0.739,prep_wait,0.0
+fixture,clean_mlp,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,0.739,prep,0.02
+fixture,clean_mlp,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,0.739,infer_wait,0.0
+fixture,clean_mlp,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,0.739,infer,0.19
+fixture,clean_mlp,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,0.739,encode,0.03
+fixture,clean_mlp,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,0.739,http_and_handoffs,0.464
+fixture,clean_mlp,downshift 0.4.0,downshift,0.4.0,json,1,1.272,parse,0.16
+fixture,clean_mlp,downshift 0.4.0,downshift,0.4.0,json,1,1.272,codec,0.05
+fixture,clean_mlp,downshift 0.4.0,downshift,0.4.0,json,1,1.272,infer,0.22
+fixture,clean_mlp,downshift 0.4.0,downshift,0.4.0,json,1,1.272,http_and_handoffs,0.845
+fixture,clean_mlp,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,1.161,parse,0.145
+fixture,clean_mlp,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,1.161,codec,0.06
+fixture,clean_mlp,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,1.161,infer,0.21
+fixture,clean_mlp,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,1.161,http_and_handoffs,0.752
+fixture,dynamic_batch_cnn,naive FastAPI + torch,naive_torch,,json,1,1.433,http_and_handoffs,1.433
+fixture,dynamic_batch_cnn,naive FastAPI + ONNX Runtime,naive_onnx,,json,1,1.25,http_and_handoffs,1.25
+fixture,dynamic_batch_cnn,"naive torch, async def",naive_torch_async,,json,1,1.109,http_and_handoffs,1.109
+fixture,dynamic_batch_cnn,downshift 0.5.0,downshift,0.5.0,json,1,1.237,parse,0.07
+fixture,dynamic_batch_cnn,downshift 0.5.0,downshift,0.5.0,json,1,1.237,prep_wait,0.04
+fixture,dynamic_batch_cnn,downshift 0.5.0,downshift,0.5.0,json,1,1.237,prep,0.1
+fixture,dynamic_batch_cnn,downshift 0.5.0,downshift,0.5.0,json,1,1.237,infer_wait,0.05
+fixture,dynamic_batch_cnn,downshift 0.5.0,downshift,0.5.0,json,1,1.237,infer,0.26
+fixture,dynamic_batch_cnn,downshift 0.5.0,downshift,0.5.0,json,1,1.237,encode,0.04
+fixture,dynamic_batch_cnn,downshift 0.5.0,downshift,0.5.0,json,1,1.237,http_and_handoffs,0.687
+fixture,dynamic_batch_cnn,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.17,parse,0.03
+fixture,dynamic_batch_cnn,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.17,prep_wait,0.04
+fixture,dynamic_batch_cnn,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.17,prep,0.05
+fixture,dynamic_batch_cnn,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.17,infer_wait,0.05
+fixture,dynamic_batch_cnn,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.17,infer,0.3
+fixture,dynamic_batch_cnn,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.17,encode,0.04
+fixture,dynamic_batch_cnn,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.17,http_and_handoffs,0.687
+fixture,dynamic_batch_cnn,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.159,parse,0.05
+fixture,dynamic_batch_cnn,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.159,prep_wait,0.05
+fixture,dynamic_batch_cnn,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.159,prep,0.02
+fixture,dynamic_batch_cnn,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.159,infer_wait,0.05
+fixture,dynamic_batch_cnn,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.159,infer,0.24
+fixture,dynamic_batch_cnn,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.159,encode,0.04
+fixture,dynamic_batch_cnn,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.159,http_and_handoffs,0.688
+fixture,dynamic_batch_cnn,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,0.978,parse,0.06
+fixture,dynamic_batch_cnn,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,0.978,prep_wait,0.0
+fixture,dynamic_batch_cnn,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,0.978,prep,0.08
+fixture,dynamic_batch_cnn,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,0.978,infer_wait,0.0
+fixture,dynamic_batch_cnn,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,0.978,infer,0.25
+fixture,dynamic_batch_cnn,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,0.978,encode,0.04
+fixture,dynamic_batch_cnn,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,0.978,http_and_handoffs,0.558
+fixture,dynamic_batch_cnn,downshift 0.4.0,downshift,0.4.0,json,1,1.561,parse,0.225
+fixture,dynamic_batch_cnn,downshift 0.4.0,downshift,0.4.0,json,1,1.561,codec,0.12
+fixture,dynamic_batch_cnn,downshift 0.4.0,downshift,0.4.0,json,1,1.561,infer,0.29
+fixture,dynamic_batch_cnn,downshift 0.4.0,downshift,0.4.0,json,1,1.561,http_and_handoffs,0.932
+fixture,dynamic_batch_cnn,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,1.401,parse,0.16
+fixture,dynamic_batch_cnn,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,1.401,codec,0.08
+fixture,dynamic_batch_cnn,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,1.401,infer,0.305
+fixture,dynamic_batch_cnn,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,1.401,http_and_handoffs,0.86
+fixture,gnn_gcn,naive FastAPI + torch,naive_torch,,json,1,1.745,http_and_handoffs,1.745
+fixture,gnn_gcn,naive FastAPI + ONNX Runtime,naive_onnx,,json,1,0.928,http_and_handoffs,0.928
+fixture,gnn_gcn,"naive torch, async def",naive_torch_async,,json,1,1.306,http_and_handoffs,1.306
+fixture,gnn_gcn,downshift 0.5.0,downshift,0.5.0,json,1,1.735,parse,0.04
+fixture,gnn_gcn,downshift 0.5.0,downshift,0.5.0,json,1,1.735,prep_wait,0.06
+fixture,gnn_gcn,downshift 0.5.0,downshift,0.5.0,json,1,1.735,prep,0.07
+fixture,gnn_gcn,downshift 0.5.0,downshift,0.5.0,json,1,1.735,infer_wait,0.05
+fixture,gnn_gcn,downshift 0.5.0,downshift,0.5.0,json,1,1.735,infer,0.46
+fixture,gnn_gcn,downshift 0.5.0,downshift,0.5.0,json,1,1.735,encode,0.06
+fixture,gnn_gcn,downshift 0.5.0,downshift,0.5.0,json,1,1.735,http_and_handoffs,0.97
+fixture,gnn_gcn,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.349,parse,0.03
+fixture,gnn_gcn,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.349,prep_wait,0.05
+fixture,gnn_gcn,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.349,prep,0.08
+fixture,gnn_gcn,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.349,infer_wait,0.05
+fixture,gnn_gcn,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.349,infer,0.36
+fixture,gnn_gcn,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.349,encode,0.04
+fixture,gnn_gcn,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.349,http_and_handoffs,0.722
+fixture,gnn_gcn,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.249,parse,0.055
+fixture,gnn_gcn,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.249,prep_wait,0.04
+fixture,gnn_gcn,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.249,prep,0.04
+fixture,gnn_gcn,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.249,infer_wait,0.05
+fixture,gnn_gcn,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.249,infer,0.3
+fixture,gnn_gcn,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.249,encode,0.04
+fixture,gnn_gcn,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.249,http_and_handoffs,0.704
+fixture,gnn_gcn,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,0.758,parse,0.02
+fixture,gnn_gcn,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,0.758,prep_wait,0.0
+fixture,gnn_gcn,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,0.758,prep,0.03
+fixture,gnn_gcn,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,0.758,infer_wait,0.0
+fixture,gnn_gcn,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,0.758,infer,0.24
+fixture,gnn_gcn,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,0.758,encode,0.03
+fixture,gnn_gcn,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,0.758,http_and_handoffs,0.42
+fixture,gnn_gcn,downshift 0.4.0,downshift,0.4.0,json,1,1.413,parse,0.16
+fixture,gnn_gcn,downshift 0.4.0,downshift,0.4.0,json,1,1.413,codec,0.06
+fixture,gnn_gcn,downshift 0.4.0,downshift,0.4.0,json,1,1.413,infer,0.33
+fixture,gnn_gcn,downshift 0.4.0,downshift,0.4.0,json,1,1.413,http_and_handoffs,0.846
+fixture,gnn_gcn,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,1.424,parse,0.16
+fixture,gnn_gcn,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,1.424,codec,0.08
+fixture,gnn_gcn,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,1.424,infer,0.32
+fixture,gnn_gcn,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,1.424,http_and_handoffs,0.871
+fixture,tiny_bert,naive FastAPI + torch,naive_torch,,json,1,2.222,http_and_handoffs,2.222
+fixture,tiny_bert,naive FastAPI + ONNX Runtime,naive_onnx,,json,1,1.12,http_and_handoffs,1.12
+fixture,tiny_bert,"naive torch, async def",naive_torch_async,,json,1,1.612,http_and_handoffs,1.612
+fixture,tiny_bert,downshift 0.5.0,downshift,0.5.0,json,1,1.406,parse,0.02
+fixture,tiny_bert,downshift 0.5.0,downshift,0.5.0,json,1,1.406,prep_wait,0.05
+fixture,tiny_bert,downshift 0.5.0,downshift,0.5.0,json,1,1.406,prep,0.03
+fixture,tiny_bert,downshift 0.5.0,downshift,0.5.0,json,1,1.406,infer_wait,0.05
+fixture,tiny_bert,downshift 0.5.0,downshift,0.5.0,json,1,1.406,infer,0.51
+fixture,tiny_bert,downshift 0.5.0,downshift,0.5.0,json,1,1.406,encode,0.05
+fixture,tiny_bert,downshift 0.5.0,downshift,0.5.0,json,1,1.406,http_and_handoffs,0.693
+fixture,tiny_bert,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.467,parse,0.02
+fixture,tiny_bert,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.467,prep_wait,0.05
+fixture,tiny_bert,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.467,prep,0.06
+fixture,tiny_bert,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.467,infer_wait,0.05
+fixture,tiny_bert,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.467,infer,0.55
+fixture,tiny_bert,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.467,encode,0.04
+fixture,tiny_bert,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.467,http_and_handoffs,0.693
+fixture,tiny_bert,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.414,parse,0.06
+fixture,tiny_bert,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.414,prep_wait,0.05
+fixture,tiny_bert,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.414,prep,0.03
+fixture,tiny_bert,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.414,infer_wait,0.05
+fixture,tiny_bert,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.414,infer,0.45
+fixture,tiny_bert,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.414,encode,0.04
+fixture,tiny_bert,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.414,http_and_handoffs,0.681
+fixture,tiny_bert,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,1.073,parse,0.02
+fixture,tiny_bert,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,1.073,prep_wait,0.0
+fixture,tiny_bert,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,1.073,prep,0.03
+fixture,tiny_bert,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,1.073,infer_wait,0.0
+fixture,tiny_bert,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,1.073,infer,0.47
+fixture,tiny_bert,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,1.073,encode,0.04
+fixture,tiny_bert,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,1.073,http_and_handoffs,0.522
+fixture,tiny_bert,downshift 0.4.0,downshift,0.4.0,json,1,1.602,parse,0.15
+fixture,tiny_bert,downshift 0.4.0,downshift,0.4.0,json,1,1.602,codec,0.05
+fixture,tiny_bert,downshift 0.4.0,downshift,0.4.0,json,1,1.602,infer,0.575
+fixture,tiny_bert,downshift 0.4.0,downshift,0.4.0,json,1,1.602,http_and_handoffs,0.855
+fixture,tiny_bert,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,1.656,parse,0.16
+fixture,tiny_bert,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,1.656,codec,0.09
+fixture,tiny_bert,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,1.656,infer,0.56
+fixture,tiny_bert,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,1.656,http_and_handoffs,0.859
+fixture,scatter_include_self_false,naive FastAPI + torch,naive_torch,,json,1,0.836,http_and_handoffs,0.836
+fixture,scatter_include_self_false,naive FastAPI + ONNX Runtime,naive_onnx,,json,1,0.846,http_and_handoffs,0.846
+fixture,scatter_include_self_false,"naive torch, async def",naive_torch_async,,json,1,0.505,http_and_handoffs,0.505
+fixture,scatter_include_self_false,downshift 0.5.0,downshift,0.5.0,json,1,0.959,parse,0.02
+fixture,scatter_include_self_false,downshift 0.5.0,downshift,0.5.0,json,1,0.959,prep_wait,0.04
+fixture,scatter_include_self_false,downshift 0.5.0,downshift,0.5.0,json,1,0.959,prep,0.04
+fixture,scatter_include_self_false,downshift 0.5.0,downshift,0.5.0,json,1,0.959,infer_wait,0.04
+fixture,scatter_include_self_false,downshift 0.5.0,downshift,0.5.0,json,1,0.959,infer,0.15
+fixture,scatter_include_self_false,downshift 0.5.0,downshift,0.5.0,json,1,0.959,encode,0.03
+fixture,scatter_include_self_false,downshift 0.5.0,downshift,0.5.0,json,1,0.959,http_and_handoffs,0.625
+fixture,scatter_include_self_false,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,0.934,parse,0.02
+fixture,scatter_include_self_false,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,0.934,prep_wait,0.04
+fixture,scatter_include_self_false,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,0.934,prep,0.05
+fixture,scatter_include_self_false,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,0.934,infer_wait,0.04
+fixture,scatter_include_self_false,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,0.934,infer,0.14
+fixture,scatter_include_self_false,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,0.934,encode,0.03
+fixture,scatter_include_self_false,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,0.934,http_and_handoffs,0.613
+fixture,scatter_include_self_false,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,0.981,parse,0.05
+fixture,scatter_include_self_false,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,0.981,prep_wait,0.04
+fixture,scatter_include_self_false,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,0.981,prep,0.03
+fixture,scatter_include_self_false,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,0.981,infer_wait,0.04
+fixture,scatter_include_self_false,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,0.981,infer,0.15
+fixture,scatter_include_self_false,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,0.981,encode,0.03
+fixture,scatter_include_self_false,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,0.981,http_and_handoffs,0.632
+fixture,scatter_include_self_false,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,0.66,parse,0.02
+fixture,scatter_include_self_false,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,0.66,prep_wait,0.0
+fixture,scatter_include_self_false,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,0.66,prep,0.03
+fixture,scatter_include_self_false,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,0.66,infer_wait,0.0
+fixture,scatter_include_self_false,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,0.66,infer,0.13
+fixture,scatter_include_self_false,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,0.66,encode,0.03
+fixture,scatter_include_self_false,downshift 0.5.0 --execution inline,downshift_inline,0.5.0,json,1,0.66,http_and_handoffs,0.44
+fixture,scatter_include_self_false,downshift 0.4.0,downshift,0.4.0,json,1,1.074,parse,0.14
+fixture,scatter_include_self_false,downshift 0.4.0,downshift,0.4.0,json,1,1.074,codec,0.05
+fixture,scatter_include_self_false,downshift 0.4.0,downshift,0.4.0,json,1,1.074,infer,0.13
+fixture,scatter_include_self_false,downshift 0.4.0,downshift,0.4.0,json,1,1.074,http_and_handoffs,0.739
+fixture,scatter_include_self_false,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,1.132,parse,0.15
+fixture,scatter_include_self_false,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,1.132,codec,0.06
+fixture,scatter_include_self_false,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,1.132,infer,0.14
+fixture,scatter_include_self_false,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,1.132,http_and_handoffs,0.764
+fixture,mlp_large,naive FastAPI + torch,naive_torch,,json,1,2.349,http_and_handoffs,2.349
+fixture,mlp_large,naive FastAPI + ONNX Runtime,naive_onnx,,json,1,1.702,http_and_handoffs,1.702
+fixture,mlp_large,"naive torch, async def",naive_torch_async,,json,1,2.06,http_and_handoffs,2.06
+fixture,mlp_large,downshift 0.5.0,downshift,0.5.0,json,1,1.89,parse,0.08
+fixture,mlp_large,downshift 0.5.0,downshift,0.5.0,json,1,1.89,prep_wait,0.055
+fixture,mlp_large,downshift 0.5.0,downshift,0.5.0,json,1,1.89,prep,0.08
+fixture,mlp_large,downshift 0.5.0,downshift,0.5.0,json,1,1.89,infer_wait,0.05
+fixture,mlp_large,downshift 0.5.0,downshift,0.5.0,json,1,1.89,infer,0.71
+fixture,mlp_large,downshift 0.5.0,downshift,0.5.0,json,1,1.89,encode,0.08
+fixture,mlp_large,downshift 0.5.0,downshift,0.5.0,json,1,1.89,http_and_handoffs,0.859
+fixture,mlp_large,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.81,parse,0.04
+fixture,mlp_large,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.81,prep_wait,0.05
+fixture,mlp_large,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.81,prep,0.06
+fixture,mlp_large,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.81,infer_wait,0.05
+fixture,mlp_large,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.81,infer,0.705
+fixture,mlp_large,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.81,encode,0.05
+fixture,mlp_large,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.81,http_and_handoffs,0.857
+fixture,mlp_large,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.801,parse,0.07
+fixture,mlp_large,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.801,prep_wait,0.05
+fixture,mlp_large,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.801,prep,0.04
+fixture,mlp_large,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.801,infer_wait,0.05
+fixture,mlp_large,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.801,infer,0.71
+fixture,mlp_large,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.801,encode,0.06
+fixture,mlp_large,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.801,http_and_handoffs,0.843
+fixture,mlp_large,downshift 0.4.0,downshift,0.4.0,json,1,2.133,parse,0.21
+fixture,mlp_large,downshift 0.4.0,downshift,0.4.0,json,1,2.133,codec,0.1
+fixture,mlp_large,downshift 0.4.0,downshift,0.4.0,json,1,2.133,infer,0.74
+fixture,mlp_large,downshift 0.4.0,downshift,0.4.0,json,1,2.133,http_and_handoffs,1.074
+fixture,mlp_large,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,2.013,parse,0.17
+fixture,mlp_large,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,2.013,codec,0.09
+fixture,mlp_large,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,2.013,infer,0.72
+fixture,mlp_large,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,2.013,http_and_handoffs,1.029
+fixture,cnn_large,naive FastAPI + torch,naive_torch,,json,1,3.636,http_and_handoffs,3.636
+fixture,cnn_large,naive FastAPI + ONNX Runtime,naive_onnx,,json,1,2.792,http_and_handoffs,2.792
+fixture,cnn_large,"naive torch, async def",naive_torch_async,,json,1,3.402,http_and_handoffs,3.402
+fixture,cnn_large,downshift 0.5.0,downshift,0.5.0,json,1,1.973,parse,0.23
+fixture,cnn_large,downshift 0.5.0,downshift,0.5.0,json,1,1.973,prep_wait,0.05
+fixture,cnn_large,downshift 0.5.0,downshift,0.5.0,json,1,1.973,prep,0.29
+fixture,cnn_large,downshift 0.5.0,downshift,0.5.0,json,1,1.973,infer_wait,0.05
+fixture,cnn_large,downshift 0.5.0,downshift,0.5.0,json,1,1.973,infer,0.57
+fixture,cnn_large,downshift 0.5.0,downshift,0.5.0,json,1,1.973,encode,0.04
+fixture,cnn_large,downshift 0.5.0,downshift,0.5.0,json,1,1.973,http_and_handoffs,0.782
+fixture,cnn_large,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.489,parse,0.04
+fixture,cnn_large,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.489,prep_wait,0.05
+fixture,cnn_large,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.489,prep,0.06
+fixture,cnn_large,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.489,infer_wait,0.05
+fixture,cnn_large,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.489,infer,0.59
+fixture,cnn_large,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.489,encode,0.04
+fixture,cnn_large,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,1.489,http_and_handoffs,0.69
+fixture,cnn_large,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.474,parse,0.05
+fixture,cnn_large,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.474,prep_wait,0.05
+fixture,cnn_large,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.474,prep,0.02
+fixture,cnn_large,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.474,infer_wait,0.05
+fixture,cnn_large,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.474,infer,0.57
+fixture,cnn_large,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.474,encode,0.05
+fixture,cnn_large,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,1.474,http_and_handoffs,0.682
+fixture,cnn_large,downshift 0.4.0,downshift,0.4.0,json,1,2.169,parse,0.39
+fixture,cnn_large,downshift 0.4.0,downshift,0.4.0,json,1,2.169,codec,0.31
+fixture,cnn_large,downshift 0.4.0,downshift,0.4.0,json,1,2.169,infer,0.61
+fixture,cnn_large,downshift 0.4.0,downshift,0.4.0,json,1,2.169,http_and_handoffs,0.917
+fixture,cnn_large,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,1.658,parse,0.16
+fixture,cnn_large,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,1.658,codec,0.08
+fixture,cnn_large,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,1.658,infer,0.59
+fixture,cnn_large,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,1.658,http_and_handoffs,0.833
+fixture,bert_small,naive FastAPI + torch,naive_torch,,json,1,13.906,http_and_handoffs,13.906
+fixture,bert_small,naive FastAPI + ONNX Runtime,naive_onnx,,json,1,12.834,http_and_handoffs,12.834
+fixture,bert_small,"naive torch, async def",naive_torch_async,,json,1,14.128,http_and_handoffs,14.128
+fixture,bert_small,downshift 0.5.0,downshift,0.5.0,json,1,10.61,parse,0.05
+fixture,bert_small,downshift 0.5.0,downshift,0.5.0,json,1,10.61,prep_wait,0.06
+fixture,bert_small,downshift 0.5.0,downshift,0.5.0,json,1,10.61,prep,0.07
+fixture,bert_small,downshift 0.5.0,downshift,0.5.0,json,1,10.61,infer_wait,0.06
+fixture,bert_small,downshift 0.5.0,downshift,0.5.0,json,1,10.61,infer,7.33
+fixture,bert_small,downshift 0.5.0,downshift,0.5.0,json,1,10.61,encode,1.77
+fixture,bert_small,downshift 0.5.0,downshift,0.5.0,json,1,10.61,http_and_handoffs,1.281
+fixture,bert_small,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,9.05,parse,0.05
+fixture,bert_small,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,9.05,prep_wait,0.06
+fixture,bert_small,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,9.05,prep,0.09
+fixture,bert_small,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,9.05,infer_wait,0.06
+fixture,bert_small,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,9.05,infer,7.33
+fixture,bert_small,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,9.05,encode,0.19
+fixture,bert_small,downshift 0.5.0 base64,downshift_base64,0.5.0,base64,1,9.05,http_and_handoffs,1.245
+fixture,bert_small,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,8.781,parse,0.09
+fixture,bert_small,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,8.781,prep_wait,0.06
+fixture,bert_small,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,8.781,prep,0.05
+fixture,bert_small,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,8.781,infer_wait,0.06
+fixture,bert_small,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,8.781,infer,7.315
+fixture,bert_small,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,8.781,encode,0.08
+fixture,bert_small,downshift 0.5.0 safetensors,downshift_safetensors,0.5.0,safetensors,1,8.781,http_and_handoffs,1.163
+fixture,bert_small,downshift 0.4.0,downshift,0.4.0,json,1,10.747,parse,0.21
+fixture,bert_small,downshift 0.4.0,downshift,0.4.0,json,1,10.747,codec,0.1
+fixture,bert_small,downshift 0.4.0,downshift,0.4.0,json,1,10.747,infer,7.35
+fixture,bert_small,downshift 0.4.0,downshift,0.4.0,json,1,10.747,http_and_handoffs,3.086
+fixture,bert_small,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,9.212,parse,0.21
+fixture,bert_small,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,9.212,codec,0.17
+fixture,bert_small,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,9.212,infer,7.315
+fixture,bert_small,downshift 0.4.0 base64,downshift_base64,0.4.0,base64,1,9.212,http_and_handoffs,1.534
+hf,all-MiniLM-L6-v2,naive FastAPI + transformers,naive_sync,,json,1,9.066,http_and_handoffs,9.066
+hf,all-MiniLM-L6-v2,"naive transformers, async def",naive_async,,json,1,8.512,http_and_handoffs,8.512
+hf,all-MiniLM-L6-v2,downshift 0.5.0,downshift_auto,0.5.0,json,1,4.867,parse,0.04
+hf,all-MiniLM-L6-v2,downshift 0.5.0,downshift_auto,0.5.0,json,1,4.867,prep_wait,0.06
+hf,all-MiniLM-L6-v2,downshift 0.5.0,downshift_auto,0.5.0,json,1,4.867,prep,0.35
+hf,all-MiniLM-L6-v2,downshift 0.5.0,downshift_auto,0.5.0,json,1,4.867,infer_wait,0.06
+hf,all-MiniLM-L6-v2,downshift 0.5.0,downshift_auto,0.5.0,json,1,4.867,infer,3.095
+hf,all-MiniLM-L6-v2,downshift 0.5.0,downshift_auto,0.5.0,json,1,4.867,encode,0.11
+hf,all-MiniLM-L6-v2,downshift 0.5.0,downshift_auto,0.5.0,json,1,4.867,http_and_handoffs,1.17
+hf,all-MiniLM-L6-v2,downshift 0.5.0 --backend torch,downshift_torch,0.5.0,json,1,9.206,parse,0.04
+hf,all-MiniLM-L6-v2,downshift 0.5.0 --backend torch,downshift_torch,0.5.0,json,1,9.206,prep_wait,0.07
+hf,all-MiniLM-L6-v2,downshift 0.5.0 --backend torch,downshift_torch,0.5.0,json,1,9.206,prep,0.36
+hf,all-MiniLM-L6-v2,downshift 0.5.0 --backend torch,downshift_torch,0.5.0,json,1,9.206,infer_wait,0.06
+hf,all-MiniLM-L6-v2,downshift 0.5.0 --backend torch,downshift_torch,0.5.0,json,1,9.206,infer,7.3
+hf,all-MiniLM-L6-v2,downshift 0.5.0 --backend torch,downshift_torch,0.5.0,json,1,9.206,encode,0.1
+hf,all-MiniLM-L6-v2,downshift 0.5.0 --backend torch,downshift_torch,0.5.0,json,1,9.206,http_and_handoffs,1.276
+hf,all-MiniLM-L6-v2,downshift 0.5.0 --max-concurrency 4,downshift_auto_mc4,0.5.0,json,1,4.856,parse,0.04
+hf,all-MiniLM-L6-v2,downshift 0.5.0 --max-concurrency 4,downshift_auto_mc4,0.5.0,json,1,4.856,prep_wait,0.06
+hf,all-MiniLM-L6-v2,downshift 0.5.0 --max-concurrency 4,downshift_auto_mc4,0.5.0,json,1,4.856,prep,0.35
+hf,all-MiniLM-L6-v2,downshift 0.5.0 --max-concurrency 4,downshift_auto_mc4,0.5.0,json,1,4.856,infer_wait,0.06
+hf,all-MiniLM-L6-v2,downshift 0.5.0 --max-concurrency 4,downshift_auto_mc4,0.5.0,json,1,4.856,infer,3.1
+hf,all-MiniLM-L6-v2,downshift 0.5.0 --max-concurrency 4,downshift_auto_mc4,0.5.0,json,1,4.856,encode,0.11
+hf,all-MiniLM-L6-v2,downshift 0.5.0 --max-concurrency 4,downshift_auto_mc4,0.5.0,json,1,4.856,http_and_handoffs,1.166
+hf,all-MiniLM-L6-v2,downshift 0.5.0 --execution inline,downshift_auto_inline,0.5.0,json,1,4.942,parse,0.03
+hf,all-MiniLM-L6-v2,downshift 0.5.0 --execution inline,downshift_auto_inline,0.5.0,json,1,4.942,prep_wait,0.06
+hf,all-MiniLM-L6-v2,downshift 0.5.0 --execution inline,downshift_auto_inline,0.5.0,json,1,4.942,prep,0.35
+hf,all-MiniLM-L6-v2,downshift 0.5.0 --execution inline,downshift_auto_inline,0.5.0,json,1,4.942,infer_wait,0.06
+hf,all-MiniLM-L6-v2,downshift 0.5.0 --execution inline,downshift_auto_inline,0.5.0,json,1,4.942,infer,3.155
+hf,all-MiniLM-L6-v2,downshift 0.5.0 --execution inline,downshift_auto_inline,0.5.0,json,1,4.942,encode,0.11
+hf,all-MiniLM-L6-v2,downshift 0.5.0 --execution inline,downshift_auto_inline,0.5.0,json,1,4.942,http_and_handoffs,1.188
+hf,all-MiniLM-L6-v2,downshift 0.4.0,downshift_auto,0.4.0,json,1,5.12,parse,0.2
+hf,all-MiniLM-L6-v2,downshift 0.4.0,downshift_auto,0.4.0,json,1,5.12,codec,0.36
+hf,all-MiniLM-L6-v2,downshift 0.4.0,downshift_auto,0.4.0,json,1,5.12,infer,3.12
+hf,all-MiniLM-L6-v2,downshift 0.4.0,downshift_auto,0.4.0,json,1,5.12,http_and_handoffs,1.454
+hf,all-MiniLM-L6-v2,downshift 0.4.0 --backend torch,downshift_torch,0.4.0,json,1,9.569,parse,0.21
+hf,all-MiniLM-L6-v2,downshift 0.4.0 --backend torch,downshift_torch,0.4.0,json,1,9.569,codec,0.37
+hf,all-MiniLM-L6-v2,downshift 0.4.0 --backend torch,downshift_torch,0.4.0,json,1,9.569,infer,7.41
+hf,all-MiniLM-L6-v2,downshift 0.4.0 --backend torch,downshift_torch,0.4.0,json,1,9.569,http_and_handoffs,1.573
+hf,all-MiniLM-L6-v2,downshift 0.4.0 --max-concurrency 4,downshift_auto_mc4,0.4.0,json,1,5.091,parse,0.21
+hf,all-MiniLM-L6-v2,downshift 0.4.0 --max-concurrency 4,downshift_auto_mc4,0.4.0,json,1,5.091,codec,0.38
+hf,all-MiniLM-L6-v2,downshift 0.4.0 --max-concurrency 4,downshift_auto_mc4,0.4.0,json,1,5.091,infer,3.11
+hf,all-MiniLM-L6-v2,downshift 0.4.0 --max-concurrency 4,downshift_auto_mc4,0.4.0,json,1,5.091,http_and_handoffs,1.429
+hf,prompt-guard-86m,naive FastAPI + transformers,naive_sync,,json,1,107.504,http_and_handoffs,107.504
+hf,prompt-guard-86m,"naive transformers, async def",naive_async,,json,1,106.719,http_and_handoffs,106.719
+hf,prompt-guard-86m,downshift 0.5.0,downshift_auto,0.5.0,json,1,20.88,parse,0.04
+hf,prompt-guard-86m,downshift 0.5.0,downshift_auto,0.5.0,json,1,20.88,prep_wait,0.06
+hf,prompt-guard-86m,downshift 0.5.0,downshift_auto,0.5.0,json,1,20.88,prep,0.37
+hf,prompt-guard-86m,downshift 0.5.0,downshift_auto,0.5.0,json,1,20.88,infer_wait,0.05
+hf,prompt-guard-86m,downshift 0.5.0,downshift_auto,0.5.0,json,1,20.88,infer,18.89
+hf,prompt-guard-86m,downshift 0.5.0,downshift_auto,0.5.0,json,1,20.88,encode,0.19
+hf,prompt-guard-86m,downshift 0.5.0,downshift_auto,0.5.0,json,1,20.88,http_and_handoffs,1.286
+hf,prompt-guard-86m,downshift 0.5.0 --backend torch,downshift_torch,0.5.0,json,1,107.54,parse,0.04
+hf,prompt-guard-86m,downshift 0.5.0 --backend torch,downshift_torch,0.5.0,json,1,107.54,prep_wait,0.06
+hf,prompt-guard-86m,downshift 0.5.0 --backend torch,downshift_torch,0.5.0,json,1,107.54,prep,0.36
+hf,prompt-guard-86m,downshift 0.5.0 --backend torch,downshift_torch,0.5.0,json,1,107.54,infer_wait,0.06
+hf,prompt-guard-86m,downshift 0.5.0 --backend torch,downshift_torch,0.5.0,json,1,107.54,infer,105.575
+hf,prompt-guard-86m,downshift 0.5.0 --backend torch,downshift_torch,0.5.0,json,1,107.54,encode,0.17
+hf,prompt-guard-86m,downshift 0.5.0 --backend torch,downshift_torch,0.5.0,json,1,107.54,http_and_handoffs,1.277
+hf,prompt-guard-86m,downshift 0.5.0 --max-concurrency 4,downshift_auto_mc4,0.5.0,json,1,20.934,parse,0.04
+hf,prompt-guard-86m,downshift 0.5.0 --max-concurrency 4,downshift_auto_mc4,0.5.0,json,1,20.934,prep_wait,0.06
+hf,prompt-guard-86m,downshift 0.5.0 --max-concurrency 4,downshift_auto_mc4,0.5.0,json,1,20.934,prep,0.38
+hf,prompt-guard-86m,downshift 0.5.0 --max-concurrency 4,downshift_auto_mc4,0.5.0,json,1,20.934,infer_wait,0.05
+hf,prompt-guard-86m,downshift 0.5.0 --max-concurrency 4,downshift_auto_mc4,0.5.0,json,1,20.934,infer,18.95
+hf,prompt-guard-86m,downshift 0.5.0 --max-concurrency 4,downshift_auto_mc4,0.5.0,json,1,20.934,encode,0.19
+hf,prompt-guard-86m,downshift 0.5.0 --max-concurrency 4,downshift_auto_mc4,0.5.0,json,1,20.934,http_and_handoffs,1.262
+hf,prompt-guard-86m,downshift 0.4.0,downshift_auto,0.4.0,json,1,21.164,parse,0.19
+hf,prompt-guard-86m,downshift 0.4.0,downshift_auto,0.4.0,json,1,21.164,codec,0.485
+hf,prompt-guard-86m,downshift 0.4.0,downshift_auto,0.4.0,json,1,21.164,infer,18.98
+hf,prompt-guard-86m,downshift 0.4.0,downshift_auto,0.4.0,json,1,21.164,http_and_handoffs,1.514
+hf,prompt-guard-86m,downshift 0.4.0 --backend torch,downshift_torch,0.4.0,json,1,107.739,parse,0.18
+hf,prompt-guard-86m,downshift 0.4.0 --backend torch,downshift_torch,0.4.0,json,1,107.739,codec,0.47
+hf,prompt-guard-86m,downshift 0.4.0 --backend torch,downshift_torch,0.4.0,json,1,107.739,infer,105.58
+hf,prompt-guard-86m,downshift 0.4.0 --backend torch,downshift_torch,0.4.0,json,1,107.739,http_and_handoffs,1.482
+hf,prompt-guard-86m,downshift 0.4.0 --max-concurrency 4,downshift_auto_mc4,0.4.0,json,1,21.071,parse,0.195
+hf,prompt-guard-86m,downshift 0.4.0 --max-concurrency 4,downshift_auto_mc4,0.4.0,json,1,21.071,codec,0.475
+hf,prompt-guard-86m,downshift 0.4.0 --max-concurrency 4,downshift_auto_mc4,0.4.0,json,1,21.071,infer,18.91
+hf,prompt-guard-86m,downshift 0.4.0 --max-concurrency 4,downshift_auto_mc4,0.4.0,json,1,21.071,http_and_handoffs,1.5
