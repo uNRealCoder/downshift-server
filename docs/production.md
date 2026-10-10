@@ -39,9 +39,10 @@ or a service mesh sidecar) and configure there:
   before they reach this process at all.
 
 `--middleware pkg.module:Attr` (repeatable) is the escape hatch if you need something
-in-process instead - a `BaseHTTPMiddleware` subclass or an `async (request, call_next)`
-function, attached in the order given. Middleware you attach runs outside the key check,
-so it also sees requests that are about to be refused with a `401`.
+in-process instead - a middleware class, either pure ASGI (cheapest; Starlette's own
+`starlette.middleware.gzip:GZipMiddleware` works as is) or a `BaseHTTPMiddleware` subclass,
+or an `async (request, call_next)` function, attached in the order given. Middleware you attach runs inside the key check, so
+it only sees authenticated requests; a `401` never reaches it.
 
 ## `/health` vs `/ready`
 
@@ -77,9 +78,9 @@ Boot behaves differently depending on `--workers`:
 Each worker is a separate process with its own memory and, in `--workers N` mode, its own
 copy of the model. The parent exports and verifies exactly once and ships the result
 (the ONNX graph, or the verdict alone for a torch-backed verdict) to every worker, so
-`capture()`/`verify()` do not repeat per worker - but loading the model itself, building
-an `InferenceSession` (or an eager `nn.Module`), and warmup all still happen once per
-worker, so both memory and startup time scale with `N`.
+`capture()`/`verify()` do not repeat per worker. An ONNX-served worker builds its own
+`InferenceSession` over the parent's graph and warms up; a torch-served worker reloads the
+model itself. Both memory and startup time scale with `N`.
 
 ### Thread budgeting
 
@@ -97,7 +98,7 @@ With a single worker, `--intra-op-threads 0` leaves ONNX Runtime's own default i
 (usually the full core count), which is what you want unless you're also running other
 CPU-bound work in the same container.
 
-That split has a measured cost. On a 16-logical-core machine (`bench/REPORT_0.4.md`,
+That split has a measured cost. On a 16-logical-core machine (`bench/REPORT_v0.4.0.md`,
 `--intra-op-threads` left at its default), going from 1 worker to 4 raises throughput at
 concurrency 32 but lowers it at concurrency 1:
 
@@ -118,13 +119,48 @@ workers) instead of 16, so the one thing running has fewer cores. `--workers` bu
 concurrency, not single-request speed - size it against how many predicts you expect in
 flight at once, not how fast you want any one of them to return.
 
+## Serving first: where a request's time goes
+
+downshift spends boot time to make serving fast: it exports, verifies, builds an optimised
+ONNX Runtime session and warms up before `/ready` turns `200`, and none of that is repeated
+per request. Each predict then costs only its own work, in two thread hops:
+
+1. **Event loop:** admit the request (or `503`), check the body size (`413`), read the body.
+2. **Prep pool** (`--prep-threads`, default `min(4, CPUs)`): parse and validate the body,
+   convert it to arrays (or tokenize text), check shapes and bounds.
+3. **Inference pool** (`--max-concurrency`, default 4): run the model, then encode the
+   response on the same thread.
+
+`Server-Timing` on every predict response shows each stage (`parse`, `prep_wait`, `prep`,
+`infer_wait`, `infer`, `encode`), so the slow part is visible per request, and the access log
+line carries the same split as `timings_ms`.
+
+What moves the numbers, roughly in order of payoff (measured on a 16-logical-core machine;
+`bench/results/v0.5.0/REPORT.md` has every row):
+
+| Lever | When it helps | Measured |
+|---|---|---|
+| `--max-concurrency` (default 4) | On by default; lower it to 1-2 for a large model whose concurrent activations run out of memory | all-MiniLM-L6-v2: 282 req/s at 1, 483 at 4 |
+| `--workers N` | Many requests in flight; each worker gets its own pools and event loop | `clean_mlp` at concurrency 32: about 3.8x with 4 workers |
+| safetensors or base64 bodies | Inputs or outputs past about 100 KiB; `parse` or `encode` dominates | `bert_small` p50 11.2 ms as JSON, 9.1 ms as safetensors; `mlp_large` batch 32: 6.6k to 14.4k rows/s |
+| `--execution inline` | Models that infer in well under a millisecond; nothing else helps them | `clean_mlp`: 1498 req/s peak inline against 1030 by default; stalls `/health` for one inference |
+| `--intra-op-threads` | Leave it at 0 on one worker. `--workers` already splits the cores | `1` thread: `bert_small` 98 to 48 req/s, `clean_mlp` 903 to 919 (spot check) |
+
+Below about one millisecond of inference, the HTTP stack itself (uvicorn, routing, the
+response) is most of a request's latency, 0.63 of 1.00 ms for `clean_mlp` on that machine; `--workers` and
+`--execution inline` are the only levers that reduce it. On Linux, uvicorn uses `uvloop` and
+`httptools` (installed with `uvicorn[standard]`), which are faster than the Windows event
+loop the numbers above were measured on.
+
 ## Concurrency, queueing, and what a `503` means
 
-- **`--max-concurrency N`** (default 1) is inferences allowed to run at once *per worker
-  process*, via a dedicated thread pool of that size. One inference already uses every
-  core it's given through ONNX Runtime's intra-op threads, so on CPU raising this rarely
-  adds throughput - it mostly adds contention between inferences sharing the same cores.
-  Use `--workers` for more processes instead, not a bigger `--max-concurrency`.
+- **`--max-concurrency N`** (default 4) is inferences allowed to run at once *per worker
+  process*, via a dedicated thread pool of that size; each one also encodes its response
+  before giving the slot back. One inference rarely fills every core, so the default serves
+  more requests per second than 1 (all-MiniLM-L6-v2, batch 8, 8 clients: 52 req/s at 1, 134
+  at 4; Qwen3-Embedding-0.6B on CPU, one query, 4 clients: 7.2 at 1, 14.6 at 4). Each
+  in-flight inference holds its own activation memory, so lower it for a large model whose
+  big requests run out of memory together.
 - **`--max-queue N`** (default 64) is how many more predicts may wait past
   `--max-concurrency` before a new one is refused outright. Once
   `max-concurrency + max-queue` requests are admitted, the next one gets an immediate
@@ -139,7 +175,7 @@ flight at once, not how fast you want any one of them to return.
 The banner's `Capacity` row shows all three:
 
 ```
-Capacity    1 inference at a time, 64 queued, 30 s timeout  (--max-concurrency, --max-queue, --request-timeout)
+Capacity    4 inferences at a time, 64 queued, 30 s timeout  (--max-concurrency, --max-queue, --request-timeout)
 ```
 
 A `503` from `/predict` or `/predict/graph` always means one of "server is at capacity",
@@ -149,11 +185,12 @@ answers `503` without buffering or parsing what it is turning away. The capacity
 loading cases carry `Retry-After`, so a well-behaved client backs off instead of retrying
 immediately into the same queue.
 
-Two other limits guard the body itself. `--max-body-bytes` (default 64 MiB) is a `413`
+Two other limits guard the body itself. `--max-body-bytes` (default 32 MiB) is a `413`
 once a body passes it: a `Content-Length` over the cap is refused without reading a byte,
 and a chunked body is refused as soon as its running total crosses the cap. There is no
 separate limit on text length, so for a `{"text": ...}` request this cap is the limit.
-`--max-input-bytes` (default 256 MiB) caps one decoded base64 tensor and is a `400`.
+`--max-input-bytes` (default 256 MiB) caps one decoded base64 or safetensors tensor and is
+a `400`.
 
 ## Sizing
 
@@ -162,8 +199,11 @@ the eager module needs at inference time) times `--workers`, plus a temporary pe
 export - `torch.export` and the ONNX translation hold an extra copy of the graph in
 memory while they work. Size for that peak once per boot per worker, not per request.
 
-Boot time is the number people ask about first; the banner's `Boot` row breaks it down so
-you don't have to guess which phase is slow:
+Boot is deliberately the slow part: downshift verifies before it serves, and it would rather
+spend seconds at startup than microseconds on every request. If boot time matters (frequent
+restarts, autoscaling), `--export-cache-dir DIR` keeps verified exports so a repeat boot of
+the same model skips export and verify. The banner's `Boot` row breaks a boot down so you
+don't have to guess which phase is slow:
 
 ```
 Boot        6.4 s: load 0.3, export 2.8, verify 0.2, session 0.1, warmup 0.1
@@ -201,12 +241,13 @@ point your log shipper at stdout and parse `time LEVEL logger: message`.
   line written while that request was being served. A `500`'s JSON body includes the same
   id under `"request_id"` - "see the server log" has something to search for instead of a
   bare timestamp to correlate by hand.
-- `/predict` and `/predict/graph` responses carry
-  `Server-Timing: parse;dur=<ms>, codec;dur=<ms>, infer;dur=<ms>`, splitting JSON parsing,
-  request/response conversion and the backend call itself - visible in any browser's
-  network tab or with `curl -sD - -o /dev/null`, no extra client code needed. Large tensors
-  sent as base64 instead of nested lists cut `parse` about 4x, and a JSON float list holds
-  the GIL while it is parsed, so it can delay other requests in that process as well.
+- `/predict` and `/predict/graph` responses carry `Server-Timing` with six stages: `parse`,
+  `prep_wait`, `prep`, `infer_wait`, `infer`, `encode` (see
+  [Serving first](#serving-first-where-a-requests-time-goes)) - visible in any browser's
+  network tab or with `curl -sD - -o /dev/null`, no extra client code needed. The request log
+  line carries the same split as `timings_ms`. Large tensors sent as safetensors or base64
+  instead of nested lists cut `parse` and `prep` several-fold, and a JSON float list holds the
+  GIL while it is parsed, so it can delay other requests in that process as well.
 - With `check --json` or `export --json`, the verdict JSON is the only thing on stdout and
   the log lines go to stderr.
 

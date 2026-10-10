@@ -7,17 +7,29 @@ All notable changes to this project are documented here. Format follows
 
 ### Added
 
+- safetensors request and response bodies. `/predict` and `/predict/graph` take `Content-Type: application/vnd.safetensors` (`application/octet-stream` is an alias) with one tensor per input name, decoded by a hand-rolled reader: no pickle, no `np.load`, no BF16, no silent dtype cast. `Accept: application/vnd.safetensors` or `"output_encoding": "safetensors"` returns the outputs that way, with predictions and embedding info in `__metadata__`. Any other binary content type is a 415.
+- Graph batches on `/predict/graph`: `graphs: [{x, edge_index, edge_attr?}, ...]` (or a safetensors body with `num_nodes`/`num_edges`) runs as one inference and is split back per graph. Verify classifies each output's axis 0 as node, edge or fixed; a model whose output can't be split (pooled, fixed-size) refuses a multi-graph batch, and `/schema` lists `graph_batching` per output.
+- Decoder-based text embedders (Qwen3-Embedding style). A `...ForCausalLM` repo with a sentence-transformers embedding recipe, or `--pooling`, loads its backbone without the LM head and serves the pooled output. The tokenizer's padding side is honoured and verified (left padding works). `lasttoken` and `weightedmean` pooling are supported. `prompt_name` on a predict prepends one of the repo's named prompts; `/schema` lists them.
+- `--axis-max NAME=N` / `DOWNSHIFT_AXIS_MAX` lowers a dynamic axis to N and spends one verify sample at exactly N. Unknown names and values over the model's own ceiling are usage errors.
+- Sampled vs served ranges: the verdict, banner, `/metadata` and `/schema` show each dynamic axis's served bounds next to the range verify actually sampled, and the banner flags axes served past twice what was verified (batch excepted).
+- An export cache. The last two verified exports are remembered in memory, so a repeat `check()`/`export()`/`app_for()` in one process skips export and verify (an HF repo hit never calls `from_pretrained`). `--export-cache-dir DIR` adds a disk tier keyed by weight content, so a restart reuses the export: atomic writes, manifest re-hash on read, pickle-free feeds; an unwritable dir is exit 4. The banner's Boot row says when it reused.
+- A separate prep pool, `--prep-threads` (default `min(4, usable CPUs)`), for request parsing and conversion, so a big text request doesn't hold an inference slot. `Server-Timing` and the access log gain `prep_wait` and `infer_wait`, and the request timeout is measured to the start of inference. CPU counts honour cgroup quotas.
+- ONNX external data: a model over 1.8 GB exports as `model.onnx` + `model.onnx.data` instead of failing; verify, `export`, the manifest and the `--workers` handoff all follow it.
+- `downshift serve --log-level info` prints every setting the server runs with (host, port, workers, log level, every serve option, `api_key` as `set`/`unset`) as one `serving with:` block right before `ready`. The banner and the `loading` line now name the model by its file name, not its path.
+
 - `--execution threadpool|inline` / `DOWNSHIFT_EXECUTION` (default `threadpool`). `inline` parses, infers and encodes small JSON bodies (Content-Length up to 64 KiB, no `text`) on the event loop, with no thread hop; it only helps models under about 1 ms per inference, and a slow model stalls `/health` and `/ready`. The banner has an `Execution` row and `/metadata` an `execution` field.
 
-- `GET /metrics`, Prometheus text format, always on and behind the API key when one is set. Request counts and latency by route template and status, per-stage latency, rejections by reason, queue depth, batch sizes and boot phases. Under `--workers N` the series are summed across workers.
+- `--middleware` takes pure ASGI middleware classes too, such as `starlette.middleware.gzip:GZipMiddleware`, alongside `BaseHTTPMiddleware` subclasses and `async (request, call_next)` functions.
 
 ### Changed
 
-- `prometheus_client` is now a core dependency.
-- The `--max-concurrency` help and README no longer say raising it does not help: small encoders usually gain from 2-4 (all-MiniLM-L6-v2, batch 8, 8 clients: 52 req/s at 1, 134 at 4).
+- A predict request takes two thread hops instead of four: parsing, validating and converting the body run as one step in the prep pool, and the response is encoded on the inference thread right after inference, so encoding now holds the inference slot. The predict routes also skip FastAPI's own body handling. Against 0.4.0 in the same benchmark session, peak batch-1 requests/s: `clean_mlp` 1030 vs 866, `mlp_large` 815 vs 696, `bert_small` 106 vs 102; all-MiniLM-L6-v2 at 8 clients 282 vs 239 (483 vs 434 at `--max-concurrency 4`). See `bench/results/v0.5.0/REPORT.md`. `--prep-threads` now only covers request parsing and conversion.
+- `--max-concurrency` / `DOWNSHIFT_MAX_CONCURRENCY` defaults to 4 (was 1). At 1, a hand-written FastAPI `def` server beat downshift's defaults under load. Measured with 4-8 concurrent clients: all-MiniLM-L6-v2 (batch 8) 52 req/s at 1, 134 at 4; Qwen3-Embedding-0.6B (one query, CPU) 7.2 at 1, 14.6 at 4, single-request latency unchanged. Each in-flight inference holds its own activation memory; pass `--max-concurrency 1` for the old behaviour.
+- `--backend auto` no longer exports a model whose floating weights are all bfloat16: ONNX Runtime's CPU kernels have no bf16 Gemm, so the export always ended in a graph ORT could not load (Qwen3-Embedding-0.6B: 89 s and 1.35 GB RAM wasted at boot). It serves torch straight away and the banner says why. `check`, and `--backend onnxruntime`, still try the export.
+- `--intra-op-threads` is described as what it is: threads inside one op for whichever backend serves (ORT, or `torch.set_num_threads`), where more threads cut single-request latency and cost throughput under concurrent load.
 - `--max-body-bytes` defaults to 32 MiB (was 64 MiB).
 - Breaking for third-party adapters: `Adapter.prepare(model, example_inputs)` is now `prepare(model, example_inputs, axis_max=None)`. Add the parameter; to support `--axis-max`, lower the named `torch.export.Dim`s with `downshift.core.shapes.lower_axis_max` and pin verification sample 1 at those sizes (`pin_vary_fn`). An adapter that ignores it just serves its own bounds.
-- Breaking: an adapter has one identity, its `name`. `Adapter.family` is gone, and `model_family` (in the manifest, `check --json`, `/metadata`'s `family`, `/schema` and the metrics `adapter` label) is now the adapter name: `hf` (was `hf-transformers`), `generic` (was `generic-torch`), `pyg` and `onnx` unchanged. Upgrade: drop `family` from a custom adapter and build its `Prepared` with `family=self.name`.
+- Breaking: an adapter has one identity, its `name`. `Adapter.family` is gone, and `model_family` (in the manifest, `check --json`, `/metadata`'s `family` and `/schema`) is now the adapter name: `hf` (was `hf-transformers`), `generic` (was `generic-torch`), `pyg` and `onnx` unchanged. Upgrade: drop `family` from a custom adapter and build its `Prepared` with `family=self.name`.
 - Breaking: `/metadata`'s `execution` is a plain string (`"threadpool"` or `"inline"`), not `{"mode": ...}`. Its `limits` is a typed block, and `/schema`'s `limits` now carries the same five fields (it had only the two byte limits).
 - Breaking: a request a backend fails on is a 400 only when ONNX Runtime rejects the input itself (`InvalidArgument`); every other failure inside inference is a 500. The input's rank and fixed axes are now checked against the model before inference (`"x axis 1 is 5; this model takes 16"`), so the common client mistakes stay 400s on both backends; what changes is that an error torch raises from inside the model is no longer guessed to be the client's from its message.
 - Breaking: `ExportVerdict.status` is a `Status` string enum (`downshift.core.verdict.Status`). It still compares equal to `"CLEAN"` etc. and serializes the same.
@@ -34,8 +46,6 @@ All notable changes to this project are documented here. Format follows
 ### Fixed
 
 - A stored export failure no longer keeps every `torch.export` frame (and the model) alive for the life of a server that falls back to torch.
-
-### Removed
 
 ## 0.4.0 - 2026-09-26
 

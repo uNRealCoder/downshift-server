@@ -9,7 +9,7 @@ wins over the hardcoded default. The same variables apply to library use (`Serve
 `app_for()`), not only to the CLI: see "Environment variables" below.
 
 `downshift` is also runnable as `python -m downshift`, for when the console script isn't on
-`PATH`. Both forms accept `--version` (prints `downshift v<version>` and exits 0) at the top
+`PATH`. Both forms accept `--version` (prints just the bare `<version>` and exits 0) at the top
 level, before any subcommand.
 
 ## Commands
@@ -134,15 +134,17 @@ backend. The serving-specific flags:
 | `--warmup INT` | `DOWNSHIFT_WARMUP` | `3` | Warm-up inferences before `/ready` flips. |
 | `--reference MODEL` | - | none | PyTorch model to verify a `.onnx` `MODEL` against. |
 | `--middleware pkg.module:Attr` (repeatable) | - | none | Middleware to attach, in the order given. |
-| `--intra-op-threads INT` | `DOWNSHIFT_INTRA_OP_THREADS` | `0` | ORT threads within one op; `0` = let ONNX Runtime choose. |
+| `--intra-op-threads INT` | `DOWNSHIFT_INTRA_OP_THREADS` | `0` | Threads inside one op, for whichever backend serves (ONNX Runtime session option, or `torch.set_num_threads`); `0` = the backend's default. More threads cut single-request latency but cost throughput under concurrent load. |
 | `--inter-op-threads INT` | `DOWNSHIFT_INTER_OP_THREADS` | `0` | ORT threads across ops; `0` = let ONNX Runtime choose. |
 | `--output-encoding json\|base64` | `DOWNSHIFT_OUTPUT_ENCODING` | `json` | Default encoding of response tensors; a request's own `output_encoding` overrides it. |
 | `--max-input-bytes INT` | `DOWNSHIFT_MAX_INPUT_BYTES` | `268435456` (256 MiB) | Reject base64 tensor inputs larger than this once decoded. |
-| `--max-body-bytes INT` | `DOWNSHIFT_MAX_BODY_BYTES` | `67108864` (64 MiB) | Reject request bodies larger than this (`413`), before they are parsed as JSON. A chunked body is refused as soon as its running total passes the limit. There is no separate text-length limit; this covers `{"text": ...}` too. |
-| `--max-concurrency INT` | `DOWNSHIFT_MAX_CONCURRENCY` | `1` | Inferences allowed to run at once per worker process. |
+| `--max-body-bytes INT` | `DOWNSHIFT_MAX_BODY_BYTES` | `33554432` (32 MiB) | Reject request bodies larger than this (`413`), before they are parsed. A chunked body is refused as soon as its running total passes the limit. There is no separate text-length limit; this covers `{"text": ...}` too. |
+| `--max-concurrency INT` | `DOWNSHIFT_MAX_CONCURRENCY` | `4` | Inference threads per worker process: inferences (each followed by its response encoding) allowed to run at once. Each holds its own activation memory; lower it if large requests run out of memory. |
+| `--execution threadpool\|inline` | `DOWNSHIFT_EXECUTION` | `threadpool` | `threadpool`: parse and prep in the prep pool, inference and encode on an inference thread. `inline`: a JSON body up to 64 KiB with a Content-Length, and no `text`, runs on the event loop; for models under about 1 ms per inference. |
+| `--prep-threads INT` | `DOWNSHIFT_PREP_THREADS` | `min(4, usable CPUs)` | Threads per worker process that parse and convert request bodies, apart from the inference threads. |
 | `--max-queue INT` | `DOWNSHIFT_MAX_QUEUE` | `64` | Predicts allowed to wait past `--max-concurrency` before a new one gets a fast `503`. |
 | `--request-timeout FLOAT` | `DOWNSHIFT_REQUEST_TIMEOUT` | `30.0` | Seconds a predict may wait, unstarted, before a `503` instead of an inference; counts time spent queued. `0` = no limit. |
-| `--workers INT` | `DOWNSHIFT_WORKERS` | `1` | Uvicorn worker processes; each independently loads/exports/warms the model. The parent frees its own copy of the model before the workers start. A worker that fails to load stops the whole server (uvicorn's startup-failure exit code) instead of being respawned. |
+| `--workers INT` | `DOWNSHIFT_WORKERS` | `1` | Uvicorn worker processes. The parent exports and verifies once; each worker builds its own session over that graph (or reloads the model for torch) and warms up. The parent frees its own copy of the model before the workers start. A worker that fails to load stops the whole server (uvicorn's startup-failure exit code) instead of being respawned. |
 | `--log-level debug\|info\|warning\|error` | - | `warning` | See "Logging" below. |
 | `--access-log` / `--no-access-log` | - | on | The one log line per request (`downshift.access`). Uvicorn's own access log is always off. |
 
@@ -190,8 +192,9 @@ and `app_for()` as well as to the CLI flags above:
 | `DOWNSHIFT_WARMUP`, `DOWNSHIFT_SAMPLES` | `3`, `8` | `--warmup`, `-k/--samples` (`ServeOptions.k`) |
 | `DOWNSHIFT_INTRA_OP_THREADS`, `DOWNSHIFT_INTER_OP_THREADS` | `0`, `0` | `--intra-op-threads`, `--inter-op-threads` |
 | `DOWNSHIFT_OUTPUT_ENCODING` | `json` | `--output-encoding` |
-| `DOWNSHIFT_MAX_INPUT_BYTES`, `DOWNSHIFT_MAX_BODY_BYTES` | 256 MiB, 64 MiB | `--max-input-bytes`, `--max-body-bytes` |
-| `DOWNSHIFT_MAX_CONCURRENCY`, `DOWNSHIFT_MAX_QUEUE`, `DOWNSHIFT_REQUEST_TIMEOUT` | `1`, `64`, `30` | `--max-concurrency`, `--max-queue`, `--request-timeout` |
+| `DOWNSHIFT_MAX_INPUT_BYTES`, `DOWNSHIFT_MAX_BODY_BYTES` | 256 MiB, 32 MiB | `--max-input-bytes`, `--max-body-bytes` |
+| `DOWNSHIFT_MAX_CONCURRENCY`, `DOWNSHIFT_MAX_QUEUE`, `DOWNSHIFT_REQUEST_TIMEOUT` | `4`, `64`, `30` | `--max-concurrency`, `--max-queue`, `--request-timeout` |
+| `DOWNSHIFT_EXECUTION`, `DOWNSHIFT_PREP_THREADS` | `threadpool`, `min(4, usable CPUs)` | `--execution`, `--prep-threads` |
 | `DOWNSHIFT_WORKERS` | `1` | `--workers` (CLI only) |
 | `DOWNSHIFT_SERVER_API_KEY` | unset | Requires `Authorization: Bearer <key>` on every route except `/health` and `/ready`; unset or empty logs one startup warning that the endpoints are unauthenticated. No flag: it is a secret. Read by `build_app(api_key=...)` and `app_for(api_key=...)` by default. |
 | `DOWNSHIFT_TOL_{FLOAT32,FLOAT64,FLOAT16,BFLOAT16}_{ATOL,RTOL}` | see `check` above | The default tolerances. |

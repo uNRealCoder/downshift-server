@@ -54,7 +54,7 @@ uvicorn.
 | `adapters/` | `base.py` (the `Adapter` protocol, `Prepared`, `Family`), `registry.py`, `generic.py`, `pyg.py`, `hf.py`, and the Hugging Face pieces: `text.py` (tokenizing and class probabilities), `pooling.py` (the `--pooling` choices), `embedding.py` (the pooling recipe and the graph that applies it). |
 | `serve/options.py` | `ServeOptions`, `BackendChoice`. |
 | `serve/engine.py` | `ServingState`, `prepare_serving`, warmup. |
-| `serve/app.py` | `build_app`, routing, the request-id and API-key middleware. |
-| `serve/predict.py` | The `/predict` and `/predict/graph` internals: conversion, bounds checks, the inference call. |
+| `serve/app.py` | `build_app`, routing, the request-id and API-key middleware, and `PredictRoute` (admission, body limits, content types for the predict routes). |
+| `serve/predict.py` | The `/predict` and `/predict/graph` request path, in two thread hops: parse and validate the body, convert and check it (prep pool), then infer and encode (inference pool). |
 | `serve/describe.py` | What `GET /schema` answers. |
-| `serve/backends.py`, `serve/schemas.py`, `serve/codec.py`, `serve/middleware.py` | The two backends, the request/response models, the base64 codec, and `--middleware` loading. |
+| `serve/backends.py`, `serve/schemas.py`, `serve/codec.py`, `serve/middleware.py` | The two backends, the request/response models, the base64 and safetensors codecs, and `--middleware` loading. |

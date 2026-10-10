@@ -422,7 +422,7 @@ mainly so callers using `downshift.core.verify.verify` directly can catch it too
 ### `__version__`
 
 ```python
-__version__: str  # "0.4.0"
+__version__: str  # "0.5.0"
 ```
 
 Read from `downshift._version`, imported eagerly (not through the lazy `_LAZY` map) so

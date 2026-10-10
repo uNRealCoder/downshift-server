@@ -25,8 +25,8 @@ class ServeOptions:
     inter_op_threads: int = 0
     output_encoding: OutputEncoding = OutputEncoding.json
     max_input_bytes: int = DEFAULT_MAX_INPUT_BYTES  # 256 MiB
-    max_body_bytes: int = DEFAULT_MAX_BODY_BYTES  # 64 MiB
-    max_concurrency: int = 1
+    max_body_bytes: int = DEFAULT_MAX_BODY_BYTES  # 32 MiB
+    max_concurrency: int = 4
     max_queue: int = DEFAULT_MAX_QUEUE  # 64
     request_timeout: float = DEFAULT_REQUEST_TIMEOUT  # 30.0
     atol: float | None = None
@@ -63,8 +63,12 @@ parameter, a `ServeOptions` field and a `_collect_serve_args` parameter. See
 | `inter_op_threads` | `int` | `0` | ONNX Runtime `SessionOptions.inter_op_num_threads`; `0` lets ORT choose. |
 | `output_encoding` | `OutputEncoding` | `json` | Default response tensor encoding; a request's own `output_encoding` field overrides it. |
 | `max_input_bytes` | `int` | 256 MiB | Cap on one decoded base64 tensor input. |
-| `max_body_bytes` | `int` | 64 MiB | Cap on the whole request body (`413`), checked before JSON parsing. No separate text-length limit exists; this covers `text` requests. |
-| `max_concurrency` | `int` | `1` | Size of the executor thread pool `ServingState` runs predicts on, per worker process. |
+| `max_body_bytes` | `int` | 32 MiB | Cap on the whole request body (`413`), checked before it is parsed. No separate text-length limit exists; this covers `text` requests. |
+| `max_concurrency` | `int` | `4` | Size of the inference thread pool (`ServingState.executor`), per worker process: how many requests infer and encode at once. |
+| `execution` | `ExecutionChoice` | `threadpool` | `threadpool` runs every request's work on the two pools; `inline` runs a small JSON body (Content-Length up to 64 KiB, no `text`) on the event loop. See [Request path](#request-path-servepredictpy). |
+| `prep_threads` | `int` | `min(4, usable CPUs)` | Size of the prep pool (`ServingState.prep_executor`): parsing, validating and converting request bodies, and tokenizing. |
+| `axis_max` | `dict[str, int] \| None` | `None` | `--axis-max NAME=N`: narrow a dynamic axis's served maximum; verify pins one sample at exactly `N`. |
+| `export_cache_dir` | `str \| None` | `None` | `--export-cache-dir`: where verified exports are kept so the next boot skips export and verify. |
 | `max_queue` | `int` | `64` | Additional admitted-but-waiting predicts allowed past `max_concurrency`. |
 | `request_timeout` | `float` | `30.0` | Seconds an admitted predict may wait, queued, before a `503` instead of running; `0` disables the check. |
 | `atol` / `rtol` | `float \| None` | `None` | Tolerance override, forwarded to the gate; `None` means "by dtype". |
@@ -128,11 +132,12 @@ class ServingState:
     timings: dict[str, float] = field(default_factory=dict)
     axis_bounds: dict[str, dict[int, DimBound]] = field(default_factory=dict, repr=False)
     executor: ThreadPoolExecutor = field(init=False, repr=False, compare=False)
+    prep_executor: ThreadPoolExecutor = field(init=False, repr=False, compare=False)
     in_flight: int = field(init=False, repr=False, compare=False, default=0)
 ```
 
 The object one running server (or worker process) holds: what `/metadata` reads, and what
-the predict routes admit requests against (`OrjsonRoute` in `serve/app.py`, `run_predict`
+the predict routes admit requests against (`PredictRoute` in `serve/app.py`, `run_predict`
 in `serve/predict.py`).
 
 | Field | Meaning |
@@ -152,8 +157,9 @@ in `serve/predict.py`).
 | `vocab_size` | The Hugging Face model's vocabulary size, set even when the tokenizer or recipe fails to load. `input_ids` outside `[0, vocab_size)` is a `400` before inference. |
 | `timings` | Wall-clock seconds per boot phase, keyed by `Phase` (`downshift/core/phase.py`, a `StrEnum` of `load`, `export`, `verify`, `session`, `warmup`) - whichever actually ran. `load` is added by the caller after `prepare_serving` returns. Read by the banner's `Boot` row and `/metadata`'s `boot` field. |
 | `axis_bounds` | Per input, per dynamic axis: a `DimBound(name, min, max)`, the range the adapter's export was traced for. Empty for a bare `.onnx` with no reference model. Drives the `bounds` in `/schema` and the readable `400` on an out-of-range axis. |
-| `executor` | A `ThreadPoolExecutor` sized to `options.max_concurrency`, not part of the dataclass's identity (`compare=False`). `run_predict` submits `_predict_body` here, never on the event loop, so a slow request never blocks `/health`/`/ready`. |
-| `in_flight` | Admitted-but-unfinished predicts (running or queued in the executor), guarded by an internal lock. |
+| `executor` | The inference pool: a `ThreadPoolExecutor` sized to `options.max_concurrency`, not part of the dataclass's identity (`compare=False`). Each request's backend call and response encoding run here, never on the event loop (unless `--execution inline`), so a slow request never blocks `/health`/`/ready`. |
+| `prep_executor` | The prep pool, sized to `options.prep_threads`: each request's parse, validation, conversion to arrays and checks. |
+| `in_flight` | Admitted-but-unfinished predicts (in either pool or waiting for one), guarded by an internal lock. |
 
 Methods: `try_admit()` atomically claims one of `max_concurrency + max_queue` slots
 (returns `False` if none are free); `release()` gives one back. Properties:
@@ -264,7 +270,8 @@ Exactly one of `state`/`loader` must be given (`ValueError` otherwise).
 
 `middleware` is a sequence of `pkg.module:Attr` specs (`--middleware`, repeatable),
 attached in order via `load_middleware` (`serve/middleware.py`): each spec must resolve to
-a `starlette.middleware.base.BaseHTTPMiddleware` subclass or an `async (request,
+a middleware class built as `cls(app)` (pure ASGI, or a
+`starlette.middleware.base.BaseHTTPMiddleware` subclass) or an `async (request,
 call_next)` coroutine function.
 
 `api_key` defaults to `DOWNSHIFT_SERVER_API_KEY` (`settings.API_KEY`), so the variable
@@ -280,15 +287,48 @@ request that `RequestIdMiddleware` writes on logger `downshift.access`: `METHOD 
 N ms`, at `INFO`, at `WARNING` from status `400` up, and at `DEBUG` for the `/health` and
 `/ready` probes. The request id is set and echoed either way.
 
-Every app is built with, outermost first: your `middleware`, `RequestIdMiddleware`
-(assigns/echoes `X-Request-Id`, binds it to `downshift.logs.request_id_var` so every log
-line written while serving the request carries `request_id=...`, and writes the request
-line), `ApiKeyMiddleware`, and an `OrjsonRoute` route class (orjson request parsing plus
-the `--max-body-bytes` check). Your middleware therefore runs before the key check. For
-`/predict` and `/predict/graph`, `OrjsonRoute` admits the request (`try_admit`, or a `503`)
-*before* it reads the body, and reads a chunked body against a running total so a `413`
-fires as soon as it passes the limit. See [`http-api.md`](http-api.md) for the wire-level
+Every app is built with, outermost first: `RequestIdMiddleware` (assigns/echoes
+`X-Request-Id`, binds it to `downshift.logs.request_id_var` so every log line written while
+serving the request carries `request_id=...`, and writes the request line),
+`ApiKeyMiddleware`, then your `middleware`, so yours only ever sees authenticated traffic.
+`/predict` and `/predict/graph` use the `PredictRoute` route class, described next; every
+other route is a plain FastAPI route. See [`http-api.md`](http-api.md) for the wire-level
 detail.
+
+## Request path (`serve/predict.py`)
+
+Serving speed comes first in downshift's design: boot may be slow (export, verify, warmup
+all happen before `/ready`), but every request pays only for its own work. One predict
+request is two thread hops:
+
+```
+event loop     PredictRoute: admit or 503, Content-Type (415), --max-body-bytes (413),
+               read the body
+prep pool      _parse: orjson + the route's pydantic model (422), per-route checks (400)
+               _prepare_feeds: arrays, tokenizing, graph batching, vocab/edge/shape/bound
+               checks (400)
+inference pool _infer: the backend call only
+               _encode_response: JSON, base64 or safetensors, split per graph
+```
+
+- `PredictRoute` serves the two routes itself instead of letting FastAPI resolve the body:
+  `run_predict` gets the raw bytes. The `predict` and `predict_graph` endpoint functions
+  exist only so the OpenAPI schema documents `PredictRequest` and `GraphPredictRequest`;
+  `_validate_json` reproduces FastAPI's `422` shapes (missing body, `json_invalid`,
+  validation errors under `"body"`).
+- Admission happens before a byte is read, and the slot is released in `finally` on every
+  exit. `--request-timeout` is checked after prep and again when inference starts; a running
+  inference is never interrupted.
+- Encoding runs on the inference thread right after the backend call, so it holds the
+  inference slot: one hop fewer, at the cost of throughput when outputs are large and
+  `--max-concurrency` is the bottleneck.
+- `--execution inline` runs both hops on the event loop for a JSON body with a
+  Content-Length up to 64 KiB (`INLINE_MAX_BODY_BYTES`); a `text` request still tokenizes in
+  the prep pool. It only pays off for models that infer in well under a millisecond, and
+  stalls `/health` and `/ready` for as long as one inference takes.
+- `_run_in` carries the request's contextvars into the pool thread and records the wait as
+  `prep_wait` / `infer_wait`. `Server-Timing` (and the access log's `timings_ms`) lists
+  `parse`, `prep_wait`, `prep`, `infer_wait`, `infer`, `encode`.
 
 ## Backends (`serve/backends.py`)
 

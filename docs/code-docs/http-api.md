@@ -12,8 +12,8 @@ backend (`onnxruntime` or `torch`) is behind them.
 | `GET` | `/ready` | Readiness. |
 | `GET` | `/metadata` | Model, backend, verdict, limits, boot timings, warmup stats. |
 | `GET` | `/schema` | What to POST: input names, dtypes, shapes, and an example body. |
-| `POST` | `/predict` | Named tensor inputs, any model. |
-| `POST` | `/predict/graph` | One graph: `x`, `edge_index`, optional `edge_attr`. |
+| `POST` | `/predict` | Named tensor inputs or `text`, any model. JSON or safetensors body. |
+| `POST` | `/predict/graph` | One graph (`x`, `edge_index`, optional `edge_attr`) or a batch of graphs. JSON or safetensors body. |
 
 Whatever is served came from this machine - a downloaded `.onnx` file, a downloaded PyTorch
 checkpoint, a downloaded Hugging Face repo directory (recognised by the `config.json` in
@@ -216,10 +216,14 @@ Request model `PredictRequest`:
 class PredictRequest(BaseModel):
     inputs: dict[str, Any] = {}  # name -> nested list, or a {"data", "dtype", "shape"} object
     text: str | list[str] | None = None  # instead of `inputs`; see "Text input" below
-    output_encoding: OutputEncoding | None = (
-        None  # "json" | "base64"; omit to use the server default
+    prompt_name: str | None = None  # a named prompt from the repo, `text` requests only
+    output_encoding: RequestOutputEncoding | None = (
+        None  # "json" | "base64" | "safetensors"; omit to use the server default
     )
 ```
+
+The body may instead be a safetensors file (`Content-Type: application/vnd.safetensors`, see
+"Wire formats"), one tensor per input name.
 
 Response model `PredictResponse`:
 
@@ -262,14 +266,15 @@ curl -s localhost:8000/predict -H 'content-type: application/json' \
 Integer lists default to `int64`, everything else to `float32`, when no `dtype` is given
 and the backend declares none either (`to_numpy` in `serve/schemas.py`).
 
-Send large tensors as base64. The server parses a base64 tensor about 4x cheaper than the
-same tensor as nested lists, and a JSON float list holds the GIL while it is parsed, so a
-big one stalls every other request in that process for the duration. `Server-Timing`'s
-`parse` entry shows what a request's JSON parse cost.
+Send large tensors as safetensors or base64. Both skip the float-to-text round trip; a
+JSON float list is parsed by Python in the prep pool, and while it is parsed it holds the GIL,
+which slows every other request in that process. safetensors also skips the JSON wrapper and
+base64's 33% overhead (measured: `bert_small` p50 11.2 ms with JSON, 9.1 ms with
+safetensors). `Server-Timing`'s `parse` and `prep` entries show what a body cost.
 
 A predict is admitted, or refused with a `503`, *before* its body is read: an overloaded
 server does not buffer or parse a body it is about to turn away. A body over
-`--max-body-bytes` (default 64 MiB) is a `413`: refused without reading it when
+`--max-body-bytes` (default 32 MiB) is a `413`: refused without reading it when
 `Content-Length` says so, and, for a chunked body with no `Content-Length`, as soon as the
 running total passes the limit. There is no separate limit on text length; the body cap is
 the limit for a `text` request.
@@ -362,36 +367,46 @@ Status codes:
 | `400` | `{"detail": "this model takes tensors only: ..."}` | A `text` request to a model with no tokenizer. |
 | `400` | `{"detail": "input_ids axis 1 is 65; this model accepts 1 to 64"}` | An axis outside the `bounds` `GET /schema` reports for that input. |
 | `400` | `{"detail": "input_ids contains -1, outside the vocabulary [0, 30522)"}` | A model served from a Hugging Face repo directory: any `input_ids` value outside `[0, vocab_size)`. Checked before inference because ONNX Runtime wraps a negative index instead of refusing it. |
-| `400` | `{"detail": "..."}` | The backend itself rejected the inputs (`InferenceInputError`). ONNX Runtime: a shape/graph error. Torch: a `RuntimeError`/`ValueError`/`IndexError` from the model, unless its message marks a server-side fault (out of memory on CPU or GPU, a CUDA/cuDNN/cuBLAS error, an illegal memory access, an internal assert, a missing kernel, tensors on different devices), which is a `500`. |
+| `400` | `{"detail": "x axis 1 is 5; this model takes 16"}` | Rank or a fixed axis differs from the model's declared inputs; checked before inference on both backends. |
+| `400` | `{"detail": "..."}` | ONNX Runtime itself rejected the inputs (`InvalidArgument`). Any other failure inside inference, on either backend, is a `500`. |
 | `401` | `{"detail": "Authorization header is not set or incorrect"}`, header `WWW-Authenticate: Bearer` | `DOWNSHIFT_SERVER_API_KEY` is set and the request has no matching bearer token. Every route but `/health` and `/ready`. |
-| `413` | `{"detail": "request body is N bytes; the server limit is M bytes (--max-body-bytes)"}` | Body over `--max-body-bytes` (default 64 MiB), rejected before JSON parsing. `N` is the declared `Content-Length`, or, for a chunked body, the running total at the moment it crossed the limit. |
-| `422` | FastAPI's default validation error body | Malformed JSON, or a required field (`inputs`) missing. |
+| `413` | `{"detail": "request body is N bytes; the server limit is M bytes (--max-body-bytes)"}` | Body over `--max-body-bytes` (default 32 MiB), rejected before it is parsed. `N` is the declared `Content-Length`, or, for a chunked body, the running total at the moment it crossed the limit. |
+| `415` | `{"detail": "unsupported Content-Type; ..."}` | A body that is neither JSON nor safetensors (`application/vnd.safetensors` or `application/octet-stream`). |
+| `422` | FastAPI's validation error body | An empty body (`missing`), malformed JSON (`json_invalid`, with the byte offset in `loc`), or a field that fails validation (`loc` starts with `"body"`). |
 | `500` | `{"detail": "inference failed on the server; see the server log", "request_id": "..."}` | Unhandled server-side exception; the real error is only in the server log. |
 | `503` | `{"detail": "model is not ready"}`, header `Retry-After: 2` | No `ServingState` yet. |
 | `503` | `{"detail": "server is at capacity (N running, M queued)"}`, header `Retry-After: 1` | `--max-concurrency + --max-queue` predicts already admitted. |
-| `503` | `{"detail": "request waited X.Xs in queue, past the Y.Ys --request-timeout"}`, no `Retry-After` | Admitted but waited past `--request-timeout` before conversion/inference started (`QueuedTooLong`, raised inside the executor). |
+| `503` | `{"detail": "request waited X.Xs in queue, past the Y.Ys --request-timeout"}`, no `Retry-After` | Admitted but waited past `--request-timeout` before inference started (checked after the body is prepared, and again when inference starts). |
 
-Response headers on `200`: `Server-Timing: parse;dur=<ms>, codec;dur=<ms>, infer;dur=<ms>`
-(JSON parsing, conversion and encoding, and the backend call itself). Every response, on every route and every status
+Response headers on `200`: `Server-Timing: parse;dur=<ms>, prep_wait;dur=<ms>,
+prep;dur=<ms>, infer_wait;dur=<ms>, infer;dur=<ms>, encode;dur=<ms>` (see "Headers"). Every response, on every route and every status
 code, carries `X-Request-Id` (echoing the client's own header if sent, otherwise a
 generated 16-hex-char id).
 
 ### `POST /predict/graph`
 
-Request model `GraphPredictRequest`:
+Request model `GraphPredictRequest`: one graph at the top level, or a batch under `graphs`,
+never both.
 
 ```python
-class GraphPredictRequest(BaseModel):
+class GraphItem(BaseModel):
     x: list | dict
     edge_index: list | dict
     edge_attr: list | dict | None = None
-    output_encoding: OutputEncoding | None = None
+
+
+class GraphPredictRequest(BaseModel):
+    x: list | dict | None = None
+    edge_index: list | dict | None = None
+    edge_attr: list | dict | None = None
+    graphs: list[GraphItem] | None = None  # a batch; not empty
+    output_encoding: RequestOutputEncoding | None = None
 ```
 
-One graph per request - no batching; concatenate graphs client-side (with offset edge
-indices) if you need more than one. `400` with `"model is not graph-shaped: inputs are
-[...], expected at least 'x' and 'edge_index'"` if the serving model's `input_names` don't
-include both `x` and `edge_index`. Response is `PredictResponse`, same shape as `/predict`.
+`400` with `"model is not graph-shaped: inputs are [...], expected at least 'x' and
+'edge_index'"` if the serving model's `input_names` don't include both `x` and `edge_index`.
+
+**One graph** answers with `PredictResponse`, the same shape as `/predict`:
 
 ```bash
 curl -s localhost:8000/predict/graph -H 'content-type: application/json' \
@@ -400,6 +415,19 @@ curl -s localhost:8000/predict/graph -H 'content-type: application/json' \
              [0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3]],
        "edge_index": [[0, 1, 2], [1, 2, 0]]}'
 ```
+
+**A batch** (`graphs`) runs as one inference: the graphs are joined into one disjoint graph,
+each `edge_index` in its own graph's local node ids (the server offsets them), and the
+outputs are split back per graph. The response is `{"graphs": [{"outputs", "shapes",
+"dtypes"}, ...]}` in request order. Splitting is exact only for outputs whose axis 0 follows
+nodes or edges, which the gate works out while verifying; a model with a fixed-size output (a
+pooled readout) takes one graph per request, and a batch of more than one is a `400` before
+inference. `edge_attr` is given for every graph or none. The axis bounds apply to the whole
+batch, so a batch can be refused although each graph would fit alone.
+
+A safetensors body can carry a batch too: `x`, `edge_index` and `edge_attr` concatenated,
+plus int64 vectors `num_nodes` and `num_edges` of length G (graph count). Each `edge_index`
+column uses its own graph's local ids, as in JSON.
 
 Status codes: the same table as `/predict`, plus the `400` "not graph-shaped" case above.
 
@@ -431,7 +459,7 @@ Base64 rules, enforced by `to_numpy`/`_from_base64` in `serve/schemas.py`:
 - The decoded length must equal `prod(shape) * itemsize`; a mismatch is a `400` naming
   both the expected and actual byte counts.
 - The decoded size is checked against `--max-input-bytes` (default 256 MiB; the body cap
-  `--max-body-bytes` defaults to 64 MiB, so it is the tighter of the two unless raised) *before*
+  `--max-body-bytes` defaults to 32 MiB, so it is the tighter of the two unless raised) *before*
   decoding, from the declared shape and dtype alone.
 
 The codec itself (`serve/codec.py`) is `pybase64` when the `[fast]` extra is installed
@@ -443,7 +471,7 @@ alphabet, with padding.
 *response* encoding, independently of which format the request used: `"json"` writes
 nested lists (the default, `DOWNSHIFT_OUTPUT_ENCODING` / `--output-encoding` sets the
 server-wide default when the field is omitted), `"base64"` writes `{"data", "dtype",
-"shape"}` dicts, matching `_base64_ready` in `serve/app.py`:
+"shape"}` dicts, matching `_base64_ready` in `serve/predict.py`:
 
 ```python
 {
@@ -456,6 +484,26 @@ server-wide default when the field is omitted), `"base64"` writes `{"data", "dty
 `shapes` and `dtypes` in the response body are populated the same way regardless of
 `output_encoding`.
 
+**safetensors body** - instead of JSON, send the whole request as one safetensors file with
+`Content-Type: application/vnd.safetensors` (`application/octet-stream` is accepted as an
+alias), one tensor per input name. It is the cheapest body to parse: the arrays are
+zero-copy views of the request bytes. The decoder executes nothing and is strict:
+
+- dtypes `F64`, `F32`, `F16`, `I64`, `I32`, `I16`, `I8`, `U8`, `BOOL` (no `BF16` on the wire);
+  a dtype other than the model's own input dtype is a `400`, never a silent cast;
+- no repeated names; each tensor's byte range matches its shape and dtype; the tensors tile
+  the data buffer exactly; each one is within `--max-input-bytes`;
+- tensor names must be the route's inputs (on `/predict/graph`: `x`, `edge_index`,
+  `edge_attr`, `num_nodes`, `num_edges`);
+- `__metadata__` may carry `output_encoding`; `text` is JSON only.
+
+Any violation is a `400` naming the problem. A safetensors response is chosen by
+`Accept: application/vnd.safetensors` or `output_encoding: "safetensors"` (in JSON or in the
+request's `__metadata__`): each output is a tensor under its own name, and `__metadata__`
+carries `downshift.predictions` (a classifier's predictions, as a JSON string) and
+`downshift.embedding` (the embedding recipe). A graph batch's outputs are named
+`graphs.<i>.<output>`, with the graph count in `downshift.graphs`.
+
 ## Headers
 
 | Header | Direction | Meaning |
@@ -463,7 +511,7 @@ server-wide default when the field is omitted), `"base64"` writes `{"data", "dty
 | `X-Request-Id` | Request (optional) / Response (always) | Echoed back if the client sent it, otherwise a generated 16-hex-char id (`RequestIdMiddleware`). A `500` body's `request_id` field and every server log line written while the request was served (the `downshift.access` request line included) carry the same value. |
 | `Authorization` | Request | `Bearer <key>`, required on every route but `/health` and `/ready` when `DOWNSHIFT_SERVER_API_KEY` is set. |
 | `WWW-Authenticate` | Response (`401` only) | `Bearer`. |
-| `Server-Timing` | Response (`/predict`, `/predict/graph`, `200` only) | `parse;dur=<ms>, codec;dur=<ms>, infer;dur=<ms>` - JSON parsing, request/response conversion, and the backend call. |
+| `Server-Timing` | Response (`/predict`, `/predict/graph`, `200` only) | `parse` (JSON or safetensors decode and validation), `prep_wait` (waiting for a prep thread), `prep` (conversion to arrays, tokenizing, input checks), `infer_wait` (waiting for an inference slot), `infer` (the backend call), `encode` (the response body), each `;dur=<ms>`. The same split is on the access log line as `timings_ms`. |
 | `Retry-After` | Response (`503` only) | `2` for "not ready yet" (`/metadata` and the predict routes), `1` for "at capacity". Not set on the "queued past `--request-timeout`" `503`. |
 | `Content-Length` | Request (optional) | Checked against `--max-body-bytes` before the body is read at all, when present; a chunked body without one is read and checked as it lands. |
 

@@ -7,29 +7,39 @@ Everything downshift serves is already on the machine you run it on: a PyTorch c
 ```
 $ downshift serve examples.scatter_include_self_false:make_model
 
-2026-09-21 18:38:04 WARNING downshift.serve: DOWNSHIFT_SERVER_API_KEY is not set, so the endpoints are unauthenticated. Set it to require a fixed API key, or add your own authentication middleware.
-2026-09-21 18:38:04 INFO downshift.report: loading examples.scatter_include_self_false:make_model
-2026-09-21 18:38:04 INFO downshift.report: will listen on http://127.0.0.1:8000 (not ready yet)
-2026-09-21 18:38:10 INFO downshift.report: downshift v0.4.0
+2026-10-10 19:10:19 WARNING downshift.serve: DOWNSHIFT_SERVER_API_KEY is not set, so the endpoints (including /metadata) are unauthenticated. Set it to require a fixed API key, or add your own authentication middleware.
+2026-10-10 19:10:19 INFO downshift.report: loading examples.scatter_include_self_false:make_model
+2026-10-10 19:10:19 INFO downshift.report: will listen on http://127.0.0.1:8000 (not ready yet)
+2026-10-10 19:10:25 INFO downshift.report: verify: sample 1/8, x [6, 8], segment_ids [6]
+2026-10-10 19:10:25 INFO downshift.report: verify: sample 2/8, x [12, 8], segment_ids [12]
+2026-10-10 19:10:25 INFO downshift.report: verify: sample 3/8, x [7, 8], segment_ids [7]
+2026-10-10 19:10:25 INFO downshift.report: verify: sample 4/8, x [7, 8], segment_ids [7]
+2026-10-10 19:10:25 INFO downshift.report: verify: sample 5/8, x [1, 8], segment_ids [1]
+2026-10-10 19:10:25 INFO downshift.report: verify: sample 6/8, x [12, 8], segment_ids [12]
+2026-10-10 19:10:25 INFO downshift.report: verify: sample 7/8, x [1, 8], segment_ids [1]
+2026-10-10 19:10:25 INFO downshift.report: verify: sample 8/8, x [7, 8], segment_ids [7]
+2026-10-10 19:10:25 INFO downshift.report: downshift v0.5.0
   Model          examples.scatter_include_self_false:make_model
   Family         generic
   Verdict        DEGRADED  (strict=False, opset 20)
-  Numerics       max abs err 1.15e+00 over 8 samples  6/8 failed
-                 ! numerics diverge on 6/8 samples (max abs err 1.15e+00)
+  Numerics       max abs err 1.43e+00 over 8 samples  6/8 failed
+                 ! numerics diverge on 6/8 samples (max abs err 1.43e+00)
   Override       --force-onnx to serve the ONNX graph anyway
   Tolerance      atol 1e-04, rtol 1e-03 (float32)
-  Worst          output_0[2, 6]: torch -0.4166, onnxruntime 0.7338  (sample 7, x (7,8), segment_ids (7))
+  Worst          output_0[1, 5]: torch 0.3096, onnxruntime -1.1223  (sample 1, x (12,8), segment_ids (12))
   Samples        x: (6,8) (12,8) (7,8) (7,8) (1,8) (12,8) (1,8) (7,8)
                  segment_ids: (6) (12) (7) (7) (1) (12) (1) (7)
-  Warmup         3 inferences, 0.17 ms each
-  Boot           5.4 s: load 0.0, export 5.4, verify 0.0, session 0.0, warmup 0.0
+  Warmup         3 inferences, 0.14 ms each
+  Boot           4.5 s: load 0.0, export 4.5, verify 0.0, session 0.0, warmup 0.0
   Backend        torch (eager) | cpu  <- auto-selected
   Verified on    CPUExecutionProvider
-  Dynamic dims   x[0], segment_ids[0]
+  Dynamic dims   `dim0` (x[0])  sampled 1-12, serves 1-65536  ! unverified above 12
+                 `dim0` (segment_ids[0])  sampled 1-12, serves 1-65536  ! unverified above 12
   Encoding       json  (clients override with output_encoding)
-  Capacity       1 inference at a time, 64 queued, 30 s timeout  (--max-concurrency, --max-queue, --request-timeout)
+  Capacity       4 inferences at a time, 4 prep threads, 64 queued, 30 s timeout  (--max-concurrency, --prep-threads, --max-queue, --request-timeout)
+  Execution      threadpool  (--execution)
   Endpoint       http://127.0.0.1:8000  (GET /schema for the input format)
-2026-09-21 18:38:10 INFO downshift.report: ready in 5.4 s
+2026-10-10 19:10:25 INFO downshift.report: ready in 4.5 s
 ```
 
 This graph exported without a single error and produces wrong numbers on 6 of 8 inputs. downshift caught it before the first request and is serving PyTorch instead. The model is [`examples/scatter_include_self_false.py`](examples/scatter_include_self_false.py); run the command from a clone of this repo.
@@ -153,7 +163,7 @@ req = urllib.request.Request(
 y = decode(json.load(urllib.request.urlopen(req))["outputs"]["output_0"])
 ```
 
-Send large tensors as base64: the server parses them about 4x cheaper than the same tensor as nested lists, and a JSON float list holds the GIL while it is parsed, which stalls everything else in that process. `downshift serve --output-encoding base64` (or `DOWNSHIFT_OUTPUT_ENCODING=base64`) makes base64 the default for every response without clients changing their requests; a per-request `output_encoding` still wins. The banner's `Encoding` row shows which default is in effect. Base64 input is validated, and each failure is a `400`:
+Send large tensors as safetensors (below) or base64: the server parses base64 about 4x cheaper than the same tensor as nested lists, and a JSON float list holds the GIL while it is parsed, which slows everything else in that process. `downshift serve --output-encoding base64` (or `DOWNSHIFT_OUTPUT_ENCODING=base64`) makes base64 the default for every response without clients changing their requests; a per-request `output_encoding` still wins. The banner's `Encoding` row shows which default is in effect. Base64 input is validated, and each failure is a `400`:
 
 - `dtype` and `shape` are mandatory. Shape is not inferable from bytes.
 - The decoded length must equal `prod(shape) * itemsize`. The error says what was expected and what arrived.
@@ -162,9 +172,22 @@ Send large tensors as base64: the server parses them about 4x cheaper than the s
 
 Install `downshift-server[fast]` to get `pybase64`, a SIMD base64 codec about 12x faster than the standard library's on both directions. Without it the server works the same; the banner prints a tip. Request bodies on every route are parsed with `orjson`, which is several times faster than the standard library on MiB-scale bodies, so clients that keep sending nested lists get a smaller win for free.
 
-Do not expect this to help on small payloads: under roughly 100 KiB the JSON codec is not where the time goes, and base64 gains nothing. The win scales with payload width. Measured over HTTP at concurrency 8 (`bench/REPORT_0.4.md`), the best case is `dynamic_batch_cnn` at batch 32 - a `(32, 3, 16, 16)` float32 batch, 96 KiB of tensor arriving as 498 KiB of nested-list JSON or 128 KiB of base64 - at 6.65x throughput and 6.33x p50; `cnn_large` and `mlp_large` at batch 32 are smaller but still real, at 2.65x and 2.10x throughput. At batch 1 on a narrow input the win can go slightly negative: `mlp_large` is 0.72x throughput, 0.75x p50, because base64's framing overhead is not free when there is little data to save. `bert_small`'s hidden-state outputs, once estimated here at ~3.5x, measure 1.05x on p50 at batch 32.
+Do not expect this to help on small payloads: under roughly 100 KiB the JSON codec is not where the time goes, and base64 gains nothing. The win scales with payload width. Measured over HTTP at concurrency 8 (`bench/REPORT_v0.4.0.md`), the best case is `dynamic_batch_cnn` at batch 32 - a `(32, 3, 16, 16)` float32 batch, 96 KiB of tensor arriving as 498 KiB of nested-list JSON or 128 KiB of base64 - at 6.65x throughput and 6.33x p50; `cnn_large` and `mlp_large` at batch 32 are smaller but still real, at 2.65x and 2.10x throughput. At batch 1 on a narrow input the win can go slightly negative: `mlp_large` is 0.72x throughput, 0.75x p50, because base64's framing overhead is not free when there is little data to save. `bert_small`'s hidden-state outputs, once estimated here at ~3.5x, measure 1.05x on p50 at batch 32.
 
-See CHANGELOG.md for wire-format changes in 0.4.
+The cheapest body of all is a safetensors file: send `Content-Type: application/vnd.safetensors` with one tensor per input name, and ask for a safetensors response with `Accept: application/vnd.safetensors`. The arrays are read straight out of the request bytes, with no JSON and no base64 framing (`bert_small`: p50 11.2 ms as JSON, 9.1 ms as safetensors). The dtype must be the model's own (no silent cast, no BF16), and `/predict/graph` takes a batch this way too. Full rules in [`docs/code-docs/http-api.md`](docs/code-docs/http-api.md#wire-formats).
+
+```python
+from safetensors.numpy import load, save
+
+req = urllib.request.Request(
+    "http://localhost:8000/predict",
+    save({"x": x}),
+    {"content-type": "application/vnd.safetensors", "accept": "application/vnd.safetensors"},
+)
+y = load(urllib.request.urlopen(req).read())["output_0"]
+```
+
+See CHANGELOG.md for wire-format changes in 0.4 and 0.5.
 
 ### Mount it in your own app
 
@@ -188,19 +211,21 @@ Options that change what gets served:
 - `--force-onnx` serves a DEGRADED graph through ONNX Runtime anyway. The banner says so.
 - `--reference model` verifies a pre-built `.onnx` against a PyTorch model; without it the verdict is UNVERIFIED. Purely numeric: pass `--tokenizer-from` too if `.onnx` also needs a tokenizer.
 - `--tokenizer-from dir/` loads the tokenizer, pooling recipe and label metadata for a `.onnx` or PyTorch MODEL from a Hugging Face repo directory, so `{"text": ...}` works without re-exporting. The graph is served as-is: it doesn't add pooling to a bare encoder, and `/schema` reports the recipe only when the output is already pooled. Independent of `--reference`: it never affects verification, and the two can name the same directory or different ones. See [Accepted model forms](#accepted-model-forms).
-- `--middleware pkg.module:Attr` (repeatable) attaches a `BaseHTTPMiddleware` subclass or an `async (request, call_next)` function. No middleware means no overhead.
+- `--middleware pkg.module:Attr` (repeatable) attaches a middleware class (pure ASGI, e.g. `starlette.middleware.gzip:GZipMiddleware`, or a `BaseHTTPMiddleware` subclass) or an `async (request, call_next)` function. No middleware means no overhead.
 - `--output-encoding json|base64` (env `DOWNSHIFT_OUTPUT_ENCODING`, default `json`) sets the response encoding for requests that do not send their own `output_encoding`.
 - `--max-input-bytes N` (env `DOWNSHIFT_MAX_INPUT_BYTES`, default 256 MiB) caps the decoded size of one base64 input; larger is a `400`.
 - `--max-body-bytes N` (env `DOWNSHIFT_MAX_BODY_BYTES`, default 32 MiB) caps every request body, checked before it is parsed as JSON; larger is a `413`. A `Content-Length` over the cap is refused without reading the body, and a chunked body is refused as soon as its running total passes it. There is no separate limit on text length: for a `{"text": ...}` request this cap is the limit.
-- `--max-concurrency N` (env `DOWNSHIFT_MAX_CONCURRENCY`, default 1) caps inferences running at once per worker process, via a dedicated thread pool of that size; requests beyond it wait in a queue rather than run inline. Small encoders usually gain from 2-4: all-MiniLM-L6-v2, batch 8, 8 concurrent clients served 52 req/s at `--max-concurrency 1` and 134 req/s at 4, because one small inference does not fill every core. Each extra concurrent inference holds its own activation memory, and a large model that already fills the cores gains nothing. `--workers` adds processes instead: measured on 16 logical cores, `--workers 4` raises `clean_mlp` throughput at concurrency 32 by about 3.8x over `--workers 1` (`bench/REPORT_0.4.md`), because each worker gets its own thread pool instead of sharing one.
+- `--max-concurrency N` (env `DOWNSHIFT_MAX_CONCURRENCY`, default 4) caps inferences running at once per worker process, via a dedicated thread pool of that size; requests beyond it wait in a queue rather than run inline. One inference rarely fills every core: all-MiniLM-L6-v2, batch 8, 8 concurrent clients served 52 req/s at `--max-concurrency 1` and 134 req/s at 4, and Qwen3-Embedding-0.6B on CPU 7.2 and 14.6 single queries/s. Each in-flight inference holds its own activation memory, so lower it if a large model's big requests run out of memory together. `--workers` adds processes instead: measured on 16 logical cores, `--workers 4` raises `clean_mlp` throughput at concurrency 32 by about 3.8x over `--workers 1` (`bench/REPORT_v0.4.0.md`), because each worker gets its own thread pool instead of sharing one.
 - `--max-queue N` (env `DOWNSHIFT_MAX_QUEUE`, default 64) caps predicts waiting past `--max-concurrency`. Once `max-concurrency + max-queue` requests are admitted, a new one gets an immediate `503` with `Retry-After: 1` instead of joining the queue.
 - `--request-timeout SECONDS` (env `DOWNSHIFT_REQUEST_TIMEOUT`, default 30, `0` turns it off) caps how long an admitted predict may wait, queued, for its turn before it gets a `503` instead of an inference. A request already running is never interrupted.
-- `--workers N` (env `DOWNSHIFT_WORKERS`, default 1) starts that many uvicorn worker processes. Each one independently loads, exports, verifies and warms the model, so memory and startup time scale with `N`. The parent frees its own copy of the model before the workers start.
-- `--device auto|cpu|cuda`, `--warmup N` (inferences before `/ready` flips), `--intra-op-threads N` and `--inter-op-threads N` (ONNX Runtime thread counts; 0 lets it choose), `--host`, `--port`, `--log-level`. `--device cuda` on a machine without CUDA is an error (exit code 4) on both backends, not a silent run on the CPU. The numerics gate only ever runs on the CPU, so the banner's `Verified on` row says so when you serve on a GPU.
+- `--workers N` (env `DOWNSHIFT_WORKERS`, default 1) starts that many uvicorn worker processes. The parent exports and verifies once; each worker builds its own ONNX Runtime session over that graph (or reloads the model, when torch serves it) and warms up, so memory and startup time scale with `N`. The parent frees its own copy of the model before the workers start.
+- `--execution threadpool|inline` (env `DOWNSHIFT_EXECUTION`, default `threadpool`). `threadpool` parses and prepares each request in the prep pool and runs inference and encoding on an inference thread: two thread hops, and the event loop never blocks. `inline` runs small JSON bodies (Content-Length up to 64 KiB, no `text`) on the event loop with no hop at all; it only pays off for models that infer in well under a millisecond, and a slower model stalls `/health` and `/ready`.
+- `--prep-threads N` (env `DOWNSHIFT_PREP_THREADS`, default `min(4, CPUs)`) sizes the prep pool that parses, validates and converts request bodies, apart from the inference threads.
+- `--device auto|cpu|cuda`, `--warmup N` (inferences before `/ready` flips), `--intra-op-threads N` (threads inside one op, for ONNX Runtime or torch; 0 = the backend's default; more threads cut single-request latency but cost throughput under concurrent load) and `--inter-op-threads N` (ONNX Runtime threads across ops; 0 lets it choose), `--host`, `--port`, `--log-level`. `--device cuda` on a machine without CUDA is an error (exit code 4) on both backends, not a silent run on the CPU. The numerics gate only ever runs on the CPU, so the banner's `Verified on` row says so when you serve on a GPU.
 - `--access-log/--no-access-log` (default on) controls the one log line per request; see [Logging](#logging).
 - `--version` prints the installed version and exits.
 
-Every response carries an `X-Request-Id` header (echoing the client's own if it sent one, otherwise a generated one) and every `/predict`/`/predict/graph` response carries `Server-Timing: parse;dur=<ms>, codec;dur=<ms>, infer;dur=<ms>` splitting JSON parsing, conversion/encoding and the backend call. A `500` body includes the same `request_id`, and every log line written while that request was being served does too, so "see the server log" has a key to search for. A predict is admitted, or refused with a `503`, before its body is read, so an overloaded server does not buffer or parse what it is about to refuse.
+Every response carries an `X-Request-Id` header (echoing the client's own if it sent one, otherwise a generated one) and every `/predict`/`/predict/graph` response carries `Server-Timing` with six stages, `parse`, `prep_wait`, `prep`, `infer_wait`, `infer` and `encode`, so you can see whether a slow request was waiting for a thread, converting its body or running the model. A `500` body includes the same `request_id`, and every log line written while that request was being served does too, so "see the server log" has a key to search for. A predict is admitted, or refused with a `503`, before its body is read, so an overloaded server does not buffer or parse what it is about to refuse.
 
 `serve` runs the same gate as `check`, so it also accepts `-k/--samples`, `--dynamic`, `--adapter`, `--inputs`, `--model-class`, `--unsafe-load`, `--atol`/`--rtol`, `--seed` and `--vary`, described below.
 
@@ -245,19 +270,28 @@ The gate also runs on its own, to gate CI and to write artifacts.
 ```
 $ downshift check examples.scatter_include_self_false:make_model
 
-2026-09-21 18:37:52 INFO downshift.report: downshift v0.4.0
+2026-10-10 19:10:15 INFO downshift.report: verify: sample 1/8, x [6, 8], segment_ids [6]
+2026-10-10 19:10:15 INFO downshift.report: verify: sample 2/8, x [12, 8], segment_ids [12]
+2026-10-10 19:10:15 INFO downshift.report: verify: sample 3/8, x [7, 8], segment_ids [7]
+2026-10-10 19:10:15 INFO downshift.report: verify: sample 4/8, x [7, 8], segment_ids [7]
+2026-10-10 19:10:15 INFO downshift.report: verify: sample 5/8, x [1, 8], segment_ids [1]
+2026-10-10 19:10:15 INFO downshift.report: verify: sample 6/8, x [12, 8], segment_ids [12]
+2026-10-10 19:10:15 INFO downshift.report: verify: sample 7/8, x [1, 8], segment_ids [1]
+2026-10-10 19:10:15 INFO downshift.report: verify: sample 8/8, x [7, 8], segment_ids [7]
+2026-10-10 19:10:15 INFO downshift.report: downshift v0.5.0
   Model           examples.scatter_include_self_false:make_model
   Family          generic
   Export          DEGRADED  (strict=False, opset 20)
-  Numerics        max abs err 1.15e+00 over 8 samples  6/8 failed
+  Numerics        max abs err 1.48e+00 over 8 samples  6/8 failed
   Tolerance       atol 1e-04, rtol 1e-03 (float32)
-  Worst           output_0[3, 3]: torch -0.1168, onnxruntime 1.0317  (sample 3, x (7,8), segment_ids (7))
+  Worst           output_0[0, 5]: torch 0.0240, onnxruntime -1.4570  (sample 2, x (7,8), segment_ids (7))
   Samples         x: (6,8) (12,8) (7,8) (7,8) (1,8) (12,8) (1,8) (7,8)
                   segment_ids: (6) (12) (7) (7) (1) (12) (1) (7)
   Shape-general   n/a (baseline fails)
-  Dynamic dims    x[0], segment_ids[0]
+  Dynamic dims    `dim0` (x[0])  sampled 1-12, serves 1-65536  ! unverified above 12
+                  `dim0` (segment_ids[0])  sampled 1-12, serves 1-65536  ! unverified above 12
   Backend         torch
-  Reason          exported via strict=False but numerics diverge on 6/8 samples (max abs err 1.15e+00)
+  Reason          exported via strict=False but numerics diverge on 6/8 samples (max abs err 1.48e+00)
 ```
 
 The `Tolerance` row shows which dtype picked the default (or `--atol/--rtol` when either overrides it); `Worst` (DEGRADED only) is the single largest-error output element across every sample tried; `Samples` lists every sample's input shapes, so shape generalization has visible content; `Shape-general` is `yes`, `no`, or `n/a (baseline fails)` when the un-varied example itself didn't pass (shape generalization was never evaluated in that case).
@@ -333,14 +367,14 @@ Two rows worth reading twice. `custom_autograd` was expected to fail and is CLEA
 
 downshift serves models whose answer is one forward pass: tensors in, tensors out. That is what makes the gate possible, because a single pass can be checked numerically between the ONNX graph and PyTorch. GNNs, encoders, classifiers, embedders and your own `nn.Module`s fit. Anything that needs a loop around the model does not.
 
-- **No generation.** No `onnxruntime-genai` backend, no OpenAI-compatible endpoints, no KV cache, no sampling loop, no chat templates. Use vLLM, TGI or llama.cpp for that. A decoder-only Hugging Face repo (`...ForCausalLM`) is not a target: it loads as the bare backbone, without its `lm_head`, and serves hidden states, which is almost never the answer you want from it. downshift does not refuse it, so check `GET /schema` for what actually comes out before relying on it.
+- **No generation.** No `onnxruntime-genai` backend, no OpenAI-compatible endpoints, no KV cache, no sampling loop, no chat templates. Use vLLM, TGI or llama.cpp for that. A decoder-only Hugging Face repo (`...ForCausalLM`) is refused unless it ships an embedding recipe (Qwen3-Embedding does: last-token pooling, left padding), in which case it is served as an embedder.
 - **No remote code.** `trust_remote_code` is never set, so a Hugging Face repo whose `config.json` has an `auto_map` (Alibaba GTE v1.5 and other custom architectures) fails to load. Running Python shipped inside a model repo would break the promise that serving is offline and does nothing you did not ask for. Convert the model to a native architecture, or export it to ONNX yourself and serve that with `--tokenizer-from`.
 - **No multimodal Hugging Face models.** Text in, one tensor out is the supported shape.
 - **No quantization or graph optimization, ever.** Not deferred, cut. Run Olive, `onnxruntime.quantization`, or your own script, then hand the result to `downshift serve model.onnx --reference model.pt` and it gets verified against the original weights like any other export. `--fp16` is a cast before tracing, nothing lower exists here.
 - **No continuous batching, no PagedAttention.** The boot banner is a visual homage to vLLM. That is the full extent of the resemblance.
 - **No dynamic request batching yet.** One request, one inference.
-- **No graph batching yet.** `/predict/graph` takes one graph. Concatenate graphs client-side with offset edge indices if you need more.
-- **No Prometheus metrics, no Docker image.** `--middleware` is the hook for the former; pip plus version pins is the path for the latter.
+- **No graph-level batching yet.** `/predict/graph` takes a batch of graphs when the model's outputs are per node or per edge; a model with a pooled, fixed-size output still takes one graph per request.
+- **No Docker image.** pip plus version pins is the path.
 - **No DGL adapter yet.** PyG only.
 
 **vs. anydeploy.** `anydeploy` also does export, validate, and serve, with a pass/fail validation step and an edge/mobile focus. downshift differs in three places: the verdict is tiered, with DEGRADED as a real middle state between "works" and "crashes"; the eager PyTorch fallback sits behind the same endpoint so a FAILED or DEGRADED model still serves; and GNNs (PyTorch Geometric) are a supported family with independent node and edge dynamic dims.
