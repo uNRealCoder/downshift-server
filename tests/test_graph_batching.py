@@ -52,6 +52,24 @@ def torch_gcn_client(serve_fixture) -> TestClient:
     return TestClient(build_app(serve_fixture("gnn_gcn", backend="torch")))
 
 
+def test_a_failed_export_still_classifies_outputs_for_the_torch_fallback(
+    serve_fixture, monkeypatch
+):
+    # torch 2.5 can't export this GCN; the fallback must batch like --backend torch does.
+    from downshift.core import verdict as verdict_mod
+    from downshift.core.capture import CaptureResult
+
+    failed = CaptureResult(success=False, capture_strategy=None, exception=RuntimeError("no"))
+    monkeypatch.setattr(verdict_mod, "capture", lambda *a, **k: failed)
+    state = serve_fixture("gnn_gcn")
+
+    assert state.verdict.status == "FAILED"
+    assert state.backend.name == "torch"
+    assert state.verdict.output_axes == ["node"]
+    resp = TestClient(build_app(state)).post("/predict/graph", json={"graphs": _graphs()})
+    assert resp.status_code == 200, resp.text
+
+
 @pytest.mark.parametrize("which", ["gcn_client", "torch_gcn_client"])
 def test_batch_matches_single_requests(which, request):
     client = request.getfixturevalue(which)

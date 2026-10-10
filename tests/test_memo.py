@@ -305,6 +305,7 @@ def test_cache_false_bypasses_both_ways(tmp_path, count_builds):
     assert {"export", "verify"} <= set(boot(app))
 
 
+@pytest.mark.needs_torch_26
 def test_a_second_app_for_of_a_repo_skips_export_and_never_loads_weights(tmp_path, monkeypatch):
     pytest.importorskip("transformers")
     from transformers import AutoModel
@@ -329,6 +330,7 @@ def test_a_second_app_for_of_a_repo_skips_export_and_never_loads_weights(tmp_pat
     assert client.get("/schema").json()["text_input"] is not None
 
 
+@pytest.mark.needs_torch_26
 def test_editing_a_repo_file_misses(tmp_path, monkeypatch):
     pytest.importorskip("transformers")
     from tests.models.hf_repo import write_encoder_repo

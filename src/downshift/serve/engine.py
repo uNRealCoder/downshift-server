@@ -203,9 +203,13 @@ def _verdict_for(
             "serving torch (pass --backend torch to silence this)",
             eager_output_axes(prepared),
         )
-    return build_verdict(
+    verdict = build_verdict(
         prepared, k=opts.k, atol=opts.atol, rtol=opts.rtol, seed=opts.seed, timings=timings
     )
+    if verdict.status == Status.FAILED and not verdict.output_axes:
+        # A failed export never reached verify, so classify on the eager model it falls back to.
+        verdict.output_axes = eager_output_axes(prepared)
+    return verdict
 
 
 def choose_backend(

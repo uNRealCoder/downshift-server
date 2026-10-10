@@ -74,6 +74,7 @@ def test_the_default_writes_nothing(tmp_path, repo):
     assert sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*")) == before
 
 
+@pytest.mark.needs_torch_26
 def test_a_restart_reuses_the_export_and_never_loads_weights(cache, repo, no_weights):
     first = app_for(repo, k=2, warmup=1, export_cache_dir=str(cache))
     assert {"export", "verify"} <= set(boot(first))
@@ -98,6 +99,7 @@ def test_a_restart_reuses_the_export_and_never_loads_weights(cache, repo, no_wei
     assert len(entries(cache)) == 1
 
 
+@pytest.mark.needs_torch_26
 def test_the_boot_banner_says_where_the_export_came_from(cache, repo, no_weights):
     from downshift.cli import render
     from downshift.serve.reuse import prepare_serving_reusing
@@ -118,6 +120,7 @@ def test_the_boot_banner_says_where_the_export_came_from(cache, repo, no_weights
     assert "reused from --export-cache-dir" in render._boot_text(disk)
 
 
+@pytest.mark.needs_torch_26
 def test_a_corrupted_graph_is_exported_again_and_overwritten(cache, repo, caplog):
     app_for(repo, k=1, warmup=0, export_cache_dir=str(cache))
     (entry,) = entries(cache)
@@ -148,6 +151,7 @@ def test_a_damaged_data_file_or_manifest_is_a_miss(cache):
     assert {"export", "verify"} <= set(boot(again))
 
 
+@pytest.mark.needs_torch_26
 def test_a_leftover_temp_directory_is_ignored(cache, repo, no_weights):
     leftover = cache / "deadbeef.tmp-1234-abcd"
     leftover.mkdir()
@@ -216,6 +220,7 @@ def test_export_to_a_directory_after_an_external_disk_hit(cache, tmp_path, monke
     assert session.get_inputs()[0].name == "x"
 
 
+@pytest.mark.needs_torch_26
 def test_a_content_digest_is_computed_once_per_file_across_boots(
     cache, repo, no_weights, monkeypatch
 ):
