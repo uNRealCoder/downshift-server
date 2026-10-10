@@ -40,7 +40,9 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install "torch==2.5.1" --index-url https://download.pytorch.org/whl/cpu
-      - run: pip install "onnx==1.16.0" "onnxruntime==1.17.0" "onnxscript==0.5.0" "numpy<2"
+      # transformers 5.19 calls torch.accelerator (torch 2.6+) on import; 5.17.0 is the last
+      # release this job passed with.
+      - run: pip install "onnx==1.16.0" "onnxruntime==1.17.0" "onnxscript==0.5.0" "numpy<2" "transformers==5.17.0"
       - run: pip install -e ".[dev,gnn,hf,fast]"
       - run: ruff check .
       - run: ruff format --check .
