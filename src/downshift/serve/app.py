@@ -368,7 +368,7 @@ def _loader_lifespan(
             # This runs in a new Context (see below). This set() is therefore visible only to the
             # call stack of this thread. The calls that report the phase inside the builders of
             # engine.py (U4) read it again with CURRENT_PROGRESS.get(). Downshift does not pass
-            # a parameter through each builder and through the own loader closure of the CLI.
+            # a parameter through each builder and through the loader closure of the CLI.
             CURRENT_PROGRESS.set(progress)
             try:
                 app.state.serving = loader()

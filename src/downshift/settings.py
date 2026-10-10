@@ -100,7 +100,7 @@ WARMUP = _env_int("DOWNSHIFT_WARMUP", 3)
 SAMPLES = _env_int("DOWNSHIFT_SAMPLES", DEFAULT_SAMPLES)
 
 # 0 means "the default of the backend". For ONNX Runtime, this is the physical cores for
-# intra-op and 1 for inter-op. For torch, it is the own thread count of torch. Intra-op applies
+# intra-op and 1 for inter-op. For torch, it is the thread count of torch. Intra-op applies
 # to both backends. Inter-op applies to ONNX Runtime only.
 INTRA_OP_THREADS = _env_int("DOWNSHIFT_INTRA_OP_THREADS", 0)
 INTER_OP_THREADS = _env_int("DOWNSHIFT_INTER_OP_THREADS", 0)

@@ -38,7 +38,7 @@ _UNKNOWN_HELP = (
 def eager_output_axes(prepared: Any, samples: int = 4) -> list[str]:
     """The output kinds for a PyG model whose export (and so verification) was skipped with
     `--backend torch`. It is the same classification that verify makes. It uses a few eager
-    forward passes over the own varied samples of the adapter. It returns [] (each output
+    forward passes over the varied samples of the adapter. It returns [] (each output
     unknown) if it cannot find the kinds."""
     from downshift.adapters.base import Family
     from downshift.core.axes import classify_outputs
@@ -94,7 +94,7 @@ def batch_graphs(
 ) -> tuple[dict[str, np.ndarray], list[int], list[int]]:
     """Join graphs into one feed dict. Each edge_index gets an offset of the nodes before it.
 
-    Each item has `x` [n, ...], `edge_index` [2, e] in the own node IDs of that graph, and
+    Each item has `x` [n, ...], `edge_index` [2, e] in the node IDs of that graph, and
     optionally `edge_attr` [e, ...]. It returns (feeds, node_counts, edge_counts). It raises
     ValueError that names the graph with the fault, for example "graphs[2]: ...".
     """
@@ -188,7 +188,7 @@ def binary_batch(
             f"{attr.shape[0] if attr.ndim else 0} rows"
         )
 
-    # The node count of the own graph of each edge, and the nodes of each graph before it.
+    # The node count of the graph of each edge, and the nodes of each graph before it.
     # Downshift checks the range of the local IDs and moves them to batch IDs in one pass. x and
     # edge_attr stay as they were sent.
     edge_nodes = np.repeat(num_nodes, num_edges)

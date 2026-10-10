@@ -134,7 +134,7 @@ class PredictResponse(BaseModel):
 
 
 class GraphItem(BaseModel):
-    """One graph of a batch: the node features, the COO edge index in the own node IDs of the
+    """One graph of a batch: the node features, the COO edge index in the node IDs of the
     graph, and optional edge attributes."""
 
     x: list | dict
@@ -291,7 +291,7 @@ class MetadataResponse(BaseModel):
 
 
 class AxisBound(BaseModel):
-    """The min and max that the export of the adapter traced this axis for (the own bounds of
+    """The min and max that the export of the adapter traced this axis for (the bounds of
     torch.export.Dim).
 
     They exist only for axes that an adapter made dynamic on a model that downshift exported
@@ -309,7 +309,7 @@ class TensorSchema(BaseModel):
     In `shape`, an int is a fixed size and a string is a dynamic axis. The string is a name that
     the adapter chose ("batch", "seq") or the plain word "dynamic". `example_shape` is that
     shape with each dynamic axis pinned to 1. `example_request` used it. `bounds`, if known, has
-    the same length as `shape`. It has one AxisBound for each dynamic axis that the own export
+    the same length as `shape`. It has one AxisBound for each dynamic axis that the export
     of downshift traced, and None for the other axes.
     """
 

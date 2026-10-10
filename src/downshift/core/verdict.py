@@ -238,7 +238,7 @@ def prepare_model(
     """Select an adapter, synthesize inputs if necessary, and flatten the model into the form
     for export.
 
-    vary replaces the own vary_fn of the adapter. Downshift imports a spec string in the same
+    vary replaces the vary_fn of the adapter. Downshift imports a spec string in the same
     way as the custom-file form of --adapter (fn(i) -> inputs, and fn(0) must return the
     example).
 
@@ -423,7 +423,7 @@ def check(
 
     atol and rtol are None by default. This means "select by the floating dtype of the model"
     (see verify.default_tolerances). seed makes the verification samples reproducible. vary
-    replaces the own vary_fn of the adapter. See prepare_model, which also says what axis_max
+    replaces the vary_fn of the adapter. See prepare_model, which also says what axis_max
     does.
     """
     key = None

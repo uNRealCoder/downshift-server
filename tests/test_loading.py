@@ -131,7 +131,7 @@ def test_unrecognized_existing_file_suffix_is_rejected(tmp_path):
     path = tmp_path / "model.xyz"
     path.write_text("hi")
 
-    with pytest.raises(LoadError, match="cannot load"):
+    with pytest.raises(LoadError, match="unknown file type"):
         load_model(LoadSpec(str(path)))
 
 
@@ -159,7 +159,7 @@ def test_hf_load_failure_is_wrapped_in_load_error(tmp_path, monkeypatch):
 
     monkeypatch.setattr(hf_repo, "load_pretrained", boom)
 
-    with pytest.raises(LoadError, match="cannot load"):
+    with pytest.raises(LoadError, match="incomplete Hugging Face repo"):
         load_model(LoadSpec(str(tmp_path)))
 
 

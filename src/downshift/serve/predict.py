@@ -122,7 +122,7 @@ def resolve_prompt(state: ServingState, prompt_name: str | None, has_text: bool)
 def _text_feeds(
     state: ServingState, text: list[str], declared: dict[str, str | None], prompt: str = ""
 ) -> dict[str, np.ndarray]:
-    """Tokenize a `text` request into the own inputs of the graph, with `prompt` at the start of
+    """Tokenize a `text` request into the inputs of the graph, with `prompt` at the start of
     each row. ValueError means that the text of the client was not usable."""
     assert state.text is not None  # run_predict refuses a text request without it
     encoded = state.text.encode([prompt + row for row in text] if prompt else text)
@@ -163,7 +163,7 @@ def _shape_violation(state: ServingState, feeds: dict[str, np.ndarray]) -> str |
 
 
 def _bound_violation(state: ServingState, feeds: dict[str, np.ndarray]) -> str | None:
-    """U2: the first input whose shape is outside an axis that the own export of downshift
+    """U2: the first input whose shape is outside an axis that the export of downshift
     traced. None if each known bound is satisfied (also if no bound is known)."""
     for name, arr in feeds.items():
         bounds = state.axis_bounds.get(name)
@@ -195,7 +195,7 @@ def _binary_feeds(
     state: ServingState, tensors: dict[str, np.ndarray], declared: dict[str, str | None]
 ) -> dict[str, np.ndarray]:
     """The arrays of a safetensors request are already NumPy, and downshift never casts them. A
-    dtype that is not the own dtype of the graph gives a 400 and not a silent copy."""
+    dtype that is not the dtype of the graph gives a 400 and not a silent copy."""
     feeds = {n: tensors[n] for n in state.input_names}
     for name, arr in feeds.items():
         expected = normalize_dtype(declared.get(name))
@@ -260,7 +260,7 @@ class _Request:
 def _prepare_feeds(
     state: ServingState, request: _Request
 ) -> tuple[dict[str, np.ndarray], float, GraphLayout | None]:
-    """Turn a validated request into the own input arrays of the graph (base64 decode,
+    """Turn a validated request into the input arrays of the graph (base64 decode,
     to_numpy, tokenize), and do the checks that need them: vocabulary, edge index and axis
     bounds. It runs in state.prep_executor. It returns the feeds, the milliseconds that it used
     and, for a graph batch, the counts for each graph. `request.tensors` (a safetensors body
@@ -294,7 +294,7 @@ def _prepare_feeds(
     vocab_violation = _vocab_violation(state, feeds)
     if vocab_violation is not None:
         raise HTTPException(400, vocab_violation)
-    # Downshift checked a batch graph by graph, against the own node count of each graph.
+    # Downshift checked a batch graph by graph, against the node count of each graph.
     edge_violation = None if layout is not None else edge_index_violation(feeds)
     if edge_violation is not None:
         raise HTTPException(400, edge_violation)
@@ -418,7 +418,7 @@ def _json_str(value: Any) -> str:
 
 
 def _validate_json[ModelT: BaseModel](model: type[ModelT], body: bytes) -> ModelT:
-    """orjson, then the pydantic model of the route. Both give the own 422 errors of FastAPI. An
+    """orjson, then the pydantic model of the route. Both give the 422 errors of FastAPI. An
     empty body is the missing body. Malformed JSON is json_invalid. The errors of the model are
     under "body". The error dicts copy what the request handler of FastAPI builds
     (fastapi/routing.py, get_request_handler). It has no public helper for them. Tests pin all

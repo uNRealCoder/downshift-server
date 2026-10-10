@@ -3,7 +3,7 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## 0.5.0 - Unreleased
+## 0.5.0 - 2026-10-10
 
 ### Added
 
@@ -34,6 +34,7 @@ All notable changes to this project are documented here. Format follows
 - Breaking change: `NumericsReport.session` is removed. The verdict keeps the ONNX Runtime session that verification used, as a private value. It gives the session to the server one time.
 - Breaking change: `downshift.loading` no longer re-exports `IN_PROCESS_MODULE` and `SOURCE_KIND_HELP`. Import them from `downshift.sources`. `downshift.cli.main._serve_app_factory` is removed. It is now in `downshift.cli.runtime`.
 - Breaking change: the `downshift.demo` models are no longer in the wheel. They are in `examples/` at the root of the repo. The README commands run from a clone as `examples.scatter_include_self_false:make_model`.
+- The wording of error messages changed in the prose rewrite. This includes the `detail` text of 400 responses (for example `"x axis 1 is 5; this model takes 16"`), the CLI help, and the errors of the model loader. A load error now starts with `unknown file type` or `incomplete Hugging Face repo`, and an import error starts with `cannot import`. Before, these started with `don't know how to load`, `can't load` and `can't import`. A client or script that matches the old text must change.
 - `check`, `export` and `serve` on the command line do not hash all weights for the in-process export memo. One export for each process cannot reuse it. With `--export-cache-dir`, downshift still computes the key for the disk tier.
 - `export` writes the graph that it already serialized. It does not serialize it a second time.
 - `serve --workers N`: the parent reuses the ONNX Runtime session of the verification. Before, it built a second session only to print the banner. Workers boot from the export of the parent in the same way as for a cache hit.

@@ -105,8 +105,8 @@ def _tensor_schema(
     """One input or output. The dtype name of the backend is normalized to the name that a
     client puts in a typed or base64 body ("tensor(float)" -> "float32").
 
-    `axis_info` (U2), if you give it, has the own axis names and the (min, max) bounds of the
-    adapter (state.axis_bounds). The ONNX graph has lost the names (the own "s0" and "s1" of
+    `axis_info` (U2), if you give it, has the axis names and the (min, max) bounds of the
+    adapter (state.axis_bounds). The ONNX graph has lost the names (the "s0" and "s1" of
     torch.export). A bounded axis therefore reports the name of the adapter and its bound, and
     not "dynamic".
     """
@@ -235,7 +235,7 @@ def axes_info(state: ServingState) -> list[AxisInfo]:
 
 
 def describe(state: ServingState, predict_url: str) -> SchemaResponse:
-    """Build the /schema body. `predict_url` is the own /predict URL of this server, taken from
+    """Build the /schema body. `predict_url` is the /predict URL of this server, taken from
     the request. The caller can therefore run the example curl."""
     meta = state.backend.metadata()
     declared = {spec.name: spec for spec in meta.inputs}

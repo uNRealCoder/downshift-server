@@ -176,7 +176,7 @@ def load_model(spec: LoadSpec) -> LoadedModel:
         return _load_hf(spec.model, spec.inputs, spec.pooling, spec.normalize)
 
     if path.exists():
-        raise LoadError(f"cannot load {path} (unknown suffix {path.suffix!r}). {ACCEPTED}.")
+        raise LoadError(f"unknown file type {path.suffix!r} for {path}. {ACCEPTED}.")
 
     if not path.suffix and _HUB_ID.match(spec.model):
         raise LoadError(
@@ -234,7 +234,7 @@ def _load_hf(
         raise LoadError(f"{spec}: {exc}") from exc
     except (OSError, ValueError) as exc:  # a bad or incomplete download shows as one of them
         raise LoadError(
-            f"cannot load {spec!r} as a downloaded Hugging Face repo: {exc}. Downshift "
+            f"incomplete Hugging Face repo {spec!r}: {exc}. Downshift "
             "fetches nothing to fill a gap. An incomplete download therefore fails here and "
             "not later."
         ) from exc

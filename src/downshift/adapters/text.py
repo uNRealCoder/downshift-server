@@ -2,7 +2,7 @@
 
 `/predict` normally takes tensors. If the served directory also has tokenizer files, it
 accepts `{"text": ...}` too. The server tokenizes and pads the batch (it refuses a row that is
-longer than the own limit of the model). It then gives the batch to the same graph as the
+longer than the limit that the model sets). It then gives the batch to the same graph as the
 tensor path. A sequence classifier also gets a `predictions` block (softmax, or sigmoid for a
 multi-label config) next to the raw logits. This module does not import transformers. The
 tokenizer is the object that the hf adapter loaded. Downshift uses it through its call
@@ -41,7 +41,7 @@ class TextIO:
             rows = ", ".join(f"row {i}: {n}" for i, n in over.items())
             raise ValueError(
                 f"text longer than this model reads ({self.max_length} tokens, from the "
-                f"own files of the model) is refused and not cut. Token counts: {rows}"
+                f"the model files set this limit) is refused and not cut. Token counts: {rows}"
             )
         padded = self.tokenizer.pad(encoded, return_tensors="np")
         return {name: np.asarray(value) for name, value in padded.items()}

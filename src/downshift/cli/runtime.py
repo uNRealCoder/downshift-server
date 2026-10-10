@@ -225,7 +225,7 @@ def _write_onnx_artifact(state: ServingState) -> tuple[Path, Path | None, Path |
 
     verdict = state.verdict
     if verdict._tmpdir is not None:
-        # An export with external data is in the own temporary directory of the verdict. The
+        # An export with external data is in a temporary directory that the verdict owns. The
         # data file is next to the .onnx file. The parent drops its state before the workers
         # load. That would delete the directory. It must therefore outlive the verdict (its
         # finalizer then runs at exit).

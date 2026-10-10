@@ -160,7 +160,7 @@ def read_recipe(path: Path) -> EmbeddingRecipe | None:
 def resolve_recipe(
     path: str | Path, pooling: str | None, normalize: bool | None, *, has_head: bool
 ) -> EmbeddingRecipe | None:
-    """What to serve: the own recipe of the repo, changed by --pooling and --normalize if you
+    """What to serve: the recipe of the repo itself, changed by --pooling and --normalize if you
     give them.
 
     `pooling` "none" means the output of the encoder at token level. It ignores what the repo

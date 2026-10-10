@@ -119,7 +119,7 @@ def _require_cuda_provider(session: ort.InferenceSession, requested: list[str]) 
     installed. It removes it from a session without a message if the CUDA or cuDNN libraries
     that the wheel was built for cannot be loaded. The session then runs on the CPU. --device
     cuda is a promise about where the model runs. If the promise fails, fail with a clear error,
-    like the own check of torch for missing CUDA."""
+    like the check of torch for missing CUDA."""
     if requested[0] != _CUDA_EP:
         return
     actual = session.get_providers()[0]
@@ -128,7 +128,7 @@ def _require_cuda_provider(session: ort.InferenceSession, requested: list[str]) 
             f"--device cuda: onnxruntime could not start {_CUDA_EP} and would have served on "
             f"{actual}. onnxruntime-gpu needs the CUDA and cuDNN runtime libraries that it was "
             "built for on the library path of this machine. Its release notes name the CUDA "
-            "major version. Downshift silences the own load errors of onnxruntime. To see them, "
+            "major version. Downshift silences the load errors of onnxruntime. To see them, "
             "run onnxruntime.preload_dlls() in Python. Or pass --device cpu"
         )
 
@@ -212,7 +212,7 @@ class TorchBackend:
         intra_op_threads: int = 0,
         dynamic_shapes: tuple | None = None,
     ) -> None:
-        if intra_op_threads > 0:  # 0 means "keep the own default of torch"
+        if intra_op_threads > 0:  # 0 means "keep the default of torch"
             torch.set_num_threads(intra_op_threads)
         self.device = resolve_device(device)
         if self.device.startswith("cuda") and not torch.cuda.is_available():

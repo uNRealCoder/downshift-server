@@ -21,7 +21,7 @@ request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
 
 _UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
 
-# The boot banner and the check and export reports. They are the own output of the command and
+# The boot banner and the check and export reports. They are the output of the command itself and
 # not diagnostics. They therefore print at all values of --log-level. (The default, warning,
 # would hide them otherwise.)
 REPORT_LOGGER = "downshift.report"

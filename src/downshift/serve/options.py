@@ -59,6 +59,6 @@ class ServeOptions:
     atol: float | None = None  # None means "by the floating dtype of the model"
     rtol: float | None = None
     seed: int = 0  # makes the verification samples reproducible
-    vary: str | None = None  # pkg.module:fn that replaces the own vary_fn of the adapter
+    vary: str | None = None  # pkg.module:fn that replaces the vary_fn of the adapter
     pooling: str | None = None  # a PoolingChoice value. It overrides the repo recipe
     normalize: bool | None = None  # L2-normalise the embedding. None = the setting of the recipe

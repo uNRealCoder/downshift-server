@@ -92,7 +92,7 @@ class ServingState:
     # returns), "export", "verify", "session" and "warmup", for the phases that ran. The Boot row
     # of the CLI banner and the `boot` field of /metadata read it.
     timings: dict[str, float] = field(default_factory=dict)
-    # For each input and each dynamic axis: the (name, min, max) that the own export of downshift
+    # For each input and each dynamic axis: the (name, min, max) that the export of downshift
     # traced (U2). Empty for a bare .onnx file with no reference model. There is no Prepared from
     # which to read it.
     axis_bounds: AxisBounds = field(default_factory=dict, repr=False)
@@ -294,7 +294,7 @@ def attach_hf_metadata(state: ServingState) -> None:
         config = hf_repo.load_config(state.hf_source)
         vocab = getattr(config, "vocab_size", None)
         state.vocab_size = int(vocab) if vocab is not None else None
-        # --pooling and --normalize change the own export of the hf adapter. The graph of a
+        # --pooling and --normalize change the export of the hf adapter. The graph of a
         # --tokenizer-from companion is already built. For it, they would only give a wrong
         # label in /schema.
         direct = state.source_kind == HF_REPO_DIR
@@ -328,7 +328,7 @@ def _pooled_output(backend: Backend) -> bool:
 
 def _reusable_verify_session(verdict: ExportVerdict, opts: ServeOptions) -> Any:
     """The session that verify() already built, if the serving options mean the same: the device
-    resolves to cpu and both thread counts are 0. This is exactly the own session of verify (the
+    resolves to cpu and both thread counts are 0. This is exactly the session of verify (the
     defaults of ORT, CPU only). All other options need their own session. The verdict lets go of
     it in both cases. A session that nobody uses is a second copy of the weights."""
     session = verdict.take_session()
@@ -491,7 +491,7 @@ def serving_state_from_artifact(
 ) -> ServingState:
     """A ServingState over an ONNX graph that an earlier export already verified (a cache hit,
     or the export of a `serve --workers N` parent). There is no capture and no verification. It
-    only makes a session over the graph at verdict.onnx_path, or over the own onnx_bytes of the
+    only makes a session over the graph at verdict.onnx_path, or over the onnx_bytes of the
     verdict if that is None. The verdict has no `prepared`, so `input_names`, `kind` and
     `hf_source` come from the caller. `example_inputs` are the saved feeds, if there were any.
     Otherwise, warmup() synthesizes them. `reused` says which cache the verdict came from, for
@@ -525,8 +525,8 @@ def serving_state_from_torch_artifact(
     """Build a ServingState again in a `serve --workers N` worker, if the export of the parent
     chose torch. The worker still loads and prepares the model itself, because downshift does
     not send torch weights between processes. It uses the verdict that the parent already
-    verified, and it does not export again. `loaded` is the own reload by the caller of the same
-    model spec that the parent used. `hf_source` is the own resolved value of the parent. It is
+    verified, and it does not export again. `loaded` is the reload by the caller of the same
+    model spec that the parent used. `hf_source` is the resolved value of the parent. It is
     passed in the same way as in serving_state_from_artifact.
     """
     report(Phase.load)

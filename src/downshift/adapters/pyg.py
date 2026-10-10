@@ -91,7 +91,7 @@ def make_vary_fn(
 ) -> VaryFn:
     """Generate (x, edge_index[, edge_attr]) again, with N and E varied independently.
 
-    Downshift draws edge_index again for the own node count of the sample. It does not use the
+    Downshift draws edge_index again for the node count of the sample. It does not use the
     value range of the original tensor. A graph that is smaller then never references nodes
     that it does not have. With --axis-max, sample 1 is exactly at the pinned `num_nodes` and
     `num_edges` (the other one keeps the size of the example).

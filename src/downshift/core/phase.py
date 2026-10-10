@@ -33,7 +33,7 @@ class LoadProgress:
 # The loader lifespan of build_app sets it, in a new contextvars.Context that it gives to the
 # loader thread. report() is called from the thread that loads (this includes the export and the
 # verification in core). It then reaches the LoadProgress that /ready reads. Downshift does not
-# need to pass a parameter through each builder, through core, and through the own loader closure
+# need to pass a parameter through each builder, through core, and through the loader closure
 # of the CLI (see _loader_lifespan in serve/app.py).
 CURRENT_PROGRESS: ContextVar[LoadProgress | None] = ContextVar(
     "downshift_load_progress", default=None

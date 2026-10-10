@@ -54,7 +54,7 @@ _VOCAB_FILES = (
 # Families whose position ids start at pad_token_id + 1 (the padding_idx offset). The position
 # table therefore has that many fewer usable positions than max_position_embeddings says.
 _PADDING_OFFSET_TYPES = frozenset({"roberta", "xlm-roberta", "xlm-roberta-xl", "camembert"})
-_DEFAULT_PAD_TOKEN_ID = 1  # the own default of RobertaConfig, for a config that does not set it
+_DEFAULT_PAD_TOKEN_ID = 1  # the default of RobertaConfig itself, for a config that does not set it
 _MIN_USABLE_POSITIONS = 2  # torch.export.Dim needs max > min (min is 1)
 
 
@@ -95,7 +95,7 @@ def _refuse_remote_code(root: Path) -> None:
         if _json_dict(root / name).get("auto_map"):
             raise RemoteCodeError(
                 f"{name} has an auto_map, so loading it would run Python code from the repo. "
-                "Downshift never runs the own code of a repo (no trust_remote_code)"
+                "Downshift never runs the code of a repo (no trust_remote_code)"
             )
 
 
@@ -212,7 +212,7 @@ def load_text_io(
     """The tokenizer and label metadata that let /predict take text. None if the repo has no
     tokenizer files. The local-only rule and `config` are the same as for embedding_recipe.
 
-    The longest text that downshift accepts is the smallest of the limits that the own files of
+    The longest text that downshift accepts is the smallest of the limits that the files of
     the model declare: the limit of the tokenizer, the limit of the position embeddings, and the
     length that the author used for training (`recipe.max_seq_length`). Downshift does not
     choose any of them.

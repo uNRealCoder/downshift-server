@@ -114,7 +114,7 @@ def lower_axis_max(dynamic_shapes: tuple, axis_max: dict[str, int] | None) -> tu
     """Build each named Dim in `dynamic_shapes` again. The name and the minimum stay the same.
     The maximum becomes `axis_max[name]`. Dims that several inputs share stay shared.
 
-    An unknown name, or a value outside the own [min, max] of the Dim, raises ValueError. The
+    An unknown name, or a value outside the [min, max] of the Dim, raises ValueError. The
     CLI reports this as a usage error. The ceiling is the value that the adapter set (for
     Hugging Face, the position limit of the model). --axis-max can therefore only narrow a
     bound. It can never widen it.
@@ -149,7 +149,7 @@ def lower_axis_max(dynamic_shapes: tuple, axis_max: dict[str, int] | None) -> tu
 
 def resize_axis(tensor: torch.Tensor, axis: int, size: int) -> torch.Tensor:
     """Tile or slice `axis` to `size`. The result stays close to the example and is not pure
-    noise. For floats, downshift tiles the own rows of the example and adds noise that follows
+    noise. For floats, downshift tiles the rows of the example and adds noise that follows
     its spread. A varied sample then looks like a plausible input. Integers (usually indices)
     stay inside the observed range. A 0-d tensor has no axis to resize, and it comes back
     unchanged."""
