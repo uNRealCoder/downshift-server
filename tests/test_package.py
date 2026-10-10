@@ -1,5 +1,5 @@
-"""The lazy `downshift/__init__.py` contract: every `__all__` name still imports, and the
-version in `pyproject.toml` (the source of truth) matches `downshift.__version__`.
+"""The contract of the lazy `downshift/__init__.py`. Each `__all__` name still imports. The
+version in `pyproject.toml` (the source of truth) is the same as `downshift.__version__`.
 """
 
 import tomllib

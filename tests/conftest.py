@@ -1,7 +1,7 @@
-"""Fixtures shared across test modules.
+"""Fixtures that the test modules share.
 
-Export and verification are the slow part of the suite, so anything more than one module
-needs is built once per session.
+The export and the verification are the slow part of the suite. Downshift builds a fixture
+that more than one module needs one time for each session.
 """
 
 import base64
@@ -15,6 +15,7 @@ import torch
 from fastapi.testclient import TestClient
 
 import downshift
+from downshift.core.memo import MEMO
 from downshift.loading import LoadSpec, load_model
 from downshift.serve.app import build_app
 from downshift.serve.engine import ServeOptions, ServingState, prepare_serving
@@ -26,10 +27,10 @@ _TORCH_VERSION = tuple(int(p) for p in torch.__version__.split("+")[0].split("."
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Skip `needs_torch_26` tests on the CI floor job, pinned to torch 2.5.1.
+    """Skip `needs_torch_26` tests on the CI floor job, which uses torch 2.5.1.
 
-    A marker beside the tests instead of an inline `--deselect` list in the CI YAML, so it
-    cannot go stale as tests are added, renamed or removed.
+    A marker next to the tests replaces an inline `--deselect` list in the CI YAML. The marker
+    cannot become old when you add, rename or remove tests.
     """
     if _TORCH_VERSION >= (2, 6):
         return
@@ -40,18 +41,19 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 
 
 class WorkerExit(Exception):
-    """os._exit, called from a test: what a `--workers` worker does when its model fails to
-    load (cli.runtime._serve_app_factory)."""
+    """os._exit, called from a test. A `--workers` worker does this when its model fails to load
+    (cli.runtime._serve_app_factory)."""
 
 
 @pytest.fixture(autouse=True)
 def _no_real_os_exit() -> Iterator[None]:
-    """A worker-path test whose load fails would otherwise call the real os._exit and end
-    the whole pytest run with no report. Raising here fails only that test instead.
+    """A worker-path test whose load fails would call the real os._exit. This would end the
+    whole pytest run with no report. An exception raised here fails only that test.
 
-    Patched by hand, not through `monkeypatch`: an autouse fixture requesting `monkeypatch`
-    would set it up first, so its undo would run after other fixtures' teardowns (e.g.
-    test_settings reloading the module once its env vars are gone)."""
+    The patch is done by hand and not through `monkeypatch`. An autouse fixture that requests
+    `monkeypatch` would set it up first. Its undo would then run after the teardowns of other
+    fixtures (for example, test_settings reloads the module when its environment variables are
+    gone)."""
 
     def fake_exit(code: int) -> None:
         raise WorkerExit(f"os._exit({code})")
@@ -64,11 +66,21 @@ def _no_real_os_exit() -> Iterator[None]:
         os._exit = real_exit
 
 
-def subprocess_env(*extra_paths: Path) -> dict[str, str]:
-    """The environment for a child interpreter that must import this checkout's `downshift`.
+@pytest.fixture(autouse=True)
+def _fresh_export_memo() -> Iterator[None]:
+    """The export memo is global for the process. A test that counts export phases, or patches a
+    loader, must never see a hit that an earlier test left."""
+    MEMO.clear()
+    yield
+    MEMO.clear()
 
-    `src` goes first, unconditionally: the venv also holds a pip-installed copy, and without
-    this a child silently runs that instead of the working tree. `extra_paths` follow it.
+
+def subprocess_env(*extra_paths: Path) -> dict[str, str]:
+    """The environment for a child interpreter that must import the `downshift` of this checkout.
+
+    `src` always goes first. The venv also has a pip-installed copy. Without this, a child
+    process uses that copy and not the working tree, and nobody sees it. `extra_paths` follow
+    `src`.
     """
     env = dict(os.environ)
     paths = [str(REPO_ROOT / "src"), *map(str, extra_paths), env.get("PYTHONPATH", "")]

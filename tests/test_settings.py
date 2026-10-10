@@ -1,5 +1,5 @@
-"""settings.py reads DOWNSHIFT_* env vars at import time, so these tests reload the module
-around each case rather than importing the constants once at collection time.
+"""settings.py reads the DOWNSHIFT_* environment variables at import. These tests therefore
+reload the module around each case. They do not import the constants one time at collection.
 """
 
 import importlib
@@ -43,8 +43,8 @@ def test_defaults_with_no_env_set(monkeypatch: pytest.MonkeyPatch) -> None:
         8,
         "json",
         256 * 1024 * 1024,
-        64 * 1024 * 1024,
-        1,
+        32 * 1024 * 1024,
+        4,
         64,
         30.0,
     )
@@ -57,7 +57,7 @@ def test_env_vars_override_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DOWNSHIFT_OUTPUT_ENCODING", "base64")
     monkeypatch.setenv("DOWNSHIFT_MAX_INPUT_BYTES", "4096")
     monkeypatch.setenv("DOWNSHIFT_MAX_BODY_BYTES", "8192")
-    monkeypatch.setenv("DOWNSHIFT_MAX_CONCURRENCY", "4")
+    monkeypatch.setenv("DOWNSHIFT_MAX_CONCURRENCY", "2")
     mod = importlib.reload(settings)
     assert mod.HOST == "127.0.0.1"
     assert mod.PORT == 9000
@@ -65,7 +65,7 @@ def test_env_vars_override_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert mod.OUTPUT_ENCODING == "base64"
     assert mod.MAX_INPUT_BYTES == 4096
     assert mod.MAX_BODY_BYTES == 8192
-    assert mod.MAX_CONCURRENCY == 4
+    assert mod.MAX_CONCURRENCY == 2
 
 
 def test_bad_int_env_var_raises_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -84,5 +84,65 @@ def test_per_dtype_tolerance_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DOWNSHIFT_TOL_FLOAT16_ATOL", "0.05")
     mod = importlib.reload(settings)
     assert mod.TOLERANCES["float16"] == (0.05, 1e-2)
-    # Untouched dtypes keep their defaults.
+    # Dtypes that nobody changed keep their defaults.
     assert mod.TOLERANCES["float32"] == (1e-4, 1e-3)
+
+
+def test_axis_max_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DOWNSHIFT_AXIS_MAX", "seq=4096, num_nodes=500")
+    assert importlib.reload(settings).AXIS_MAX == {"seq": 4096, "num_nodes": 500}
+
+
+def test_axis_max_defaults_to_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DOWNSHIFT_AXIS_MAX", raising=False)
+    assert importlib.reload(settings).AXIS_MAX == {}
+
+
+@pytest.mark.parametrize("raw", ["seq", "seq=", "=4", "seq=x", "seq=0", "seq=-1"])
+def test_bad_axis_max_env_var_raises_clear_error(monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
+    monkeypatch.setenv("DOWNSHIFT_AXIS_MAX", raw)
+    with pytest.raises(ValueError, match="DOWNSHIFT_AXIS_MAX"):
+        importlib.reload(settings)
+
+
+def test_usable_cpus_reads_a_cgroup_v2_quota(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    quota = tmp_path / "cpu.max"
+    quota.write_text("200000 100000\n")
+    monkeypatch.setattr(settings, "_CGROUP_CPU_MAX", str(quota))
+    assert settings.usable_cpus() == 2
+
+    quota.write_text("50000 100000\n")
+    assert settings.usable_cpus() == 1
+
+
+def test_usable_cpus_falls_back_without_a_quota(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    quota = tmp_path / "cpu.max"
+    quota.write_text("max 100000\n")
+    monkeypatch.setattr(settings, "_CGROUP_CPU_MAX", str(quota))
+    monkeypatch.setattr(settings.os, "process_cpu_count", lambda: 6, raising=False)
+    assert settings.usable_cpus() == 6
+
+    monkeypatch.setattr(settings, "_CGROUP_CPU_MAX", str(tmp_path / "missing"))
+    assert settings.usable_cpus() == 6
+
+
+def test_prep_threads_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DOWNSHIFT_PREP_THREADS", "7")
+    importlib.reload(settings)
+    assert settings.PREP_THREADS == 7
+
+
+def test_execution_defaults_to_threadpool(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DOWNSHIFT_EXECUTION", raising=False)
+    assert importlib.reload(settings).EXECUTION == "threadpool"
+
+
+def test_execution_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DOWNSHIFT_EXECUTION", "inline")
+    assert importlib.reload(settings).EXECUTION == "inline"
+
+
+def test_bad_execution_env_var_raises_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DOWNSHIFT_EXECUTION", "auto")
+    with pytest.raises(ValueError, match="DOWNSHIFT_EXECUTION.*auto.*execution mode"):
+        importlib.reload(settings)

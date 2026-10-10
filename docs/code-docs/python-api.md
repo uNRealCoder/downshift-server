@@ -1,27 +1,24 @@
 # Python API
 
-Every name in `downshift.__all__`: the functions that run the export-and-verify gate, the
-types the gate returns, and how `import downshift` avoids importing torch.
+This page describes every name in `downshift.__all__`: the functions that run the export-and-verify gate, the types that the gate returns, and how `import downshift` avoids the import of torch.
 
 ## Lazy import (PEP 562)
 
-`downshift/__init__.py` defines `__all__` and a `_LAZY` map from name to
-`(module, attribute)`. A module-level `__getattr__` resolves each name on first access by
-importing the module that actually defines it (`downshift.core.verdict`,
-`downshift.core.verify`, `downshift.adapters.base`, `downshift.core.prevalidated`,
-`downshift.serve`) and caches the result on `downshift`'s own `globals()`, so every access
-after the first is a plain attribute lookup with no further `__getattr__` call.
+`downshift/__init__.py` defines `__all__` and a `_LAZY` map from a name to `(module, attribute)`. A module-level `__getattr__` resolves each name on its first access. It imports the module that defines the name:
 
-The practical effect: `import downshift` does not import torch, onnx or onnxruntime.
-Nothing is pulled in until you touch `downshift.check`, `downshift.Adapter`, or another
-lazy name for the first time. `downshift.__version__` and `downshift.export` are the two
-exceptions - `__version__` is a plain string imported eagerly from `downshift._version`,
-and `export` is defined directly in `__init__.py` (its own heavy imports,
-`downshift.core.manifest` and `downshift.core.verdict`, are deferred inside its function
-body instead). This is also why `downshift.cli.main` can answer `--help` and `--version`
-without paying torch's import cost: it imports `downshift` and `downshift.settings` at
-module load time, and defers every other `downshift.*` import into the command bodies
-that need them.
+- `downshift.core.verdict`
+- `downshift.core.verify`
+- `downshift.adapters.base`
+- `downshift.core.prevalidated`
+- `downshift.serve`
+
+It then caches the result in `globals()` of `downshift`. Each later access is a plain attribute lookup. There is no more call to `__getattr__`.
+
+The effect is that `import downshift` does not import torch, onnx or onnxruntime. Downshift imports nothing until you first use `downshift.check`, `downshift.Adapter` or another lazy name.
+
+Two names are different. `__version__` is a plain string. Downshift imports it eagerly from `downshift._version`. `export` is defined directly in `__init__.py`. Its heavy imports (`downshift.core.manifest` and `downshift.core.verdict`) are inside its function body.
+
+For this reason, `downshift.cli.main` can answer `--help` and `--version` without the import cost of torch. At module load, it imports only `downshift` and `downshift.settings`. It does the other `downshift.*` imports inside the command bodies that need them.
 
 ## Functions
 
@@ -40,40 +37,34 @@ def check(
     rtol: float | None = None,
     seed: int = 0,
     vary: VaryFn | str | None = None,
+    axis_max: dict[str, int] | None = None,
+    cache: bool = True,
 ) -> ExportVerdict
 ```
 
-Exports `model` to ONNX in memory and verifies it against PyTorch. Writes nothing to disk;
-`export()` is `check()` plus writing the artifact.
+`check` exports `model` to ONNX in memory and verifies it against PyTorch. It writes nothing to disk. `export()` is `check()` plus the writing of the artifact.
 
-- `example_inputs`: a tuple of forward-args. `None` lets the resolved adapter guess (see
-  `prepare_model`).
-- `k`: number of verification samples.
-- `adapter`: an `Adapter` instance, an adapter name (`"generic"`, `"pyg"`, `"hf"`), a
-  `path/to/adapter.py[:attr]` spec, or `None` to auto-detect.
-- `dynamic`: `{input_name: [axis, ...]}` overriding which axes are dynamic; default is
-  axis 0 of every input.
-- `fp16`: casts a deep copy of `model` to `float16` before export. The caller's model
-  (and any tensors in `example_inputs`) are left untouched; a copy is cast instead. The
-  model is still switched to `eval()` in place if it was in training mode - on the copy,
-  when `fp16=True`, so the caller's own model keeps whichever mode it was already in.
-- `verify_numerics`: `False` skips the numerics check entirely (the `--no-verify`
-  behaviour); the graph still exports, but the verdict can only be `UNVERIFIED`, never
-  `CLEAN`.
-- `atol`/`rtol`: absolute/relative tolerance overrides. `None` (the default for both)
-  picks by the model's floating dtype - see `downshift.core.verify.default_tolerances`
-  and `settings.TOLERANCES`.
-- `seed`: seeds the verification sample generator, inside a forked RNG (`verify()` runs
-  under `torch.random.fork_rng`), so it never disturbs the caller's own global RNG state.
-- `vary`: a `fn(i) -> inputs` overriding the adapter's own sampler; a string is imported
-  the same way as `--vary`. `fn(0)` must return the example inputs.
+- `example_inputs`: a tuple of forward arguments. If it is `None`, the adapter that downshift resolves makes a guess (see `prepare_model`).
+- `k`: the number of verification samples.
+- `adapter`: an `Adapter` instance, an adapter name (`"generic"`, `"pyg"`, `"hf"`), a `path/to/adapter.py[:attr]` spec, or `None` to detect the adapter.
+- `dynamic`: `{input_name: [axis, ...]}`. It overrides the dynamic axes. The default is axis 0 of every input.
+- `fp16`: casts a deep copy of `model` to `float16` before the export. The model of the caller and the tensors in `example_inputs` do not change. Downshift sets the model to `eval()` in place if it was in training mode. When `fp16=True`, downshift does this on the copy. The model of the caller then stays in its own mode.
+- `verify_numerics`: `False` skips the numerics check. This is the `--no-verify` behaviour. The graph is still exported, but the verdict can be only `UNVERIFIED` and never `CLEAN`.
+- `atol` and `rtol`: override the absolute and relative tolerance. `None` (the default for both) selects the tolerance from the floating dtype of the model. Refer to `downshift.core.verify.default_tolerances` and `settings.TOLERANCES`.
+- `seed`: seeds the generator of verification samples. `verify()` runs under `torch.random.fork_rng`, so the global RNG state of the caller does not change.
+- `vary`: a `fn(i) -> inputs` that replaces the sampler of the adapter. Downshift imports a string in the same way as for `--vary`. `fn(0)` must return the example inputs.
+- `axis_max`: `{axis_name: N}`. It lowers a named dynamic axis to `N` and uses one verification sample at exactly `N`. Refer to `--axis-max`.
+- `cache`: if `True` (the default), downshift keeps the last two verified exports in memory. A repeat call for the same model in the same process then skips the export and the verification. Set `False` to turn this off.
 
-Returns an `ExportVerdict`. Raises `ValueError` if no example inputs are available and
-none could be synthesized, if the model itself raises on the first (baseline) verification
-sample, or if `adapter` names an adapter that can't be found; raises `RuntimeError` if no
-adapter matches at all (only possible if even the built-in `generic` adapter is
-unavailable). A model that exports but that ONNX Runtime cannot load or run is not an
-error here - it comes back as a `FAILED` verdict instead.
+`check` returns an `ExportVerdict`. It raises `ValueError` in these cases:
+
+- No example inputs are available, and downshift could not synthesize any.
+- The model raises an error on the first (baseline) verification sample.
+- `adapter` names an adapter that downshift cannot find.
+
+It raises `RuntimeError` if no adapter matches. This can happen only if the built-in `generic` adapter is also not available.
+
+A model that exports, but that ONNX Runtime cannot load or run, is not an error here. The result is a `FAILED` verdict.
 
 ### `export`
 
@@ -92,21 +83,19 @@ def export(
     rtol: float | None = None,
     seed: int = 0,
     vary: VaryFn | str | None = None,
+    axis_max: dict[str, int] | None = None,
+    cache: bool = True,
+    export_cache_dir: str | Path | None = None,
 ) -> ExportVerdict
 ```
 
-`check()` plus writing `output` (the `.onnx` path) and a `.manifest.json` sidecar next to
-it (`downshift.core.manifest.write_manifest`). Every parameter not listed below means the
-same as on `check()`.
+`export` is `check()` plus the writing of `output` (the `.onnx` path) and a `.manifest.json` file next to it (`downshift.core.manifest.write_manifest`). Each parameter that is not in this list has the same meaning as on `check()`.
 
-- `output`: the `.onnx` file path. Parent directories are created if missing.
-- `source_path`: recorded in the manifest as the source checkpoint (file name only, never the directory), with its SHA-256, when
-  it points at a real file.
+- `output`: the path of the `.onnx` file. Downshift creates missing parent directories.
+- `export_cache_dir`: a directory for the disk tier of the export cache. The key is the content of the weights. A restart then reuses a verified export.
+- `source_path`: if it points to a real file, downshift records it in the manifest as the source checkpoint. The manifest has the file name only, never the directory. It also has the SHA-256 of the file.
 
-A `FAILED` verdict writes nothing - no `.onnx`, no manifest. A `DEGRADED` verdict still
-writes the artifact, because the manifest records exactly how far off the numerics are;
-`verdict.onnx_path` is set on the returned verdict in that case. Raises the same errors as
-`check()`.
+A `FAILED` verdict writes nothing. There is no `.onnx` file and no manifest. A `DEGRADED` verdict writes the artifact, because the manifest records how far the numbers differ. In that case, `verdict.onnx_path` is set on the returned verdict. `export` raises the same errors as `check()`.
 
 ### `intake`
 
@@ -122,22 +111,18 @@ def intake(
     rtol: float | None = None,
     seed: int = 0,
     vary: VaryFn | str | None = None,
+    axis_max: dict[str, int] | None = None,
     timings: dict[str, float] | None = None,
 ) -> ExportVerdict
 ```
 
-The `check()` equivalent for a `.onnx` file someone else already produced (Olive, a
-notebook, whatever). Without `reference`, returns an `UNVERIFIED` verdict immediately -
-served as-is, with `reason` explaining numerics were never checked. With `reference`, runs
-the same numerics gate as `check()`/`export()` against it, and the verdict is `CLEAN`,
-`DEGRADED` or `FAILED` on the same rules.
+`intake` is the equivalent of `check()` for a `.onnx` file that someone else made (Olive, a notebook, or other tools).
 
-- `timings`: when given, gets a `"verify"` wall-clock-seconds entry added (there is no
-  `"export"` phase for a pre-built graph).
+- Without `reference`, `intake` returns an `UNVERIFIED` verdict immediately. The model is served as it is. `reason` says that the numbers were never checked.
+- With `reference`, `intake` runs the same numerics gate as `check()` and `export()`. The verdict is `CLEAN`, `DEGRADED` or `FAILED`, with the same rules.
+- `timings`: if you give it, downshift adds a `"verify"` entry in seconds of wall-clock time. A pre-built graph has no `"export"` phase.
 
-This is what `downshift check some.onnx --reference some_model.py:build` runs under the
-hood; the CLI's `check` command calls `intake` directly when its `MODEL` argument resolves
-to an existing `.onnx` file.
+The command `downshift check some.onnx --reference some_model.py:build` runs this function. The `check` command of the CLI calls `intake` directly when its `MODEL` argument is an existing `.onnx` file.
 
 ### `build_verdict`
 
@@ -153,17 +138,13 @@ def build_verdict(
 ) -> ExportVerdict
 ```
 
-The half of `check()` that runs after adapter resolution and input synthesis: capture
-(`torch.export` plus ONNX translation), then numeric verification. `check()` is
-`build_verdict(prepare_model(...))` with `fp16` handled in between. Useful directly when
-you already have a `Prepared` (for example, from a custom adapter you want to run once and
-inspect before deciding whether to export).
+`build_verdict` is the half of `check()` that runs after the resolution of the adapter and the synthesis of the inputs. It does the capture (`torch.export` plus the ONNX translation) and then the numerics verification. `check()` is `build_verdict(prepare_model(...))`, with `fp16` handled between the two calls.
 
-- `timings`: when given, gets `"export"` (the capture wall-clock time) and `"verify"`
-  added to it. This is the same dict `ServingState.timings` and `/metadata`'s `boot` field
-  surface.
+Use it directly when you already have a `Prepared`. For example, you can run a custom adapter once and inspect the result before you decide to export.
 
-Raises `ValueError` if the model raises on the baseline (unvaried) verification sample.
+- `timings`: if you give it, downshift adds `"export"` (the wall-clock time of the capture) and `"verify"`. `ServingState.timings` and the `boot` field of `/metadata` show the same dict.
+
+It raises `ValueError` if the model raises an error on the baseline (unvaried) verification sample.
 
 ### `prepare_model`
 
@@ -174,19 +155,19 @@ def prepare_model(
     adapter: Adapter | str | None = None,
     dynamic: dict[str, list[int]] | None = None,
     vary: VaryFn | str | None = None,
+    axis_max: dict[str, int] | None = None,
 ) -> Prepared
 ```
 
-Resolves an adapter (an explicit instance or name, or `registry.detect()` against the
-model and inputs), synthesizes example inputs if none were given, and asks the adapter to
-flatten the model into export-ready form. `dynamic`, if given, overrides the adapter's own
-`dynamic_shapes` via `downshift.core.shapes.apply_dynamic_override`. `vary`, if given,
-overrides the adapter's own `vary_fn` (a string is imported like `--vary`'s
-`pkg.module:fn` form).
+`prepare_model` does three things:
 
-Raises `ValueError` if `example_inputs` is `None` and the adapter's `example_inputs()`
-also returns `None`; raises `RuntimeError` if no registered adapter's `matches()` returns
-`True`.
+1. It resolves an adapter: an explicit instance or name, or `registry.detect()` against the model and the inputs.
+2. It synthesizes example inputs if you gave none.
+3. It asks the adapter to flatten the model into the form that is ready for export.
+
+If you give `axis_max`, downshift passes it to `adapter.prepare()`. If you give `dynamic`, it replaces the `dynamic_shapes` of the adapter through `downshift.core.shapes.apply_dynamic_override`. If you give `vary`, it replaces the `vary_fn` of the adapter. Downshift imports a string in the same way as the `pkg.module:fn` form of `--vary`.
+
+It raises `ValueError` if `example_inputs` is `None` and `example_inputs()` of the adapter also returns `None`. It raises `RuntimeError` if `matches()` of no registered adapter returns `True`.
 
 ### `app_for`
 
@@ -197,37 +178,25 @@ def app_for(
     *,
     source: str | None = None,
     reference: torch.nn.Module | None = None,
+    tokenizer_from: str | Path | None = None,
     middleware: Sequence[str] = (),
-    api_key: str | None = settings.API_KEY,
+    api_key: str | None = None,
+    cache: bool = True,
     **options: Any,
 ) -> FastAPI
 ```
 
-`LoadedModel` construction, `prepare_serving()`, and `build_app(state=...)` in one call -
-the one-line path from a model to a mounted FastAPI app, documented in
-[`serving.md`](serving.md) and the repo README's "Mount it in your own app" section. Runs
-synchronously: the export-and-verify gate and warmup complete before this returns, so the
-app is ready to serve immediately (no loader thread, no `/ready` `503` window - contrast
-`build_app`'s `loader=` form).
+`app_for` does three things in one call: it builds the `LoadedModel`, it runs `prepare_serving()`, and it runs `build_app(state=...)`. It is the one-line path from a model to a mounted FastAPI app. [`serving.md`](serving.md) and the section "Mount it in your own app" of the repo README describe it.
 
-- `model`: usually an `nn.Module` this process already built; a `str`/`Path` is an `.onnx`
-  file already on this machine. Nothing is downloaded here either - the path has to exist
-  before the call.
-- `source`: the label `/metadata` and `/schema` report. Defaults to the `.onnx` path (reported as its file name only), or to
-  `"model"` for an `nn.Module`, which has no path to name. `/schema`'s `source.kind` is
-  `onnx-file` or `in-process-module` accordingly.
-- `reference`: a PyTorch model verifying a `.onnx` `model` against, same role as
-  `--reference` on the CLI. Without it, a `.onnx` `model` is served `UNVERIFIED`.
-- `api_key`: when set, every route except `/health` and `/ready` requires
-  `Authorization: Bearer <api_key>` and answers `401` otherwise. Defaults to the
-  `DOWNSHIFT_SERVER_API_KEY` environment variable; pass a value, or `None` to force it off
-  for this app. Unset or empty logs one `WARNING` that the endpoints are unauthenticated.
-- `options`: forwarded as `ServeOptions` fields (`backend=`, `warmup=`,
-  `max_concurrency=`, ...) - see [`serving.md`](serving.md) for the full field list. Every
-  default is read from `downshift.settings`, so the `DOWNSHIFT_*` environment variables
-  apply here too, not only to the CLI (read once, when `downshift` is imported; a keyword
-  argument wins). `check()`, `export()` and `intake()` are the exception for `k`: they
-  default to the constant `8`, not to `DOWNSHIFT_SAMPLES`.
+`app_for` runs synchronously. The export-and-verify gate and the warmup finish before it returns. The app is ready to serve immediately. There is no loader thread and no `503` window on `/ready`. This is different from the `loader=` form of `build_app`.
+
+- `model`: usually an `nn.Module` that this process already built. A `str` or `Path` is a `.onnx` file that is already on this machine. `app_for` downloads nothing. The path must exist before the call.
+- `source`: the label that `/metadata` and `/schema` report. For a `.onnx` path, the default is the path (reported as the file name only). For an `nn.Module`, the default is `"model"`, because a module has no path. `source.kind` on `/schema` is `onnx-file` or `in-process-module` in these two cases.
+- `reference`: a PyTorch model to verify a `.onnx` `model` against. It has the same role as `--reference` on the CLI. Without it, downshift serves a `.onnx` `model` as `UNVERIFIED`.
+- `tokenizer_from`: a downloaded Hugging Face repo directory. It supplies the tokenizer, the pooling recipe and the label metadata for a `.onnx` `model`. It has the same role as `--tokenizer-from` on the CLI.
+- `cache`: if `True` (the default), the export cache of `check()` applies.
+- `api_key`: if you set it, every route except `/health` and `/ready` needs `Authorization: Bearer <api_key>`. Without it, the route answers `401`. If you do not pass it, downshift uses the `DOWNSHIFT_SERVER_API_KEY` environment variable. Pass a value to override it for this app. If the key is unset or empty, downshift logs one `WARNING` that the endpoints are unauthenticated.
+- `options`: downshift forwards these as `ServeOptions` fields (`backend=`, `warmup=`, `max_concurrency=`, and others). [`serving.md`](serving.md) has the full list of fields. Every default comes from `downshift.settings`. The `DOWNSHIFT_*` environment variables therefore also apply here, not only to the CLI. Downshift reads them once, when `downshift` is imported. A keyword argument has priority. `check()`, `export()` and `intake()` are an exception for `k`. They use the constant `8` as the default and not `DOWNSHIFT_SAMPLES`.
 
 ## Types
 
@@ -246,6 +215,8 @@ class ExportVerdict:
     reason: str
     input_names: tuple[str, ...] = ()
     dynamic_dims: dict[str, list[int]] = {}
+    axes: list[AxisFact] = []
+    output_axes: list[str] = []
     unsupported_ops: list[str] = []
     warnings: list[str] = []
     onnx_path: Path | None = None
@@ -256,48 +227,49 @@ class ExportVerdict:
     capture_exceptions: list[tuple[str, Exception]] = []
 ```
 
-The one object everything else reads: what `check`/`export`/`intake`/`build_verdict`
-return, and what `serve` reads to pick a backend.
+All other code reads this one object. `check`, `export`, `intake` and `build_verdict` return it. `serve` reads it to select a backend.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `status` | `"CLEAN" \| "DEGRADED" \| "FAILED" \| "UNVERIFIED"` | See "The gate" in the repo README. |
-| `model_family` | `str` | The resolving adapter's `family` (`"generic-torch"`, `"pyg"`, `"hf-transformers"`, `"onnx"` for an unreferenced `intake()`, ...). |
-| `capture_strategy` | `str \| None` | Which `torch.export` strategy captured the graph (e.g. `"strict=False"`), or `None` when capture never ran (`intake()` without a reference, or `--backend torch`). |
-| `opset` | `int \| None` | The ONNX opset the graph was exported at. |
-| `op_types` | `dict[str, int]` | Op-type histogram, count-descending. |
-| `numerics` | `NumericsReport \| None` | `None` when numerics were never run (`verify_numerics=False`, a `FAILED` capture, or `intake()` with no reference). |
-| `recommended_backend` | `BackendName` | What the gate recommends; `serve`'s `--backend auto` follows it. |
-| `reason` | `str` | Human-readable summary; what the `check` report's `Reason` row and the banner's `Verdict` row print. |
-| `input_names` | `tuple[str, ...]` | Flat input names, in forward-argument order. |
+| `status` | `"CLEAN" \| "DEGRADED" \| "FAILED" \| "UNVERIFIED"` | Refer to "The gate" in the repo README. |
+| `model_family` | `str` | The `family` of the adapter that resolved: `"generic"`, `"pyg"`, `"hf"`, or `"onnx"` for an `intake()` without a reference. |
+| `capture_strategy` | `str \| None` | The `torch.export` strategy that captured the graph (for example `"strict=False"`). `None` if the capture did not run (`intake()` without a reference, or `--backend torch`). |
+| `opset` | `int \| None` | The ONNX opset of the exported graph. |
+| `op_types` | `dict[str, int]` | A histogram of operation types, in descending order of count. |
+| `numerics` | `NumericsReport \| None` | `None` if the numerics did not run (`verify_numerics=False`, a `FAILED` capture, or `intake()` with no reference). |
+| `recommended_backend` | `BackendName` | The backend that the gate recommends. `--backend auto` of `serve` follows it. |
+| `reason` | `str` | A summary for people. The `Reason` row of the `check` report and the `Verdict` row of the banner print it. |
+| `input_names` | `tuple[str, ...]` | The flat input names, in the order of the forward arguments. |
 | `dynamic_dims` | `dict[str, list[int]]` | `{input_name: [dynamic_axis, ...]}`. |
-| `unsupported_ops` | `list[str]` | `aten::*` op names mined from a `FAILED` capture's exception messages. |
-| `warnings` | `list[str]` | Non-fatal notices (tied weights, training-mode switch, an ONNX Runtime load failure's message). |
-| `onnx_path` | `Path \| None` | Set by `export()` after writing the artifact, or by `intake()`/a pre-built `.onnx` serve. |
-| `onnx_program` | `object \| None` | The live `torch.onnx.ONNXProgram`, when capture produced one. Not JSON-able. |
-| `onnx_bytes` | `bytes` | The serialized graph, built once by `capture()`. Not JSON-able. |
-| `prepared` | `Prepared \| None` | The `Prepared` behind this verdict, when a torch model was involved (not for a referenceless `intake()`). Not JSON-able. |
-| `capture_stderr` | `str` | torch/onnx's own stderr during capture. Debug-only; logged at `--log-level debug` on a `FAILED` verdict. |
-| `capture_exceptions` | `list[tuple[str, Exception]]` | `(strategy_name, exception)` per capture strategy tried. Debug-only. |
+| `axes` | `list[AxisFact]` | The served bounds and the sampled range of each dynamic axis (`input`, `axis`, `name`, `served_min`, `served_max`, `sampled_min`, `sampled_max`). |
+| `output_axes` | `list[str]` | For the `pyg` adapter, the class of axis 0 of each output: `node`, `edge`, `fixed` or `unknown`. |
+| `unsupported_ops` | `list[str]` | The `aten::*` operation names that downshift found in the exception messages of a `FAILED` capture. |
+| `warnings` | `list[str]` | Notices that are not fatal: tied weights, the switch to training mode, and the message of an ONNX Runtime load failure. |
+| `onnx_path` | `Path \| None` | `export()` sets it after it writes the artifact. `intake()` or the serving of a pre-built `.onnx` file also sets it. |
+| `onnx_program` | `object \| None` | The live `torch.onnx.ONNXProgram`, if the capture made one. It is not JSON-able. |
+| `onnx_bytes` | `bytes` | The serialized graph. `capture()` builds it once. It is not JSON-able. |
+| `prepared` | `Prepared \| None` | The `Prepared` behind this verdict, if a torch model took part. It is `None` for an `intake()` without a reference. It is not JSON-able. |
+| `capture_stderr` | `str` | The own stderr of torch and onnx during the capture. It is for debugging only. Downshift logs it at `--log-level debug` on a `FAILED` verdict. |
+| `capture_exceptions` | `list[tuple[str, Exception]]` | One `(strategy_name, exception)` pair for each capture strategy that downshift tried. It is for debugging only. |
 
-Derived properties (not dataclass fields): `shape_generalization` (proxies
-`numerics.shape_generalization`, `None` if there's no numerics report),
-`shape_generalization_reason` (a string when the baseline sample itself failed, else
-`None`), and `exit_code` (`EXIT_CODES[status]`: `CLEAN` 0, `FAILED` 1, `DEGRADED` 2,
-`UNVERIFIED` 3 - what `check`/`export` exit with).
+Some properties are not dataclass fields. They are derived:
 
-`to_dict()` emits: `status`, `model_family`, `capture_strategy`, `opset`, `op_types`,
-`numerics` (nested `NumericsReport.to_dict()` or `None`), `shape_generalization`,
-`shape_generalization_reason`, `recommended_backend`, `reason`, `input_names` (as a
-`list`), `dynamic_dims`, `unsupported_ops`, `warnings`, `onnx_path` (as a `str` or
-`None`). It excludes `onnx_program`, `onnx_bytes`, `prepared` (none are JSON-able), and
-the debug-only `capture_stderr`/`capture_exceptions` (not meant for machine consumers).
-`exit_code` is a derived property and is also not included.
+- `shape_generalization` is the same as `numerics.shape_generalization`. It is `None` if there is no numerics report.
+- `shape_generalization_reason` is a string if the baseline sample failed. Otherwise it is `None`.
+- `exit_code` is `EXIT_CODES[status]`: `CLEAN` 0, `FAILED` 1, `DEGRADED` 2, `UNVERIFIED` 3. `check` and `export` exit with this code.
 
-`from_dict()` rebuilds an `ExportVerdict` from `to_dict()`'s output - used by `serve
---workers N` to ship a verdict from the parent process to each worker over an environment
-variable. `prepared` and `onnx_program` come back `None` (never serialized); the caller
-sets `onnx_path` itself afterwards if the graph now lives at a worker-local temp path.
+`to_dict()` gives these keys:
+
+- `status`, `model_family`, `capture_strategy`, `opset`, `op_types`
+- `numerics` (the nested `NumericsReport.to_dict()` or `None`)
+- `shape_generalization`, `shape_generalization_reason`
+- `recommended_backend`, `reason`
+- `input_names` (as a `list`), `dynamic_dims`, `axes` (as a list of dicts), `output_axes`, `unsupported_ops`, `warnings`
+- `onnx_path` (as a `str` or `None`)
+
+It does not include `onnx_program`, `onnx_bytes` and `prepared`, because they are not JSON-able. It does not include the debug-only `capture_stderr` and `capture_exceptions`, because machine consumers do not need them. `exit_code` is a derived property, and `to_dict()` does not include it.
+
+`from_dict()` rebuilds an `ExportVerdict` from the output of `to_dict()`. `serve --workers N` uses it. It sends a verdict from the parent process to each worker in an environment variable. `prepared` and `onnx_program` are `None` in the result, because downshift never serializes them. If the graph is now at a temporary path in the worker, the caller sets `onnx_path` itself afterward.
 
 ### `NumericsReport`
 
@@ -316,36 +288,33 @@ class NumericsReport:
     baseline_failed: bool = False
     worst: WorstMismatch | None = None
     sample_shapes: list[list[tuple[int, ...]]] = []
+    output_shapes: list[list[tuple[int, ...]]] = []
     seed: int = 0
     notes: list[str] = []
-    session: ort.InferenceSession | None = None
 ```
 
 | Field | Type | Meaning |
 |---|---|---|
-| `samples_tested` | `int` | `k`, the number of samples run. |
-| `max_abs_err` | `float` | Largest absolute error seen across every output element and sample. |
-| `max_rel_err` | `float` | Largest relative error, same scope. |
-| `failures` | `int` | Samples that failed the `numpy.allclose`-style comparison. `NumericsReport.passed` is `failures == 0`. |
-| `shape_generalization` | `bool \| None` | `True` if every varied-shape sample (all but the baseline) passed, `False` if the baseline passed but a varied one failed, `None` if the baseline itself failed (generalization was never evaluated). |
-| `tolerance_abs` / `tolerance_rel` | `float` | The `atol`/`rtol` actually used. |
-| `tolerance_dtype` | `str` | Which floating dtype's default tolerance applied (`"float32"`, `"float16"`, `"bfloat16"`, `"float64"`) - see `default_tolerances`. |
-| `tolerance_overridden` | `bool` | `True` when `--atol`/`--rtol` (or the `atol=`/`rtol=` kwargs) picked the values instead of `tolerance_dtype`'s default. |
-| `baseline_failed` | `bool` | Whether sample 0 (the un-varied example) itself failed. |
-| `worst` | `WorstMismatch \| None` | The single largest-error element across every sample. |
-| `sample_shapes` | `list[list[tuple[int, ...]]]` | Per-sample, per-input shapes actually used - what the CLI's `Samples` row prints. |
-| `seed` | `int` | The seed the samples were generated with. |
-| `notes` | `list[str]` | Shape/count-mismatch notes between torch and ONNX Runtime outputs, one per affected sample. |
-| `session` | `ort.InferenceSession \| None` | The ONNX Runtime session `verify()` built (or was given) to run the samples. Not JSON-able; `serve/engine.py` reuses this session directly instead of building a second one when the serving options match (CPU, default thread counts). |
+| `samples_tested` | `int` | `k`, the number of samples that ran. |
+| `max_abs_err` | `float` | The largest absolute error across all output elements and samples. |
+| `max_rel_err` | `float` | The largest relative error, with the same scope. |
+| `failures` | `int` | The number of samples that failed the comparison in the style of `numpy.allclose`. `NumericsReport.passed` is `failures == 0`. |
+| `shape_generalization` | `bool \| None` | `True` if all samples with a varied shape (all samples except the baseline) passed. `False` if the baseline passed but a varied sample failed. `None` if the baseline failed. In that case, downshift did not evaluate the generalization. |
+| `tolerance_abs` / `tolerance_rel` | `float` | The `atol` and `rtol` that downshift used. |
+| `tolerance_dtype` | `str` | The floating dtype whose default tolerance applied (`"float32"`, `"float16"`, `"bfloat16"`, `"float64"`). Refer to `default_tolerances`. |
+| `tolerance_overridden` | `bool` | `True` if `--atol` or `--rtol` (or the `atol=` or `rtol=` keyword arguments) set the values, and not the default of `tolerance_dtype`. |
+| `baseline_failed` | `bool` | `True` if sample 0 (the example without a variation) failed. |
+| `worst` | `WorstMismatch \| None` | The element with the largest error across all samples. |
+| `sample_shapes` | `list[list[tuple[int, ...]]]` | The shapes of each input in each sample. The `Samples` row of the CLI prints them. |
+| `output_shapes` | `list[list[tuple[int, ...]]]` | The shapes of each output in each sample, as `[sample][output]`. |
+| `seed` | `int` | The seed that generated the samples. |
+| `notes` | `list[str]` | Notes on a mismatch in shape or count between the outputs of torch and ONNX Runtime. There is one note for each affected sample. |
 
-`passed` is a derived property (`failures == 0`), not a field.
+`passed` is a derived property (`failures == 0`) and not a field.
 
-`to_dict()` emits every field above except `session` (dropped, not JSON-able), and adds
-`passed`. `worst`, when present, is a nested `WorstMismatch` dict (`sample`, `output`,
-`index`, `expected`, `got`, `input_shapes`).
+`to_dict()` gives every field above. It also adds `passed`. If `worst` is present, it is a nested `WorstMismatch` dict (`sample`, `output`, `index`, `expected`, `got`, `input_shapes`).
 
-`from_dict()` rebuilds from `to_dict()`'s output; `passed` (derived) and `session` (never
-serialized) are ignored on the way in.
+`from_dict()` rebuilds the object from the output of `to_dict()`. It ignores `passed`, which is derived.
 
 ### `WorstMismatch`
 
@@ -360,11 +329,12 @@ class WorstMismatch:
     input_shapes: list[tuple[int, ...]]
 ```
 
-Not in `downshift.__all__` (reached only via `NumericsReport.worst`), but part of the
-`NumericsReport` shape: `sample`/`output` locate which verification sample and which
-model output the mismatch was in; `index` is the unravelled element index within that
-output; `expected`/`got` are the torch and ONNX Runtime values; `input_shapes` are that
-sample's per-input shapes.
+`WorstMismatch` is not in `downshift.__all__`. You can reach it only through `NumericsReport.worst`. It is part of the shape of `NumericsReport`:
+
+- `sample` and `output` give the verification sample and the model output of the mismatch.
+- `index` is the unravelled element index in that output.
+- `expected` and `got` are the values of torch and ONNX Runtime.
+- `input_shapes` are the shapes of each input in that sample.
 
 ### `Adapter`
 
@@ -372,16 +342,15 @@ sample's per-input shapes.
 @runtime_checkable
 class Adapter(Protocol):
     name: str
-    family: str
 
     def matches(self, model: nn.Module, example_inputs: tuple | None) -> bool: ...
     def example_inputs(self, model: nn.Module) -> tuple | None: ...
-    def prepare(self, model: nn.Module, example_inputs: tuple) -> Prepared: ...
+    def prepare(
+        self, model: nn.Module, example_inputs: tuple, axis_max: dict[str, int] | None = None
+    ) -> Prepared: ...
 ```
 
-A `typing.Protocol`, `@runtime_checkable` so `isinstance(obj, Adapter)` works (used by
-`registry.load_from_file` to validate a custom adapter). Full contract, resolution order,
-and a worked example: [`adapters.md`](adapters.md).
+`Adapter` is a `typing.Protocol` with `@runtime_checkable`, so `isinstance(obj, Adapter)` works. `registry.load_from_file` uses this to validate a custom adapter. [`adapters.md`](adapters.md) has the full contract, the resolution order and a worked example.
 
 ### `Prepared`
 
@@ -396,13 +365,15 @@ class Prepared:
     family: str
 ```
 
-What an adapter's `prepare()` returns: an export-ready module whose `forward` takes flat
-tensors, the matching flat example inputs, their names, the per-input dynamic-shape spec
-(`{axis: torch.export.Dim}` or `None`, one entry per input), an optional
-`vary_fn(i) -> inputs` for generating verification samples (`None` means "use the
-shared-axis-0 default", `make_shared_axis0_vary_fn`), and the family string that ends up
-in `ExportVerdict.model_family`. `dynamic_dims` is a derived property:
-`{input_name: sorted(axes)}` for inputs whose `dynamic_shapes` entry is non-empty.
+`Prepared` is the result of `prepare()` of an adapter. It holds:
+
+- A module that is ready for export. Its `forward` takes flat tensors.
+- The matching flat example inputs and their names.
+- The dynamic-shape spec for each input: `{axis: torch.export.Dim}` or `None`, one entry for each input.
+- An optional `vary_fn(i) -> inputs` that generates verification samples. `None` means "use the shared-axis-0 default", `make_shared_axis0_vary_fn`.
+- The name of the adapter. It becomes `ExportVerdict.model_family`.
+
+`dynamic_dims` is a derived property: `{input_name: sorted(axes)}` for the inputs that have a non-empty `dynamic_shapes` entry.
 
 ### `OnnxRuntimeError`
 
@@ -410,19 +381,16 @@ in `ExportVerdict.model_family`. `dynamic_dims` is a derived property:
 class OnnxRuntimeError(RuntimeError): ...
 ```
 
-Raised internally (by `downshift.core.verify.verify`) when ONNX Runtime itself fails - it
-can't load the exported graph, or it raises while running a sample. Distinct from a
-numeric mismatch (still a `NumericsReport` with `failures > 0`, not an exception) and from
-the torch model itself raising on a sample (a `ValueError`, since that means the caller
-gave the model a shape it doesn't support). `check()`/`export()`/`intake()`/
-`build_verdict()` catch it internally and turn it into a `FAILED` verdict; it is exported
-mainly so callers using `downshift.core.verify.verify` directly can catch it too.
+`downshift.core.verify.verify` raises this error internally when ONNX Runtime fails. ONNX Runtime fails when it cannot load the exported graph, or when it raises an error while it runs a sample.
+
+It is different from a numeric mismatch. A mismatch is a `NumericsReport` with `failures > 0` and not an exception. It is also different from an error raised by the torch model on a sample. That error is a `ValueError`, because it means that the caller gave the model a shape that it does not support.
+
+`check()`, `export()`, `intake()` and `build_verdict()` catch `OnnxRuntimeError` internally and make a `FAILED` verdict. Downshift exports it mainly for callers that use `downshift.core.verify.verify` directly. They can catch it too.
 
 ### `__version__`
 
 ```python
-__version__: str  # "0.4.0"
+__version__: str  # "0.5.0"
 ```
 
-Read from `downshift._version`, imported eagerly (not through the lazy `_LAZY` map) so
-`downshift.__version__` and `downshift --version` never trigger torch's import.
+Downshift reads it from `downshift._version`. It imports it eagerly, and not through the lazy `_LAZY` map. `downshift.__version__` and `downshift --version` therefore never cause the import of torch.

@@ -26,12 +26,13 @@ jobs:
       - run: pytest -q --cov=src/downshift --cov-report=term-missing --cov-fail-under=95
 
   floor:
-    # Pins the oldest torch the dynamo exporter supports (report= on torch.onnx.export is a
-    # 2.5 feature) plus the oldest onnx/onnxruntime/onnxscript verified locally to actually
-    # export+run against it: onnx 1.14 (the previous floor) fails to even install alongside
-    # onnxscript's own onnx>=1.16 requirement, and onnxscript below 0.5 hits a real bug in
-    # torch 2.5's type-promotion pass on plain dynamic-batch Conv2d - neither is specific to
-    # this project's code. onnxruntime 1.17 needs numpy<2 for its ABI.
+    # This job pins the oldest torch that the dynamo exporter supports (report= on
+    # torch.onnx.export is a feature of 2.5). It also pins the oldest onnx, onnxruntime and
+    # onnxscript that we verified locally for export and run with it. onnx 1.14 (the previous
+    # floor) does not install together with the requirement onnx>=1.16 of onnxscript. onnxscript
+    # below 0.5 has a real bug in the type-promotion pass of torch 2.5 on a plain Conv2d with a
+    # dynamic batch. Neither fault is specific to the code of this project. onnxruntime 1.17
+    # needs numpy<2 for its ABI.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,20 +41,23 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install "torch==2.5.1" --index-url https://download.pytorch.org/whl/cpu
-      - run: pip install "onnx==1.16.0" "onnxruntime==1.17.0" "onnxscript==0.5.0" "numpy<2"
+      # transformers 5.19 calls torch.accelerator (torch 2.6 and later) on import. 5.17.0 is the
+      # last release with which this job passed.
+      - run: pip install "onnx==1.16.0" "onnxruntime==1.17.0" "onnxscript==0.5.0" "numpy<2" "transformers==5.17.0"
       - run: pip install -e ".[dev,gnn,hf,fast]"
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy src
       - name: pytest
-        # Even at the newest transformers/torch-geometric releases compatible with these
-        # pins, torch 2.5.1's dynamo tracer can't export a from-scratch BertModel with a
-        # dynamic sequence axis, or a few PyG message-passing patterns (ConstraintViolationError /
-        # "Unsupported: call_method" from torch itself, not from this project's code, and not
-        # fixed by any onnx/onnxruntime/onnxscript combination tried). Those tests carry
-        # `@pytest.mark.needs_torch_26`; conftest.py skips them here based on torch.__version__
-        # until the floor moves past 2.5.x. Every other test, including the rest of the hf and
-        # gnn suites, runs and passes.
+        # The newest releases of transformers and torch-geometric that are compatible with these
+        # pins do not change this. The dynamo tracer of torch 2.5.1 cannot export a BertModel
+        # that is built from scratch with a dynamic sequence axis. It also cannot export a few
+        # PyG message-passing patterns (ConstraintViolationError or "Unsupported: call_method"
+        # from torch itself). These errors do not come from the code of this project, and no
+        # combination of onnx, onnxruntime and onnxscript that we tried fixes them. These tests
+        # have `@pytest.mark.needs_torch_26`. conftest.py skips them here, based on
+        # torch.__version__, until the floor moves above 2.5.x. All other tests run and pass,
+        # including the rest of the hf and gnn suites.
         run: pytest -q
 
   windows:

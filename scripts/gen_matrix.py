@@ -1,7 +1,7 @@
-"""Run downshift.check over every fixture in tests/models and write docs/compatibility.md.
+"""Run downshift.check on each fixture in tests/models and write docs/compatibility.md.
 
-Usage: python scripts/gen_matrix.py   (from a checkout; works with or without pip install)
-Exit code is always 0. This is a report, not a gate.
+Usage: python scripts/gen_matrix.py   (from a checkout. It works with or without pip install)
+The exit code is always 0. This is a report and not a gate.
 """
 
 from __future__ import annotations
@@ -17,8 +17,8 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT))  # so `tests.models.*` imports work from anywhere
-sys.path.insert(1, str(REPO_ROOT / "src"))  # editable checkout without pip install
+sys.path.insert(0, str(REPO_ROOT))  # the imports of `tests.models.*` then work from all places
+sys.path.insert(1, str(REPO_ROOT / "src"))  # a checkout in editable mode, without pip install
 
 import downshift  # noqa: E402
 
@@ -33,20 +33,21 @@ COLUMNS = ("Model", "Hazard", "Family", "Export", "Capture", "Numerics", "Shape-
 DASH = "—"
 
 LEGEND = (
-    "**CLEAN** exports, matches PyTorch on every sample, and survives shapes the exporter "
-    "never saw; served via ONNX Runtime. **DEGRADED** exports without error but produces "
-    "numbers that differ from PyTorch beyond tolerance on at least one sample; served via "
-    "eager PyTorch unless `--force-onnx`. **FAILED** does not export, or exports but ONNX "
-    "Runtime can't load or run the graph; served via eager PyTorch either way. **UNVERIFIED** "
-    "is a `.onnx` file with no reference model, so numerics were never checked; served via "
-    "ONNX Runtime and labelled as such."
+    "**CLEAN**: The model exports, matches PyTorch on every sample, and works on shapes that "
+    "the exporter did not see. Served by ONNX Runtime. **DEGRADED**: The model exports "
+    "without error, but the numbers differ from PyTorch by more than the tolerance on at "
+    "least one sample. Served by eager PyTorch, unless you set `--force-onnx`. **FAILED**: "
+    "The model does not export, or it exports but ONNX Runtime cannot load or run the graph. "
+    "Served by eager PyTorch in both cases. **UNVERIFIED**: A `.onnx` file with no reference "
+    "model. Downshift never checked the numbers. Served by ONNX Runtime and labelled as "
+    "unverified."
 )
 HOW_TO_READ = (
-    "CLEAN means the ONNX graph agrees with PyTorch, not that it is fast. DEGRADED means the "
-    "graph runs and returns numbers that are wrong on at least one of the K samples; the "
-    "Numerics column is the worst absolute error seen. FAILED models are still served, via "
-    "eager PyTorch behind the same endpoint. UNVERIFIED never appears here because every "
-    "corpus model has a PyTorch reference."
+    "CLEAN means that the ONNX graph agrees with PyTorch. It does not mean that the graph is "
+    "fast. DEGRADED means that the graph runs, but the numbers are wrong on at least one of "
+    "the K samples. The Numerics column shows the largest absolute error. Downshift still "
+    "serves FAILED models, through eager PyTorch behind the same endpoint. UNVERIFIED does not "
+    "appear here, because every model in the corpus has a PyTorch reference."
 )
 
 
@@ -54,7 +55,7 @@ HOW_TO_READ = (
 class Row:
     model: str
     hazard: str
-    cells: tuple[str, ...]  # Family .. Backend, in COLUMNS order
+    cells: tuple[str, ...]  # Family .. Backend, in the order of COLUMNS
 
 
 def _hazard(path: Path) -> str:
@@ -82,8 +83,8 @@ def _run_fixture(name: str) -> Row:
     try:
         inputs = module.make_inputs() if hasattr(module, "make_inputs") else None
         verdict = downshift.check(module.make_model(), inputs, k=K)
-    except Exception as exc:  # noqa: BLE001 - a fixture that isn't a hazard (e.g. a factory
-        # that raises on purpose for CLI tests) is a skip, not a crash of the whole script.
+    except Exception as exc:  # noqa: BLE001 - a fixture that is not a hazard (for example a
+        # factory that raises by design for CLI tests) is a skip and not a crash of the script.
         return Row(name, hazard, (DASH, f"skipped ({type(exc).__name__})", DASH, DASH, DASH, DASH))
     numerics = verdict.numerics
     shape = {True: "✓", False: "✗", None: DASH}[verdict.shape_generalization]
@@ -115,7 +116,7 @@ def render(rows: list[Row]) -> str:
         "# Compatibility matrix",
         "",
         f"Generated {datetime.now(UTC):%Y-%m-%d} by `scripts/gen_matrix.py` with {versions}.",
-        f"Each model was checked with `downshift.check(..., k={K})`.",
+        f"Downshift checked each model with `downshift.check(..., k={K})`.",
         "",
         LEGEND,
         "",

@@ -1,4 +1,4 @@
-"""The provenance manifest written next to every exported .onnx."""
+"""The provenance manifest that downshift writes next to each exported .onnx file."""
 
 import hashlib
 import json
@@ -93,3 +93,23 @@ def test_failed_export_writes_nothing(tmp_path):
     assert verdict.status == "FAILED"
     assert verdict.onnx_path is None
     assert list(tmp_path.iterdir()) == []
+
+
+def test_manifest_lists_external_data_files(tmp_path, monkeypatch):
+    from downshift.core import capture as capture_mod
+
+    onnx_path = tmp_path / "ext.onnx"
+    downshift.export(clean_mlp.make_model(), onnx_path, clean_mlp.make_inputs())
+    assert json.loads(manifest_path_for(onnx_path).read_text())["external_data"] == []
+
+    monkeypatch.setattr(capture_mod, "EXTERNAL_DATA_THRESHOLD", 0)
+    onnx_path = tmp_path / "big.onnx"
+    verdict = downshift.export(clean_mlp.make_model(), onnx_path, clean_mlp.make_inputs())
+
+    assert verdict.status == "CLEAN", verdict.reason
+    data = tmp_path / "big.onnx.data"
+    assert data.is_file()
+    manifest = json.loads(manifest_path_for(onnx_path).read_text())
+    assert manifest["external_data"] == [
+        {"file": "big.onnx.data", "sha256": hashlib.sha256(data.read_bytes()).hexdigest()}
+    ]

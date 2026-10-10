@@ -1,5 +1,5 @@
-"""U6: `downshift --help` must not pay torch's import cost. Runs in a subprocess so it
-measures a cold interpreter, the way a user's shell actually invokes the CLI.
+"""U6: `downshift --help` must not pay the import cost of torch. It runs in a subprocess. It
+therefore measures a cold interpreter, as the shell of a user starts the CLI.
 """
 
 import subprocess

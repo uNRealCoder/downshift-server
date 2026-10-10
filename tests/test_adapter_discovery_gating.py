@@ -1,8 +1,8 @@
-"""P1: adapter discovery must not import optional model families that aren't in play.
+"""P1: adapter discovery must not import optional model families that are not in use.
 
-Both checks need a fresh interpreter: `tests/test_adapters.py` imports transformers and
-torch_geometric at module level, which would make them look "in play" no matter what the
-registry does.
+Both checks need a new interpreter. `tests/test_adapters.py` imports transformers and
+torch_geometric at module level. They would then look "in use", for all actions of the
+registry.
 """
 
 import subprocess
@@ -25,11 +25,11 @@ def test_prepare_serving_on_clean_mlp_does_not_import_optional_families() -> Non
     script = """
 import sys
 
-from downshift.demo import clean_mlp
+from tests.models import clean_mlp
 from downshift.loading import LoadedModel
 from downshift.serve.engine import prepare_serving
 
-loaded = LoadedModel(source="downshift.demo.clean_mlp", model=clean_mlp.make_model(),
+loaded = LoadedModel(source="tests.models.clean_mlp", model=clean_mlp.make_model(),
                       example_inputs=clean_mlp.make_inputs())
 state = prepare_serving(loaded)
 assert state.verdict.status == "CLEAN", state.verdict.reason

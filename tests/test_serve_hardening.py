@@ -1,9 +1,11 @@
-"""The serving hardening from the 0.4.0 review round: API key, request-body limits, admission
-before the body is read, bf16 models, input range checks, /ready phases, torch error mapping."""
+"""The hardening of the serving from the 0.4.0 review round: the API key, the limits on the
+request body, the admission before the body is read, bf16 models, the checks of input ranges,
+the /ready phases and the mapping of torch errors."""
 
 import dataclasses
 import logging
 import threading
+import time
 
 import numpy as np
 import pytest
@@ -146,7 +148,7 @@ def test_a_chunked_body_over_the_limit_is_413(limited):
         "/predict", content=_chunked(*parts), headers={"content-type": "application/json"}
     )
 
-    assert "content-length" not in resp.request.headers  # the premise: it really was chunked
+    assert "content-length" not in resp.request.headers  # the premise: the body was chunked
     assert resp.status_code == 413
     assert "--max-body-bytes" in resp.json()["detail"]
 
@@ -178,7 +180,7 @@ def test_a_content_length_over_the_limit_is_413_before_the_handler_runs(
         headers={"content-type": "application/json"},
     )
 
-    assert resp.status_code == 413  # not 422: the body was never parsed
+    assert resp.status_code == 413  # and not 422: nobody parsed the body
     assert calls == []
 
 
@@ -196,10 +198,10 @@ def test_a_full_server_answers_503_without_reading_the_body(tight_state):
 
     resp = client.post("/predict", content=b"x" * (BODY_LIMIT * 2))
 
-    assert resp.status_code == 503  # not 413: admission comes first
+    assert resp.status_code == 503  # and not 413: the admission is first
     assert resp.headers["retry-after"] == "1"
     assert "at capacity" in resp.json()["detail"]
-    assert tight_state.in_flight == 1  # a refused request never held a slot
+    assert tight_state.in_flight == 1  # a request that was refused never held a slot
     tight_state.release()
     assert tight_state.in_flight == 0
 
@@ -220,7 +222,7 @@ def test_every_exit_releases_the_admitted_slot(tight_state, kwargs, status):
 
     assert resp.status_code == status, resp.text
     assert tight_state.in_flight == 0
-    assert client.post("/predict", json=MLP_INPUT).status_code == 200  # and the slot is reusable
+    assert client.post("/predict", json=MLP_INPUT).status_code == 200  # the slot can be used again
 
 
 # --- bf16 ------------------------------------------------------------------------------------
@@ -248,16 +250,17 @@ def test_a_bf16_model_schema_reports_float32_inputs(bf16_client):
     assert entry["dtype"] == "float32"
 
 
-# Hand-built graphs pin ir_version: make_model stamps the installed onnx's newest IR version,
-# which can be ahead of what the installed onnxruntime reads (onnx 1.20 writes IR 14 while
-# onnxruntime 1.23 stops at 13). 8 is the lowest that allows opset 17.
+# Graphs that we build by hand pin ir_version. make_model uses the newest IR version of the
+# installed onnx. It can be newer than the version that the installed onnxruntime reads (onnx
+# 1.20 writes IR 14, and onnxruntime 1.23 stops at 13). 8 is the lowest version that allows
+# opset 17.
 
 
 def _bf16_output_onnx_bytes() -> bytes:
-    """A graph ORT's CPU EP can actually execute (Cast, not Gemm - which has no bf16 CPU
-    kernel, see tests/models/bf16_weights.py) but whose declared output is bfloat16: the
-    case OnnxRuntimeBackend.infer's OrtValue/DLPack widening (B1) covers, since
-    OrtValue.numpy() has no bfloat16/float16 numpy dtype to convert to."""
+    """A graph that the CPU EP of ORT can run (Cast, and not Gemm, which has no bf16 CPU kernel.
+    See tests/models/bf16_weights.py) but whose declared output is bfloat16. This is the case
+    that the OrtValue and DLPack widening (B1) of OnnxRuntimeBackend.infer covers.
+    OrtValue.numpy() has no bfloat16 or float16 numpy dtype to convert to."""
     import onnx
     from onnx import TensorProto, helper
 
@@ -297,8 +300,8 @@ def _fp16_output_onnx_bytes() -> bytes:
 
 
 def test_onnxruntime_backend_widens_a_float16_output_without_dlpack(monkeypatch):
-    """fp16 has a numpy dtype, so it must not depend on OrtValue.__dlpack__, which older
-    onnxruntime releases (the 1.17 floor) do not have."""
+    """fp16 has a numpy dtype. It must therefore not depend on OrtValue.__dlpack__. Older
+    onnxruntime releases (the floor of 1.17) do not have it."""
     backend = OnnxRuntimeBackend(_fp16_output_onnx_bytes(), device="cpu")
     monkeypatch.setattr(torch, "from_dlpack", _no_dlpack)
 
@@ -326,8 +329,8 @@ def test_a_bfloat16_output_on_an_onnxruntime_without_dlpack_says_what_to_do():
 @pytest.mark.parametrize(
     ("declared", "expected"),
     [
-        ("tensor(float)", "float32"),  # ORT's spelling
-        ("tensor(float32)", "float32"),  # the torch backend's spelling
+        ("tensor(float)", "float32"),  # the spelling of ORT
+        ("tensor(float32)", "float32"),  # the spelling of the torch backend
         ("tensor(float64)", "float64"),
         ("tensor(bfloat16)", "float32"),  # bf16 is float32 on the wire
         ("tensor(int64)", "int64"),
@@ -344,7 +347,7 @@ def test_normalize_dtype_reads_both_backends_spellings(declared, expected):
 
 # --- Hugging Face: token-id range and axis bounds --------------------------------------------
 
-HF_MAX_POSITIONS = 32  # hf_repo.MAX_POSITIONS, kept here so the import stays lazy
+HF_MAX_POSITIONS = 32  # hf_repo.MAX_POSITIONS. It is here so that the import stays lazy
 
 
 @pytest.fixture(scope="module")
@@ -471,7 +474,7 @@ def test_a_client_shape_mistake_on_torch_is_a_400(torch_state):
     resp = client.post("/predict", json={"inputs": {"x": [[0.0] * 5]}})
 
     assert resp.status_code == 400
-    assert "shape" in resp.json()["detail"]
+    assert resp.json()["detail"] == "x axis 1 is 5; this model takes 16"
 
 
 @pytest.mark.parametrize(
@@ -497,21 +500,17 @@ def test_a_server_side_runtime_error_in_forward_is_a_500(torch_state, monkeypatc
     assert resp.json()["request_id"] == resp.headers["x-request-id"]
 
 
-def test_an_unrecognized_runtime_error_in_forward_is_presumed_client_input(
-    torch_state, monkeypatch
-):
-    """Torch has no exception type for "the client's input was bad", only ever-varying
-    RuntimeError/ValueError messages (a shape mismatch, an out-of-bounds target, ...);
-    enumerating every client-input phrasing under-classifies, so anything that isn't one of
-    the few known server-side markers (out of memory, a CUDA/cuDNN fault, an internal
-    assert, a missing kernel) is presumed to be the client's fault instead of an opaque 500."""
+def test_any_error_in_forward_after_the_input_checks_is_a_500(torch_state, monkeypatch):
+    """Downshift checks the names, dtypes, ranks and fixed axes of the input before infer. An
+    error that the model raises after that is a fault of the server. The message does not
+    change this."""
     monkeypatch.setattr(torch_state.backend, "module", _Failing("kaboom: an unrelated failure"))
-    client = TestClient(build_app(torch_state, api_key=None))
+    client = TestClient(build_app(torch_state, api_key=None), raise_server_exceptions=False)
 
     resp = client.post("/predict", json=MLP_INPUT)
 
-    assert resp.status_code == 400
-    assert "kaboom" in resp.json()["detail"]
+    assert resp.status_code == 500
+    assert "kaboom" not in resp.text
 
 
 @pytest.mark.parametrize("device", ["cuda", "cuda:0"])
@@ -520,3 +519,77 @@ def test_device_cuda_without_cuda_fails_at_construction(monkeypatch, device):
 
     with pytest.raises(ValueError, match=f"--device {device}"):
         TorchBackend(nn.Linear(2, 2), ("x",), device)
+
+
+# --- the prep pool keeps conversion off the inference slot -----------------------------------
+
+
+def test_a_slow_text_encode_does_not_hold_the_inference_slot(tmp_path, monkeypatch):
+    pytest.importorskip("transformers")
+    pytest.importorskip("tokenizers")
+    from downshift.adapters.text import TextIO
+    from tests.models import hf_repo
+
+    repo = hf_repo.write_encoder_repo(tmp_path)
+    state = prepare_serving(
+        load_model(LoadSpec(repo)),
+        ServeOptions(warmup=1, max_concurrency=1, prep_threads=2),
+    )
+    client = TestClient(build_app(state, api_key=None))
+    started = threading.Event()
+
+    def slow_encode(self, text):
+        started.set()
+        time.sleep(2.0)
+        raise ValueError("never mind")
+
+    monkeypatch.setattr(TextIO, "encode", slow_encode)
+    results: list[int] = []
+    slow = threading.Thread(
+        target=lambda: results.append(client.post("/predict", json={"text": "hi"}).status_code)
+    )
+    slow.start()
+    assert started.wait(5)
+
+    began = time.perf_counter()
+    resp = client.post("/predict", json=_ids([2, 3, 4]))
+    elapsed = time.perf_counter() - began
+    slow.join()
+
+    assert resp.status_code == 200, resp.text
+    assert elapsed < 1.0
+    assert results == [400]
+
+
+def test_a_request_queued_for_inference_still_times_out(mlp_state, monkeypatch):
+    calls: list[int] = []
+
+    def slow_infer(inputs):
+        calls.append(1)
+        time.sleep(0.4)
+        return {"output_0": np.zeros((1, 4), dtype=np.float32)}
+
+    state = _with_options(mlp_state, max_concurrency=1, max_queue=5, request_timeout=0.1)
+    monkeypatch.setattr(state.backend, "infer", slow_infer)
+    client = TestClient(build_app(state, api_key=None))
+    results: list[int] = []
+    first = threading.Thread(
+        target=lambda: results.append(client.post("/predict", json=MLP_INPUT).status_code)
+    )
+    first.start()
+    time.sleep(0.05)
+    second = client.post("/predict", json=MLP_INPUT)
+    first.join()
+
+    assert second.status_code == 503
+    assert "--request-timeout" in second.json()["detail"]
+    assert results == [200]
+    assert len(calls) == 1
+
+
+def test_server_timing_and_the_access_log_carry_the_wait_stages(mlp_state):
+    resp = TestClient(build_app(mlp_state, api_key=None)).post("/predict", json=MLP_INPUT)
+
+    assert resp.status_code == 200
+    names = [part.split(";")[0] for part in resp.headers["server-timing"].split(", ")]
+    assert names == ["parse", "prep_wait", "prep", "infer_wait", "infer", "encode"]

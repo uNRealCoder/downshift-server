@@ -1,7 +1,7 @@
-"""Intake for a .onnx file someone else produced (Olive, a notebook, whatever).
+"""Intake for a .onnx file that someone else made (Olive, a notebook, or other tools).
 
-No reference model -> UNVERIFIED. We serve it, we just say we never checked it.
-With --reference -> the normal verify path, exactly as for a fresh export.
+No reference model: the verdict is UNVERIFIED. Downshift serves the file and says that it never
+checked it. With --reference: the normal verification path, the same as for a new export.
 """
 
 import time
@@ -13,8 +13,15 @@ import torch
 from downshift.adapters.base import Adapter, VaryFn
 from downshift.core.capture import op_type_histogram
 from downshift.core.phase import Phase, report
-from downshift.core.verdict import BackendName, ExportVerdict, numerics_outcome, prepare_model
-from downshift.core.verify import OnnxRuntimeError, verify
+from downshift.core.verdict import (
+    BackendName,
+    ExportVerdict,
+    Status,
+    axes_for,
+    numerics_outcome,
+    prepare_model,
+)
+from downshift.core.verify import OnnxRuntimeError, first_line, load_session, verify
 from downshift.settings import DEFAULT_SAMPLES
 
 
@@ -37,16 +44,17 @@ def intake(
     rtol: float | None = None,
     seed: int = 0,
     vary: VaryFn | str | None = None,
+    axis_max: dict[str, int] | None = None,
     timings: dict[str, float] | None = None,
 ) -> ExportVerdict:
-    """`timings`, when given, gets Phase.verify added to it (there is no export phase for a
-    pre-built ONNX graph); see build_verdict's docstring."""
+    """If you give `timings`, downshift adds Phase.verify to it. A pre-built ONNX graph has no
+    export phase. See the docstring of build_verdict."""
     onnx_path = Path(onnx_path)
     opset, op_types, input_names = _graph_summary(onnx_path)
 
     if reference is None:
         return ExportVerdict(
-            status="UNVERIFIED",
+            status=Status.UNVERIFIED,
             model_family="onnx",
             capture_strategy=None,
             opset=opset,
@@ -58,13 +66,16 @@ def intake(
             onnx_path=onnx_path,
         )
 
-    prepared = prepare_model(reference, example_inputs, adapter, dynamic, vary=vary)
+    prepared = prepare_model(
+        reference, example_inputs, adapter, dynamic, vary=vary, axis_max=axis_max
+    )
     report(Phase.verify)
     verify_start = time.perf_counter()
     try:
+        session = load_session(onnx_path)
         numerics = verify(
             prepared.model,
-            onnx_path,
+            session,
             prepared.inputs,
             prepared.dynamic_shapes,
             prepared.vary_fn,
@@ -74,9 +85,9 @@ def intake(
             seed=seed,
         )
     except OnnxRuntimeError as exc:
-        message = str(exc).splitlines()[0]
+        message = first_line(exc)
         return ExportVerdict(
-            status="FAILED",
+            status=Status.FAILED,
             model_family=prepared.family,
             capture_strategy=None,
             opset=opset,
@@ -86,6 +97,7 @@ def intake(
             reason=f"pre-built ONNX cannot run in ONNX Runtime: {message}",
             input_names=prepared.input_names,
             dynamic_dims=prepared.dynamic_dims,
+            axes=axes_for(prepared, None),
             warnings=[message],
             onnx_path=onnx_path,
             prepared=prepared,
@@ -108,6 +120,8 @@ def intake(
         reason=reason,
         input_names=prepared.input_names,
         dynamic_dims=prepared.dynamic_dims,
+        axes=axes_for(prepared, numerics),
         onnx_path=onnx_path,
         prepared=prepared,
+        _session=session,
     )

@@ -1,5 +1,5 @@
-"""prepare_serving(): verdict -> backend selection -> warmed-up state, and the backends'
-shared contract."""
+"""prepare_serving(): verdict, backend selection, warmed-up state, and the shared contract of the
+backends."""
 
 import dataclasses
 from concurrent.futures import ThreadPoolExecutor
@@ -34,13 +34,22 @@ def test_clean_model_serves_via_onnxruntime(mlp_state):
 
 def test_serving_state_builds_an_executor_from_max_concurrency(mlp_state):
     assert isinstance(mlp_state.executor, ThreadPoolExecutor)
-    assert mlp_state.executor._max_workers == 1
+    assert mlp_state.executor._max_workers == mlp_state.options.max_concurrency == 4
     assert mlp_state.in_flight == 0
 
     wider = dataclasses.replace(
         mlp_state, options=dataclasses.replace(mlp_state.options, max_concurrency=3)
     )
     assert wider.executor._max_workers == 3
+
+
+def test_serving_state_builds_a_prep_pool_from_prep_threads(mlp_state):
+    narrow = dataclasses.replace(
+        mlp_state, options=dataclasses.replace(mlp_state.options, prep_threads=2)
+    )
+    assert isinstance(narrow.prep_executor, ThreadPoolExecutor)
+    assert narrow.prep_executor._max_workers == 2
+    assert narrow.prep_executor._thread_name_prefix == "downshift-prep"
 
 
 def test_degraded_model_falls_back_to_torch(serve_fixture):
@@ -70,6 +79,15 @@ def test_torch_backend_option_skips_export(serve_fixture):
     assert state.verdict.onnx_program is None
     assert state.backend.name == "torch"
     assert state.input_names == ("x",)
+
+
+def test_auto_skips_the_export_for_all_bfloat16_weights(serve_fixture):
+    state = serve_fixture("bf16_weights")
+    assert state.verdict.status == "UNVERIFIED"
+    assert "bfloat16" in state.verdict.reason
+    assert state.verdict.onnx_program is None
+    assert state.backend.name == "torch"
+    assert state.backend_auto_selected
 
 
 def test_backends_agree_on_the_same_model():
@@ -168,8 +186,8 @@ def test_onnx_file_with_reference_is_verified(exported_mlp):
 
 
 def test_torch_backend_reports_only_the_adapters_dynamic_axes():
-    """A graph model's edge_index is [2, E]: only E is dynamic. Reporting axis 0 as "batch"
-    made /schema's example [1, E], which the model then rejected."""
+    """The edge_index of a graph model is [2, E]. Only E is dynamic. A report of axis 0 as
+    "batch" made the example of /schema [1, E]. The model then rejected it."""
 
     class TakesGraph(torch.nn.Module):
         def forward(self, x, edge_index):
@@ -195,9 +213,12 @@ def test_torch_backend_rejects_missing_input():
         backend.infer({"y": np.zeros((1, 16), dtype=np.float32)})
 
 
-def test_torch_backend_wraps_shape_error_in_inference_input_error():
+def test_torch_backend_leaves_a_model_error_to_the_server():
+    # Downshift checks the shape of the client before infer (predict._shape_violation). An error
+    # that the model raises after that is a 500 of the server. The message does not change the
+    # class of the error.
     backend = TorchBackend(clean_mlp.make_model(), ("x",), device="cpu")
-    with pytest.raises(InferenceInputError, match="cannot be multiplied"):
+    with pytest.raises(RuntimeError, match="cannot be multiplied"):
         backend.infer({"x": np.zeros((1, 5), dtype=np.float32)})
 
 
@@ -217,7 +238,7 @@ def test_onnxruntime_backend_wraps_shape_mismatch_in_inference_input_error(expor
     backend = OnnxRuntimeBackend(path, device="cpu")
     with pytest.raises(InferenceInputError) as excinfo:
         backend.infer({"x": np.zeros((1, 5), dtype=np.float32)})
-    # First line of ORT's (often multi-line) message only.
+    # Only the first line of the message of ORT (it often has several lines).
     assert "\n" not in str(excinfo.value)
     assert "INVALID_ARGUMENT" in str(excinfo.value)
 
@@ -302,8 +323,9 @@ class _FakeSession:
 
 
 def _fake_gpu_wheel(monkeypatch, session_providers: list[str]) -> None:
-    """onnxruntime-gpu installed (CUDA listed as available), but the session it hands back runs
-    on `session_providers`: the CPU alone when the CUDA/cuDNN libraries would not load."""
+    """onnxruntime-gpu is installed (CUDA is listed as available). The session that it returns
+    runs on `session_providers`. This is the CPU alone if the CUDA and cuDNN libraries do not
+    load."""
     monkeypatch.setattr(
         backends_mod.ort,
         "get_available_providers",
@@ -338,7 +360,7 @@ def test_ort_backend_does_not_check_for_cuda_on_a_cpu_server(monkeypatch):
 def _bare_verdict(**overrides) -> ExportVerdict:
     fields = dict(
         status="CLEAN",
-        model_family="generic-torch",
+        model_family="generic",
         capture_strategy=None,
         opset=None,
         op_types={},
@@ -391,10 +413,10 @@ def test_onnxruntime_backend_metadata(exported_mlp):
 
 
 def _count_sessions(monkeypatch) -> list[int]:
-    """Subclass the real InferenceSession so every construction (not just the count of
-    calls to the constructor function) is caught, then swap it in on the onnxruntime module
-    itself: both verify.py and backends.py look up `ort.InferenceSession` by attribute at
-    call time, so patching the module's attribute reaches both."""
+    """Make a subclass of the real InferenceSession, so that the test catches each construction
+    (and not only the count of calls to the constructor function). Then put it in the
+    onnxruntime module itself. verify.py and backends.py both look up `ort.InferenceSession`
+    by attribute when they run. A patch of the attribute of the module therefore reaches both."""
     import onnxruntime
 
     calls: list[int] = []
@@ -430,8 +452,8 @@ def test_explicit_intra_op_threads_builds_a_second_session(monkeypatch):
 
 
 def test_check_leaves_global_rng_alone():
-    """verify() seeds its own sampler; it must not reseed the caller's RNG, or every
-    model built after a check() would come out with the same weights."""
+    """verify() seeds its own sampler. It must not seed the RNG of the caller again. Otherwise,
+    each model that is built after a check() would get the same weights."""
     torch.manual_seed(1234)
     before = torch.get_rng_state()
 
@@ -441,4 +463,19 @@ def test_check_leaves_global_rng_alone():
     second = clean_mlp.make_model()
 
     assert not torch.equal(first.net[0].weight, second.net[0].weight)
-    assert not torch.equal(before, torch.get_rng_state())  # the RNG advanced, wasn't reset
+    assert not torch.equal(before, torch.get_rng_state())  # the RNG advanced and was not reset
+
+
+def test_verify_logs_one_progress_line_per_sample_with_every_input_shape(caplog):
+    import logging
+
+    from downshift.logs import REPORT_LOGGER
+
+    with caplog.at_level(logging.INFO, logger=REPORT_LOGGER):
+        verdict = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(), k=3)
+
+    lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("verify:")]
+    assert verdict.numerics is not None
+    assert len(lines) == 3
+    for i, line in enumerate(lines, start=1):
+        assert line.startswith(f"verify: sample {i}/3, x [")

@@ -47,7 +47,6 @@ def test_get_unknown_adapter_lists_available_names():
 
 class _FakeAdapter:
     name = "fake"
-    family = "fake"
 
     def matches(self, model, example_inputs):
         return True
@@ -55,7 +54,7 @@ class _FakeAdapter:
     def example_inputs(self, model):
         return None
 
-    def prepare(self, model, example_inputs):
+    def prepare(self, model, example_inputs, axis_max=None):
         raise NotImplementedError
 
 
@@ -114,7 +113,6 @@ from downshift.adapters.base import Prepared
 
 class MyAdapter:
     name = "custom"
-    family = "custom-family"
 
     def matches(self, model, example_inputs):
         return True
@@ -122,14 +120,14 @@ class MyAdapter:
     def example_inputs(self, model):
         return None
 
-    def prepare(self, model, example_inputs):
+    def prepare(self, model, example_inputs, axis_max=None):
         return Prepared(
             model=model,
             inputs=example_inputs,
             input_names=("x",),
             dynamic_shapes=(None,),
             vary_fn=None,
-            family=self.family,
+            family=self.name,
         )
 
 ADAPTER = MyAdapter()
@@ -146,7 +144,6 @@ def test_get_loads_custom_adapter_from_py_file_default_attr(tmp_path):
 
     adapter = registry.get(str(path))
     assert adapter.name == "custom"
-    assert adapter.family == "custom-family"
 
 
 def test_get_loads_custom_adapter_from_py_file_with_explicit_attr(tmp_path):
@@ -192,7 +189,7 @@ def test_prepare_model_accepts_custom_adapter_file_path(tmp_path):
     path.write_text(_CUSTOM_ADAPTER_INSTANCE)
 
     prepared = prepare_model(clean_mlp.make_model(), clean_mlp.make_inputs(), adapter=str(path))
-    assert prepared.family == "custom-family"
+    assert prepared.family == "custom"
 
 
 def test_detect_raises_when_no_adapter_matches(monkeypatch):
@@ -203,7 +200,7 @@ def test_detect_raises_when_no_adapter_matches(monkeypatch):
 
 def test_prepare_model_accepts_adapter_name_as_string():
     prepared = prepare_model(clean_mlp.make_model(), clean_mlp.make_inputs(), adapter="generic")
-    assert prepared.family == "generic-torch"
+    assert prepared.family == "generic"
 
 
 def test_prepare_model_vary_overrides_the_adapters_own_vary_fn():
@@ -236,7 +233,7 @@ def test_check_vary_is_used_for_verification_samples():
         (gnn_gcn.make_model, gnn_gcn.make_inputs, "pyg"),
         (tiny_bert.make_model, tiny_bert.make_inputs, "hf"),
         (tiny_bert.make_model, lambda: None, "hf"),
-        # No inputs at all: PyG is detected structurally from MessagePassing layers.
+        # No inputs at all: downshift detects PyG from the structure, with MessagePassing layers.
         (gnn_gcn.make_model, lambda: None, "pyg"),
     ],
     ids=["mlp", "pyg-data", "bert", "bert-no-inputs", "gcn-no-inputs"],
@@ -462,10 +459,10 @@ def test_hf_vary_fn_keeps_ids_in_vocab_and_mask_aligned():
         assert ids.dtype == base[0].dtype
         assert 0 <= int(ids.min()) and int(ids.max()) < 100
         assert mask.shape == ids.shape
-        assert bool((mask[:, 0] == 1).all())  # every row keeps at least one attended position
+        assert bool((mask[:, 0] == 1).all())  # each row keeps at least one attended position
         if bool((mask == 0).any()):
             saw_padding = True
-    assert saw_padding  # at least one of the varied samples is padded
+    assert saw_padding  # at least one varied sample has padding
 
 
 def test_hf_vary_fn_clamps_sequence_length_to_max_seq():
@@ -483,7 +480,7 @@ def test_hf_vary_fn_checks_the_longest_sequence_the_model_declares():
 
     ids, mask = vary(1)
     assert ids.shape == (1, 64)
-    assert bool((mask == 1).all())  # every position attended, so the whole table is used
+    assert bool((mask == 1).all())  # each position is attended, so the whole table is used
     assert all(vary(i)[0].shape[1] <= 64 for i in range(2, 21))
 
 

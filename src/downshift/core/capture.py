@@ -1,35 +1,43 @@
-"""Drive torch.export + torch.onnx.export and say which strategy worked.
+"""Run torch.export and torch.onnx.export, and say which strategy worked.
 
-We run torch.export ourselves (strict=False, then strict=True) so the winning strategy is
-a value we return, not something scraped from console output. The ONNX translation is
-still entirely torch.onnx.export's; we only hand it the ExportedProgram.
+Downshift runs torch.export itself (strict=False, then strict=True). The strategy that works
+is then a value that downshift returns. It is not text that downshift takes from the console
+output. torch.onnx.export does all of the ONNX translation. Downshift only gives it the
+ExportedProgram.
 
-torch 2.14 note: the dynamo exporter documents only the two strict modes. There's no
-draft_export step or TorchScript fallback any more.
+Note for torch 2.14: the dynamo exporter documents only the two strict modes. There is no
+draft_export step and no TorchScript fallback.
 """
 
 import contextlib
 import io
 import logging
+import tempfile
 import threading
 from collections import Counter
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
+import onnx
 import torch
 
 _STRATEGIES: tuple[tuple[str, bool], ...] = (("strict=False", False), ("strict=True", True))
+
+# Weights above this size go to an external data file. Protobuf limits one message to 2 GiB.
+EXTERNAL_DATA_THRESHOLD = 1_800_000_000
 
 _REGISTRATION_LOGGER = "torch.onnx._internal.exporter._registration"
 
 
 @contextlib.contextmanager
 def _quiet_registration_warnings() -> Iterator[None]:
-    """torch.onnx logs a warning per missing torchvision op on every export. Not actionable.
+    """torch.onnx logs a warning for each missing torchvision operation on every export. The
+    user cannot act on it.
 
-    Scoped to one capture() call rather than set at import time - a library shouldn't
-    change another package's logging configuration just by being imported.
+    The scope is one capture() call. Downshift does not set it at import. A library must not
+    change the logging configuration of another package only because someone imports it.
     """
     logger = logging.getLogger(_REGISTRATION_LOGGER)
     previous = logger.level
@@ -42,13 +50,14 @@ def _quiet_registration_warnings() -> Iterator[None]:
 
 @contextlib.contextmanager
 def _capture_torch_output(sink: io.StringIO) -> Iterator[None]:
-    """Collect what torch prints while it exports into `sink`.
+    """Collect what torch prints while it exports, into `sink`.
 
-    torch prints whole FX graphs straight to stderr when a data-dependent guard fails; keep
-    that out of the user's terminal, the exception message is what matters. Swapping
-    sys.stderr is process-global, so it is only done on the main thread (the CLI's own
-    check/export). The serve loader runs on another thread beside a live server, whose
-    stderr writers must not be swallowed: there only torch's logging is collected.
+    When a data-dependent guard fails, torch prints complete FX graphs directly to stderr. Keep
+    this out of the terminal of the user. The exception message is what matters. A swap of
+    sys.stderr is global for the process, so downshift does it only on the main thread (the own
+    check and export of the CLI). The serve loader runs on another thread next to a live server.
+    The stderr writers of that server must not be swallowed. In that case, downshift collects
+    only the logging of torch.
     """
     if threading.current_thread() is threading.main_thread():
         with contextlib.redirect_stderr(sink):
@@ -66,28 +75,37 @@ def _capture_torch_output(sink: io.StringIO) -> Iterator[None]:
 @dataclass
 class CaptureResult:
     success: bool
-    capture_strategy: str | None  # a _STRATEGIES name; None when nothing traced
+    capture_strategy: str | None  # a _STRATEGIES name. None if nothing traced
     onnx_program: "torch.onnx.ONNXProgram | None" = None
-    onnx_bytes: bytes = field(default=b"", repr=False)  # model_proto.SerializeToString(), once
+    onnx_bytes: bytes = field(default=b"", repr=False)  # model_proto.SerializeToString(), one time
+    # Set in place of onnx_bytes if the weights went to external data. `tmpdir` owns the files.
+    onnx_path: Path | None = None
+    tmpdir: tempfile.TemporaryDirectory | None = field(default=None, repr=False)
     opset: int | None = None
-    op_types: dict[str, int] = field(default_factory=dict)  # count-descending histogram
-    exception: Exception | None = None  # the exception build_verdict quotes as the reason
-    exceptions: list[tuple[str, Exception]] = field(default_factory=list)  # every strategy tried
-    stderr: str = ""  # whatever torch printed while we tried; useful at debug level
+    op_types: dict[str, int] = field(default_factory=dict)  # histogram, highest count first
+    exception: Exception | None = None  # the exception that build_verdict quotes as the reason
+    exceptions: list[tuple[str, Exception]] = field(default_factory=list)  # each strategy tried
+    stderr: str = ""  # what torch printed during the attempt. Useful at debug level
 
 
 def op_type_histogram(nodes: Iterable[Any]) -> dict[str, int]:
-    """Op types by count, descending. Both paths that produce a verdict - a fresh export here
-    and intake()'s read of a pre-built .onnx - report this same shape on ExportVerdict.op_types,
-    so they share one definition of it."""
+    """Operation types by count, in descending order. Two paths produce a verdict: a new export
+    here, and the read of a pre-built .onnx file by intake(). Both report this same shape on
+    ExportVerdict.op_types. They therefore share one definition of it."""
     counts = Counter(node.op_type for node in nodes)
     return dict(sorted(counts.items(), key=lambda kv: kv[1], reverse=True))
+
+
+def _weights_nbytes(exported_program: "torch.export.ExportedProgram") -> int:
+    tensors = [*exported_program.state_dict.values(), *exported_program.constants.values()]
+    return sum(t.numel() * t.element_size() for t in tensors if isinstance(t, torch.Tensor))
 
 
 def capture(
     model: torch.nn.Module,
     example_inputs: tuple,
     dynamic_shapes: tuple | None = None,
+    external_data_threshold: int | None = None,
 ) -> CaptureResult:
     exported_program = None
     strategy_used: str | None = None
@@ -100,7 +118,7 @@ def capture(
                 exported_program = torch.export.export(
                     model, example_inputs, dynamic_shapes=dynamic_shapes, strict=strict
                 )
-            except Exception as exc:  # noqa: BLE001 - a failed strategy means try the next
+            except Exception as exc:  # noqa: BLE001 - a failed strategy means: try the next one
                 exceptions.append((name, exc))
             else:
                 strategy_used = name
@@ -110,9 +128,9 @@ def capture(
             return CaptureResult(
                 success=False,
                 capture_strategy=None,
-                # The reason quotes the first failure (strict=False); unsupported_ops is
-                # mined from all of them, since strict=True's message is often just "no
-                # strategy worked" and loses whatever strict=False said about the real op.
+                # The reason quotes the first failure (strict=False). unsupported_ops comes
+                # from all failures. The message of strict=True is often only "no strategy
+                # worked". It loses what strict=False said about the real operation.
                 exception=exceptions[0][1] if exceptions else None,
                 exceptions=exceptions,
                 stderr=captured.getvalue(),
@@ -129,19 +147,35 @@ def capture(
             )
 
     if onnx_program is None:
-        # The type stub allows None for the legacy path; with an ExportedProgram it never is.
+        # The type stub allows None for the legacy path. With an ExportedProgram, it is never None.
         return CaptureResult(
             success=False,
             capture_strategy=strategy_used,
             exception=RuntimeError("torch.onnx.export returned None"),
         )
 
-    proto = onnx_program.model_proto
+    limit = EXTERNAL_DATA_THRESHOLD if external_data_threshold is None else external_data_threshold
+    onnx_bytes = b""
+    onnx_path: Path | None = None
+    tmpdir: tempfile.TemporaryDirectory | None = None
+    if _weights_nbytes(exported_program) > limit:
+        # One protobuf has a limit of 2 GiB. Above the threshold, the weights go to a data file
+        # next to the .onnx file. The directory stays alive through the result (then the
+        # verdict).
+        tmpdir = tempfile.TemporaryDirectory(prefix="downshift-", ignore_cleanup_errors=True)
+        onnx_path = Path(tmpdir.name) / "model.onnx"
+        onnx_program.save(onnx_path, external_data=True)
+        proto = onnx.load(str(onnx_path), load_external_data=False)
+    else:
+        proto = onnx_program.model_proto
+        onnx_bytes = proto.SerializeToString()
     return CaptureResult(
         success=True,
         capture_strategy=strategy_used,
         onnx_program=onnx_program,
-        onnx_bytes=proto.SerializeToString(),
+        onnx_bytes=onnx_bytes,
+        onnx_path=onnx_path,
+        tmpdir=tmpdir,
         opset=proto.opset_import[0].version if proto.opset_import else None,
         op_types=op_type_histogram(proto.graph.node),
         stderr=captured.getvalue(),

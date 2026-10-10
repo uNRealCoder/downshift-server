@@ -1,4 +1,4 @@
-"""U7: `python -m downshift` is a working entry point, equivalent to the `downshift` script."""
+"""U7: `python -m downshift` is a working entry point. It is equal to the `downshift` script."""
 
 import subprocess
 import sys

@@ -1,4 +1,4 @@
-"""Request/response models for the HTTP layer, plus JSON <-> numpy conversion."""
+"""The request and response models for the HTTP layer, plus the conversion between JSON and numpy."""
 
 import math
 import re
@@ -11,6 +11,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from downshift.serve.codec import b64decode
 from downshift.settings import DEFAULT_MAX_INPUT_BYTES
 
+# --------------------------------------------------------------------------------------------------
+# Output encodings
+# --------------------------------------------------------------------------------------------------
+
 
 class OutputEncoding(StrEnum):
     """How response tensors are written: nested lists, or {data, dtype, shape} base64 dicts."""
@@ -19,21 +23,37 @@ class OutputEncoding(StrEnum):
     base64 = "base64"
 
 
+class RequestOutputEncoding(StrEnum):
+    """What the `output_encoding` of a request can name: OutputEncoding plus safetensors.
+    Safetensors is a format for the whole response (an `Accept` header can also ask for it).
+    It is therefore not a default of the server."""
+
+    json = "json"
+    base64 = "base64"
+    safetensors = "safetensors"
+
+
 OutputEncodingField = Annotated[
-    OutputEncoding | None,
+    RequestOutputEncoding | None,
     Field(
         None,
         description=(
             "How response tensors are encoded: 'json' for nested lists, 'base64' for "
-            '{"data": <base64 little-endian bytes>, "dtype": ..., "shape": [...]} per output. '
+            '{"data": <base64 little-endian bytes>, "dtype": ..., "shape": [...]} per output, '
+            "'safetensors' for an application/vnd.safetensors response body (the same as "
+            "sending Accept: application/vnd.safetensors). "
             "Omit to use the server default (--output-encoding / DOWNSHIFT_OUTPUT_ENCODING)."
         ),
     ),
 ]
 
-# ORT reports dtypes as "tensor(float)"; map those names onto numpy ones. bfloat16 has no
-# numpy dtype of its own; the wire contract for it is float32, same as the torch backend's
-# (B1), so it maps there too.
+# --------------------------------------------------------------------------------------------------
+# Dtype names
+# --------------------------------------------------------------------------------------------------
+
+# ORT reports dtypes as "tensor(float)". Map those names to numpy names. bfloat16 has no numpy
+# dtype of its own. The wire contract for it is float32, the same as for the torch backend
+# (B1). It therefore maps there too.
 _ORT_DTYPES = {
     "float": "float32",
     "float16": "float16",
@@ -50,8 +70,9 @@ _TENSOR_RE = re.compile(r"^tensor\((\w+)\)$")
 
 
 def normalize_dtype(dtype: str | None) -> str | None:
-    """Turn "tensor(float)", "tensor(float32)" or "float32" into a numpy dtype name; None if
-    unknown. The torch backend spells dtypes the numpy way inside "tensor(...)", ORT its own."""
+    """Turn "tensor(float)", "tensor(float32)" or "float32" into a numpy dtype name. None if it
+    is unknown. The torch backend spells dtypes in the numpy way inside "tensor(...)". ORT uses
+    its own spelling."""
     if dtype is None:
         return None
     match = _TENSOR_RE.match(dtype)
@@ -64,11 +85,16 @@ def normalize_dtype(dtype: str | None) -> str | None:
         return None
 
 
-class TypedArray(BaseModel):
-    """Explicit form of an input: {"data": [...], "dtype": "float32", "shape": [2, 3]}.
+# --------------------------------------------------------------------------------------------------
+# Predict requests and responses
+# --------------------------------------------------------------------------------------------------
 
-    `data` may instead be a base64 string of the raw little-endian buffer, in which case
-    `dtype` and `shape` are required.
+
+class TypedArray(BaseModel):
+    """The explicit form of an input: {"data": [...], "dtype": "float32", "shape": [2, 3]}.
+
+    `data` can also be a base64 string of the raw little-endian buffer. In that case, `dtype`
+    and `shape` are required.
     """
 
     data: Any
@@ -77,15 +103,19 @@ class TypedArray(BaseModel):
 
 
 class PredictRequest(BaseModel):
-    """`inputs` maps input name -> nested list, or a TypedArray object for explicit typing.
+    """`inputs` maps the input name to a nested list, or to a TypedArray object for explicit
+    typing.
 
-    A model served from a Hugging Face repo directory that has tokenizer files also accepts
-    `text` (one string or a list) instead of `inputs`; the server tokenizes. Send one or the
-    other, not both.
+    A model that is served from a Hugging Face repo directory with tokenizer files also accepts
+    `text` (one string or a list) instead of `inputs`. The server tokenizes it. Send one of the
+    two. Do not send both.
     """
 
     inputs: dict[str, Any] = Field(default_factory=dict)
     text: str | list[str] | None = None
+    # One of the named prompts of the repo (config_sentence_transformers.json). Downshift puts
+    # it at the start of each text row. It has a meaning only with `text`.
+    prompt_name: str | None = None
     output_encoding: OutputEncodingField = None
 
     @model_validator(mode="after")
@@ -99,26 +129,59 @@ class PredictResponse(BaseModel):
     outputs: dict[str, Any]
     shapes: dict[str, list[int]]
     dtypes: dict[str, str]
-    # Present only for a sequence classifier: one {label, score, probabilities} per row.
+    # Present only for a sequence classifier: one {label, score, probabilities} for each row.
     predictions: list[dict[str, Any]] | None = None
 
 
-# The input names that make a model "graph-shaped": what /predict/graph accepts, and what
-# /schema checks before advertising that route.
-GRAPH_INPUTS = frozenset({"x", "edge_index"})
-
-
-class GraphPredictRequest(BaseModel):
-    """One graph per request: node features, COO edge index, optional edge attributes.
-
-    No batching; concatenate graphs client-side (with offset edge indices) if needed.
-    Each tensor is a nested list or a TypedArray dict (which is how base64 arrives).
-    """
+class GraphItem(BaseModel):
+    """One graph of a batch: the node features, the COO edge index in the node IDs of the
+    graph, and optional edge attributes."""
 
     x: list | dict
     edge_index: list | dict
     edge_attr: list | dict | None = None
+
+
+class GraphPredictRequest(BaseModel):
+    """One graph (`x`, `edge_index` and optional `edge_attr` at the top level) or a batch
+    (`graphs`, a list of the same three fields). Never both.
+
+    A batch runs as one inference over the graphs, which downshift joins into one disjoint
+    graph. Each `edge_index` uses the local node IDs of its own graph, and the server adds the
+    offsets. The response is {"graphs": [{outputs, shapes, dtypes}, ...]} in the order of the
+    request. With `Accept: application/vnd.safetensors`, each output is a tensor with the name
+    `graphs.<i>.<output name>`, and `__metadata__` has the number of graphs as
+    `downshift.graphs`. Outputs at node level and edge level are split for each graph. A model
+    whose output has a fixed size (a pooled readout) takes one graph for each request.
+    A safetensors request body can carry the batch as joined `x`, `edge_index` and `edge_attr`,
+    plus the int64 vectors `num_nodes` and `num_edges` of length G.
+    Each tensor is a nested list or a TypedArray dict (this is how base64 arrives).
+    """
+
+    x: list | dict | None = None
+    edge_index: list | dict | None = None
+    edge_attr: list | dict | None = None
+    graphs: list[GraphItem] | None = None
     output_encoding: OutputEncodingField = None
+
+    @model_validator(mode="after")
+    def _one_graph_or_a_batch(self) -> "GraphPredictRequest":
+        single = (self.x, self.edge_index, self.edge_attr)
+        if self.graphs is not None:
+            if any(v is not None for v in single):
+                raise ValueError(
+                    "send either 'graphs' or top-level x/edge_index/edge_attr, not both"
+                )
+            if not self.graphs:
+                raise ValueError("'graphs' is empty")
+        elif self.x is None or self.edge_index is None:
+            raise ValueError("send 'x' and 'edge_index' for one graph, or 'graphs' for a batch")
+        return self
+
+
+# --------------------------------------------------------------------------------------------------
+# /metadata (AxisInfo and Limits are shared with /schema)
+# --------------------------------------------------------------------------------------------------
 
 
 class WorstMismatchInfo(BaseModel):
@@ -165,7 +228,7 @@ class VerdictInfo(BaseModel):
     dynamic_dims: dict[str, list[int]]
     unsupported_ops: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
-    # No onnx_path: to_dict() carries one, but it is a location on the server's disk.
+    # No onnx_path. to_dict() has one, but it is a location on the disk of the server.
 
 
 class IOSpecInfo(BaseModel):
@@ -183,24 +246,57 @@ class BackendInfo(BaseModel):
     outputs: list[IOSpecInfo] = Field(default_factory=list)
 
 
+class AxisInfo(BaseModel):
+    """One dynamic axis: what the server accepts (`served_*`, the bounds of the export Dim),
+    next to what verification ran (`sampled_*`, None if verify did not run). `name` is the Dim
+    name that `--axis-max` takes. See downshift.core.axes."""
+
+    input: str
+    axis: int
+    name: str
+    served_min: int
+    served_max: int
+    sampled_min: int | None = None
+    sampled_max: int | None = None
+
+
+class Limits(BaseModel):
+    """The serving limits a client runs into; the same block on /metadata and /schema."""
+
+    max_body_bytes: int
+    max_input_bytes: int
+    max_concurrency: int
+    max_queue: int
+    request_timeout: float
+
+
 class MetadataResponse(BaseModel):
     model: str
     family: str
     verdict: VerdictInfo
+    axes: list[AxisInfo] = Field(default_factory=list)
     backend: BackendInfo
     input_names: list[str]
     notes: list[str] = Field(default_factory=list)
     version: str
-    limits: dict = Field(default_factory=dict)
+    limits: Limits
+    execution: str  # "threadpool" or "inline" (--execution)
     boot: dict[str, float] = Field(default_factory=dict)
     warmup: dict | None = None
 
 
-class AxisBound(BaseModel):
-    """min/max the adapter's export traced this axis for (torch.export.Dim's own bounds).
+# --------------------------------------------------------------------------------------------------
+# /schema
+# --------------------------------------------------------------------------------------------------
 
-    Only present for axes an adapter made dynamic on a model downshift itself exported; a
-    bare `.onnx` with no reference model carries none (TensorSchema.bounds is None then).
+
+class AxisBound(BaseModel):
+    """The min and max that the export of the adapter traced this axis for (the bounds of
+    torch.export.Dim).
+
+    They exist only for axes that an adapter made dynamic on a model that downshift exported
+    itself. A bare `.onnx` file with no reference model has none (TensorSchema.bounds is None
+    then).
     """
 
     min: int
@@ -210,17 +306,17 @@ class AxisBound(BaseModel):
 class TensorSchema(BaseModel):
     """One input or output as /schema describes it.
 
-    In `shape`, an int is a fixed size and a string is a dynamic axis: either a name the
-    adapter chose ("batch", "seq") or the plain word "dynamic". `example_shape` is that
-    shape with every dynamic axis pinned to 1, which is what `example_request` used.
-    `bounds`, when known, is parallel to `shape`: one AxisBound per dynamic axis downshift's
-    own export traced, None elsewhere.
+    In `shape`, an int is a fixed size and a string is a dynamic axis. The string is a name that
+    the adapter chose ("batch", "seq") or the plain word "dynamic". `example_shape` is that
+    shape with each dynamic axis pinned to 1. `example_request` used it. `bounds`, if known, has
+    the same length as `shape`. It has one AxisBound for each dynamic axis that the export
+    of downshift traced, and None for the other axes.
     """
 
     name: str
     dtype: str | None = None
     shape: list[int | str] | None = None
-    required: bool | None = None  # inputs only; every declared input is required
+    required: bool | None = None  # inputs only. Each declared input is required
     example_shape: list[int] | None = None
     bounds: list[AxisBound | None] | None = None
 
@@ -246,7 +342,7 @@ class TextInputInfo(BaseModel):
     max_length: int
     over_length: str
     example_request: dict
-    # The three below are set only for a sequence classifier.
+    # The next three are set only for a sequence classifier.
     labels: list[str] | None = None
     activation: str | None = None
     response: str | None = None
@@ -262,11 +358,10 @@ class EmbeddingInfo(BaseModel):
     dimension: int | None
     max_seq_length: int | None
     origin: str = Field(alias="from")
-
-
-class SchemaLimits(BaseModel):
-    max_body_bytes: int
-    max_input_bytes: int
+    # The named prompts that a /predict `text` request can select with `prompt_name`, and the
+    # prompt that applies if it names none.
+    prompts: dict[str, str] = Field(default_factory=dict)
+    default_prompt: str | None = None
 
 
 class SchemaResponse(BaseModel):
@@ -279,8 +374,12 @@ class SchemaResponse(BaseModel):
     device: str
     endpoint: str
     graph_endpoint: str | None = None
+    # PyG models: the output name -> "node" or "edge" (split for each graph in a `graphs` batch),
+    # "fixed" or "unknown" (one graph for each request).
+    graph_batching: dict[str, str] | None = None
     inputs: list[TensorSchema] = Field(default_factory=list)
     outputs: list[TensorSchema] = Field(default_factory=list)
+    axes: list[AxisInfo] = Field(default_factory=list)
     example_request: dict | None = None
     example_curl: str | None = None
     text_input: TextInputInfo | None = None
@@ -288,8 +387,13 @@ class SchemaResponse(BaseModel):
     input_formats: list[InputFormat] = Field(default_factory=list)
     output_encodings: list[str] = Field(default_factory=list)
     default_output_encoding: str
-    limits: SchemaLimits
+    limits: Limits
     notes: list[str] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------------------------------
+# Health and readiness
+# --------------------------------------------------------------------------------------------------
 
 
 class HealthResponse(BaseModel):
@@ -298,9 +402,14 @@ class HealthResponse(BaseModel):
 
 class ReadyResponse(BaseModel):
     ready: bool
-    # The loader's current phase while not ready (U4); None once ready, or when the app was
-    # built with state= directly (no loader, so no not-ready window to report on).
+    # The current phase of the loader while the app is not ready (U4). None when it is ready, or
+    # when the app was built with state= directly (no loader, so no not-ready window to report).
     phase: str | None = None
+
+
+# --------------------------------------------------------------------------------------------------
+# JSON -> numpy conversion
+# --------------------------------------------------------------------------------------------------
 
 
 def _from_base64(
@@ -312,7 +421,7 @@ def _from_base64(
             f"input {name!r}: base64 input needs dtype and shape "
             "(the shape cannot be inferred from bytes)"
         )
-    # np.dtype(">f4").name is plain "float32", so byte order is checked on the client's spec.
+    # np.dtype(">f4").name is plain "float32". The byte order is therefore checked on the spec of the client.
     if str(typed.dtype).startswith(">"):
         raise ValueError(
             f"input {name!r}: dtype {typed.dtype!r} is big-endian; base64 input must be little-endian"
@@ -321,7 +430,7 @@ def _from_base64(
     if any(dim < 0 for dim in typed.shape):
         raise ValueError(f"input {name!r}: shape {typed.shape} has a negative dimension")
     expected = math.prod(typed.shape) * dtype.itemsize
-    # Checked before decoding: the shape says how much would be handed to the backend.
+    # Checked before the decoding. The shape says how much data goes to the backend.
     if expected > max_bytes:
         raise ValueError(
             f"input {name!r}: {expected} bytes exceeds the server limit of {max_bytes} bytes"
@@ -347,12 +456,12 @@ def to_numpy(
 ) -> np.ndarray:
     """Convert a JSON input to an ndarray.
 
-    `expected_dtype` is whatever the backend declared (an ORT "tensor(...)" name, a numpy
-    name, or None). An explicit dtype in the payload wins. With nothing declared, integer
-    lists become int64 and everything else float32, which is what torch models expect.
+    `expected_dtype` is what the backend declared (an ORT "tensor(...)" name, a numpy name, or
+    None). A dtype in the payload has priority. If nothing is declared, integer lists become
+    int64 and all other lists become float32. Torch models expect this.
 
-    A TypedArray whose `data` is a string is base64 of the raw little-endian buffer and
-    must carry dtype and shape; it decodes to at most `max_bytes`.
+    A TypedArray whose `data` is a string is base64 of the raw little-endian buffer. It must
+    have dtype and shape. It decodes to at most `max_bytes`.
     """
     explicit_dtype: str | None = None
     explicit_shape: list[int] | None = None

@@ -1,7 +1,9 @@
-"""Smoke tests for CLI rendering: every table/banner branch gets executed at least once.
+"""Smoke tests for the CLI rendering. Each branch of the tables and the banner runs at least
+one time.
 
-Text content is deliberately not asserted in detail (see tests/test_cli.py's docstring);
-these tests just exercise the branches with constructed verdicts and serving states.
+The tests do not assert the text content in detail, by design (see the docstring of
+tests/test_cli.py). They only run the branches with verdicts and serving states that the tests
+construct.
 """
 
 import logging
@@ -15,13 +17,14 @@ from downshift.core.verdict import ExportVerdict
 from downshift.core.verify import NumericsReport, WorstMismatch
 from downshift.serve.backends import BackendMeta
 from downshift.serve.engine import ServeOptions, ServingState, WarmupStats
+from downshift.serve.options import ExecutionChoice
 from downshift.serve.schemas import OutputEncoding
 
 
 @pytest.fixture(autouse=True)
 def _capture_reports(caplog):
-    """Reports go out as INFO on downshift.report and warnings/errors on downshift.cli, which
-    only reach a handler once setup_logging has run; caplog stands in for that sink."""
+    """Reports go out as INFO on downshift.report. Warnings and errors go out on downshift.cli.
+    They reach a handler only after setup_logging has run. caplog stands in for that sink."""
     caplog.set_level(logging.INFO, logger="downshift.report")
     caplog.set_level(logging.DEBUG, logger="downshift.cli")
 
@@ -67,7 +70,7 @@ def _numerics(
 def _verdict(**overrides) -> ExportVerdict:
     fields = dict(
         status="CLEAN",
-        model_family="generic-torch",
+        model_family="generic",
         capture_strategy="strict=False",
         opset=18,
         op_types={"Gemm": 2, "Relu": 1},
@@ -236,7 +239,7 @@ def test_print_banner_shows_concurrency(caplog):
 
 
 def test_print_banner_shows_threads_row_for_multiple_workers(caplog, monkeypatch):
-    monkeypatch.setattr(render.os, "cpu_count", lambda: 16)
+    monkeypatch.setattr(render.settings, "usable_cpus", lambda: 16)
     state = _serving_state(_verdict(), options=ServeOptions(intra_op_threads=4))
     render.print_banner(state, "127.0.0.1", 8000, workers=4)
     out = caplog.text
@@ -475,6 +478,58 @@ def test_print_booting_says_where_it_will_listen(caplog):
     assert "will listen on http://127.0.0.1:9000 (not ready yet)" in caplog.text
 
 
+def test_print_booting_names_a_path_by_its_file_name(caplog):
+    render.print_booting("C:\\models\\private\\bert", "127.0.0.1", 9000)
+    assert "loading bert" in caplog.text
+    assert "private" not in caplog.text
+
+
+def _print_config(state, caplog, **overrides):
+    kwargs = dict(log_level="info", access_log=True, api_key_set=False) | overrides
+    with caplog.at_level(logging.INFO, logger="downshift.cli"):
+        render.print_config(state, "127.0.0.1", 8000, **kwargs)
+    return caplog.text
+
+
+def test_print_config_lists_every_serve_option(caplog):
+    state = _serving_state(_verdict(), options=ServeOptions(max_concurrency=4, warmup=7))
+    out = _print_config(state, caplog, workers=2, middleware=["pkg.mod:Mw"])
+    rows = dict(
+        (key.strip(), value.strip())
+        for key, value in (line.split(" = ", 1) for line in out.splitlines() if " = " in line)
+    )
+    assert rows["port"] == "8000"
+    assert rows["workers"] == "2"
+    assert rows["middleware"] == "pkg.mod:Mw"
+    assert rows["max_concurrency"] == "4"
+    assert rows["warmup"] == "7"
+    assert set(ServeOptions.__dataclass_fields__) <= set(rows)
+
+
+def test_print_config_redacts_the_api_key_and_hides_the_model_path(caplog):
+    state = _serving_state(
+        _verdict(), source="C:\\models\\private\\bert", source_kind="hf-repo-dir"
+    )
+    out = _print_config(state, caplog, api_key_set=True)
+    assert "api_key" in out
+    assert "= set" in out
+    assert "= bert" in out
+    assert "private" not in out
+
+
+def test_print_config_is_hidden_at_the_default_log_level(caplog):
+    with caplog.at_level(logging.WARNING, logger="downshift.cli"):
+        render.print_config(
+            _serving_state(_verdict()),
+            "127.0.0.1",
+            8000,
+            log_level="warning",
+            access_log=True,
+            api_key_set=False,
+        )
+    assert "serving with" not in caplog.text
+
+
 def test_print_ready_reports_the_total_boot_time(caplog):
     state = _serving_state(_verdict())
     state.timings = {"load": 0.5, "export": 1.0}
@@ -486,3 +541,58 @@ def test_print_ready_without_timings(caplog):
     render.print_ready(_serving_state(_verdict()))
     assert "ready" in caplog.text
     assert " in " not in caplog.text.split("ready", 1)[1]
+
+
+def _fact(name: str, served_max: int, sampled_max: int | None, input: str = "x"):
+    from downshift.core.axes import AxisFact
+
+    return AxisFact(input, 0, name, 1, served_max, None if sampled_max is None else 2, sampled_max)
+
+
+def test_axes_text_warns_on_a_wide_unverified_axis(caplog):
+    render.print_verdict(_verdict(axes=[_fact("num_nodes", 65536, 23)]), "model")
+
+    assert "`num_nodes` (x[0])  sampled 2-23, serves 1-65536" in caplog.text
+    assert "unverified above 23" in caplog.text
+
+
+def test_axes_text_never_warns_on_the_batch_axis(caplog):
+    render.print_verdict(_verdict(axes=[_fact("batch", 4096, 8, "input_ids")]), "model")
+
+    assert "`batch` (input_ids[0])  sampled 2-8, serves 1-4096" in caplog.text
+    assert "unverified" not in caplog.text
+
+
+def test_axes_text_says_so_when_nothing_was_sampled(caplog):
+    render.print_verdict(_verdict(axes=[_fact("seq", 512, None)]), "model")
+
+    assert "not verified, serves 1-512" in caplog.text
+    assert "unverified above" not in caplog.text
+
+
+def test_axes_text_falls_back_to_the_dynamic_dims(caplog):
+    render.print_verdict(_verdict(dynamic_dims={"x": [0]}), "model")
+
+    assert "x[0]" in caplog.text
+
+
+def test_print_banner_shows_prep_threads_in_the_capacity_row(caplog):
+    state = _serving_state(_verdict(), options=ServeOptions(prep_threads=3))
+    render.print_banner(state, "127.0.0.1", 8000)
+    assert "3 prep threads" in caplog.text
+
+
+def test_print_banner_execution_row_threadpool(caplog):
+    render.print_banner(_serving_state(_verdict()), "127.0.0.1", 8000)
+    assert "Execution" in caplog.text
+    assert "threadpool" in caplog.text
+    assert "event loop" not in caplog.text
+
+
+def test_print_banner_inline_execution_warns(caplog):
+    state = _serving_state(_verdict(), options=ServeOptions(execution=ExecutionChoice.inline))
+    render.print_banner(state, "127.0.0.1", 8000)
+    out = caplog.text
+    assert "inline for small JSON bodies" in out
+    assert "under ~1 ms" in out
+    assert "/health and /ready" in out

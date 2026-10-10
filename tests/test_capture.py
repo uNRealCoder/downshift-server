@@ -1,4 +1,4 @@
-"""capture(): the ONNX-translation failure paths, which never happen on the happy fixtures."""
+"""capture(): the failure paths of the ONNX translation. They never happen on the fixtures that work."""
 
 from downshift.core import capture as capture_mod
 from downshift.core.capture import capture
@@ -18,7 +18,7 @@ def test_op_types_is_a_count_descending_histogram():
     result = capture(clean_mlp.make_model(), clean_mlp.make_inputs())
 
     assert result.success is True
-    # Older exporters (torch 2.5) also emit a Transpose per weight ahead of each Gemm.
+    # Older exporters (torch 2.5) also emit a Transpose for each weight before each Gemm.
     assert result.op_types["Gemm"] == 2
     assert result.op_types["Relu"] == 1
     counts = list(result.op_types.values())
@@ -46,3 +46,42 @@ def test_onnx_translation_returning_none_is_treated_as_failure(monkeypatch):
     assert result.success is False
     assert result.capture_strategy is not None
     assert "returned None" in str(result.exception)
+
+
+def test_default_threshold_keeps_the_graph_in_memory():
+    result = capture(clean_mlp.make_model(), clean_mlp.make_inputs())
+
+    assert result.success is True
+    assert result.onnx_bytes
+    assert result.onnx_path is None
+    assert result.tmpdir is None
+
+
+def test_over_threshold_weights_go_to_an_external_data_file():
+    import onnxruntime as ort
+
+    result = capture(clean_mlp.make_model(), clean_mlp.make_inputs(), external_data_threshold=0)
+
+    assert result.success is True
+    assert result.onnx_bytes == b""
+    assert result.onnx_path is not None and result.onnx_path.name == "model.onnx"
+    assert result.onnx_path.with_name("model.onnx.data").is_file()
+    assert result.op_types["Gemm"] == 2
+    assert result.opset is not None
+    session = ort.InferenceSession(str(result.onnx_path), providers=["CPUExecutionProvider"])
+    assert session.get_inputs()[0].name == "x"
+
+
+def test_external_data_verdict_is_clean_and_keeps_its_directory_alive():
+    from downshift.core.verdict import build_verdict, prepare_model
+
+    prepared = prepare_model(clean_mlp.make_model(), clean_mlp.make_inputs())
+
+    verdict = build_verdict(prepared, k=2, _external_data_threshold=0)
+
+    assert verdict.status == "CLEAN", verdict.reason
+    assert verdict.onnx_bytes == b""
+    assert verdict.onnx_path is not None
+    assert verdict.onnx_path.with_name("model.onnx.data").is_file()
+    assert verdict._tmpdir is not None
+    assert "_tmpdir" not in verdict.to_dict()

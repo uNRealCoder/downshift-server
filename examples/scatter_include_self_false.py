@@ -1,5 +1,5 @@
-"""DEGRADED: scatter_reduce(include_self=False) exports without error and returns
-wrong numbers, so only the numerics check catches it."""
+"""DEGRADED: scatter_reduce(include_self=False) exports without an error and returns
+wrong numbers. Only the numerics check finds the fault."""
 
 import torch
 from torch import nn

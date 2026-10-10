@@ -1,10 +1,11 @@
-"""PyG adapter: flattens torch_geometric.data.Data into (x, edge_index[, edge_attr]).
+"""The PyG adapter. It flattens torch_geometric.data.Data into (x, edge_index[, edge_attr]).
 
-Node count N and edge count E are independent dynamic dims. Tying them to one Dim is the
-classic way to get a GNN export that works on the example graph and throws
-INVALID_ARGUMENT on the next one.
+The node count N and the edge count E are independent dynamic dimensions. If you tie them to
+one Dim, the GNN export works on the example graph and raises INVALID_ARGUMENT on the next
+graph. This is the typical fault.
 
-Only imported when a PyG Data input actually shows up, so torch_geometric stays optional.
+Downshift imports it only when a PyG Data input appears. torch_geometric therefore stays
+optional.
 """
 
 import torch
@@ -14,9 +15,9 @@ from torch_geometric.nn import MessagePassing
 
 from downshift.adapters._flatten import build_shim_class
 from downshift.adapters.base import Family, Prepared, VaryFn
-from downshift.core.shapes import alternative_sizes, dim_bounds, pick_size
+from downshift.core.shapes import alternative_sizes, dim_bounds, lower_axis_max, pick_size
 
-BASE_FIELD_NAMES = ("x", "edge_index")  # edge_attr appended when present on the input Data
+BASE_FIELD_NAMES = ("x", "edge_index")  # edge_attr is added if the input Data has it
 _GUESS_NODES = 8
 _GUESS_EDGES = 16
 
@@ -40,7 +41,6 @@ def _first_in_channels(model: nn.Module) -> int | None:
 
 class PyGAdapter:
     name = Family.pyg
-    family = Family.pyg
 
     def matches(self, model: nn.Module, example_inputs: tuple | None) -> bool:
         if is_pyg_data(example_inputs):
@@ -57,7 +57,9 @@ class PyGAdapter:
         edge_index = torch.randint(0, _GUESS_NODES, (2, _GUESS_EDGES))
         return (Data(x=x, edge_index=edge_index),)
 
-    def prepare(self, model: nn.Module, example_inputs: tuple) -> Prepared:
+    def prepare(
+        self, model: nn.Module, example_inputs: tuple, axis_max: dict[str, int] | None = None
+    ) -> Prepared:
         (data,) = example_inputs
         names: tuple[str, ...] = BASE_FIELD_NAMES
         if getattr(data, "edge_attr", None) is not None:
@@ -69,25 +71,30 @@ class PyGAdapter:
         n_dim = torch.export.Dim("num_nodes", min=1, max=1 << 16)
         e_dim = torch.export.Dim("num_edges", min=1, max=1 << 16)
         axis_by_field = {"x": {0: n_dim}, "edge_index": {1: e_dim}, "edge_attr": {0: e_dim}}
-        dynamic_shapes = tuple(axis_by_field[n] for n in names)
+        dynamic_shapes = lower_axis_max(tuple(axis_by_field[n] for n in names), axis_max)
 
         return Prepared(
             model=shim,
             inputs=inputs,
             input_names=names,
             dynamic_shapes=dynamic_shapes,
-            vary_fn=make_vary_fn(inputs, names, dynamic_shapes),
-            family=self.family,
+            vary_fn=make_vary_fn(inputs, names, dynamic_shapes, axis_max),
+            family=self.name,
         )
 
 
 def make_vary_fn(
-    base_inputs: tuple, field_names: tuple[str, ...], dynamic_shapes: tuple | None = None
+    base_inputs: tuple,
+    field_names: tuple[str, ...],
+    dynamic_shapes: tuple | None = None,
+    axis_max: dict[str, int] | None = None,
 ) -> VaryFn:
-    """Regenerate (x, edge_index[, edge_attr]) with independently varied N and E.
+    """Generate (x, edge_index[, edge_attr]) again, with N and E varied independently.
 
-    edge_index is redrawn against the sample's own node count, not the original tensor's
-    value range, so a shrunken graph never references nodes it doesn't have.
+    Downshift draws edge_index again for the node count of the sample. It does not use the
+    value range of the original tensor. A graph that is smaller then never references nodes
+    that it does not have. With --axis-max, sample 1 is exactly at the pinned `num_nodes` and
+    `num_edges` (the other one keeps the size of the example).
     """
     x_idx = field_names.index("x")
     ei_idx = field_names.index("edge_index")
@@ -104,11 +111,23 @@ def make_vary_fn(
     n_candidates = alternative_sizes(base_n, n_lo, n_hi)
     e_candidates = alternative_sizes(base_e, e_lo, e_hi)
 
+    pins = axis_max or {}
+    pinned = "num_nodes" in pins or "num_edges" in pins
+
     def vary(i: int) -> tuple:
         if i == 0:
             return base_inputs
-        n = pick_size(n_candidates) if n_candidates else base_n
-        e = pick_size(e_candidates) if e_candidates else base_e
+        if i == 1 and pinned:
+            n = pins.get("num_nodes", base_n)
+            e = pins.get("num_edges", base_e)
+        else:
+            n = pick_size(n_candidates) if n_candidates else base_n
+            e = pick_size(e_candidates) if e_candidates else base_e
+            # With N != E, verify() can tell outputs for nodes from outputs for edges.
+            for _ in range(8):
+                if e != n or not e_candidates:
+                    break
+                e = pick_size(e_candidates)
 
         sample: list = [None] * len(field_names)
         sample[x_idx] = torch.randn(n, in_channels, dtype=base_x.dtype)

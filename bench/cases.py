@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import importlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -158,6 +159,29 @@ def to_payload(feeds: dict[str, np.ndarray], encoding: str = "json") -> dict[str
             "output_encoding": "base64",
         }
     raise ValueError(f"unknown encoding {encoding!r}")
+
+
+SAFETENSORS = "application/vnd.safetensors"
+
+
+def encode_request(feeds: dict[str, np.ndarray], encoding: str = "json") -> tuple[bytes, dict]:
+    """Request bytes and headers for one wire encoding: json, base64 (JSON with base64 tensors)
+    or safetensors (a binary body, and the response asked for in safetensors too; 0.5.0+)."""
+    if encoding == "safetensors":
+        from safetensors.numpy import save
+
+        body = save({k: np.ascontiguousarray(v) for k, v in feeds.items()})
+        return body, {"content-type": SAFETENSORS, "accept": SAFETENSORS}
+    return json.dumps(to_payload(feeds, encoding)).encode(), {"content-type": "application/json"}
+
+
+def decode_outputs(body: bytes, content_type: str) -> dict[str, np.ndarray]:
+    """A /predict response's output tensors by name, whichever encoding it came back in."""
+    if content_type.startswith(SAFETENSORS):
+        from safetensors.numpy import load
+
+        return load(body)
+    return {k: decode_array(v) for k, v in json.loads(body)["outputs"].items()}
 
 
 def prepare(name: str, export: bool = True) -> Case:

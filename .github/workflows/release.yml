@@ -1,8 +1,8 @@
 name: Release
 
-# Publishing a GitHub Release is the trigger: the tag on that release must match the
-# version in pyproject.toml, the tests must pass on it, and only then does the sdist +
-# wheel go to PyPI. workflow_dispatch runs the build and test gates only, publishing nothing.
+# The publication of a GitHub Release starts this job. The tag of that release must match the
+# version in pyproject.toml. The tests must pass on it. Only then do the sdist and the wheel go
+# to PyPI. workflow_dispatch runs only the build gates and the test gates. It publishes nothing.
 
 on:
   release:
@@ -24,8 +24,8 @@ jobs:
 
       - run: pip install build twine
 
-      # A release tagged v0.1.9 that ships 0.2.0 is unrecoverable — PyPI never lets a
-      # version be re-uploaded — so fail here rather than after the upload.
+      # A release with the tag v0.1.9 that ships 0.2.0 cannot be repaired. PyPI never accepts
+      # a second upload of a version. Fail here and not after the upload.
       - name: Check tag matches pyproject version
         if: github.event_name == 'release'
         run: |

@@ -7,14 +7,16 @@ compares a response against `torch_reference` (`bench.cases.load_fixture` alread
 the in-process variants). This module gives the CLI's `pkg.module:attr` loader something to
 point at: one zero-arg model factory and one zero-arg inputs factory per case in
 `bench.cases.CASE_NAMES`.
+
+Deliberately does not import `bench._path`: this module runs inside the server, and the server's
+PYTHONPATH (`bench._path.cli_env`) decides which downshift it is.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from bench._path import ROOT  # noqa: E402,F401  (must be first: fixes sys.path)
-from bench.cases import CASE_NAMES, load_fixture  # noqa: E402
+from bench.cases import CASE_NAMES, load_fixture
 
 
 def _factories(name: str) -> tuple[Any, Any]:

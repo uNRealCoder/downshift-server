@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "downshift-server"
-version = "0.4.0"
-description = "Serve PyTorch models over HTTP through ONNX Runtime, verified against PyTorch before serving, with eager fallback."
+version = "0.5.0"
+description = "Serve PyTorch models over HTTP through ONNX Runtime. Downshift verifies each export against PyTorch before it serves, and it falls back to eager PyTorch."
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
 license = {text = "MIT"}
@@ -44,6 +44,7 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.0",
     "httpx>=0.24",  # FastAPI TestClient
+    "safetensors>=0.4",  # reference reader/writer for the binary wire format tests
 ]
 gnn = [
     "torch-geometric>=2.5",
@@ -67,9 +68,10 @@ Issues = "https://github.com/uNRealCoder/downshift-server/issues"
 [project.scripts]
 downshift = "downshift.cli.main:app"
 
-# The built-in adapters (generic, pyg, hf) are not entry points: downshift.adapters.registry
-# imports them directly, gated on sys.modules, so discovering adapters never imports
-# transformers or torch_geometric on their behalf. Third-party adapters still register here.
+# The built-in adapters (generic, pyg, hf) are not entry points. downshift.adapters.registry
+# imports them directly, and it uses sys.modules as a gate. The search for adapters therefore
+# never imports transformers or torch_geometric for them. Third-party adapters still register
+# here.
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/downshift"]

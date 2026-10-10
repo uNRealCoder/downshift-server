@@ -1,6 +1,7 @@
-"""Embedding models from a downloaded sentence-transformers repo: the recipe is read from the
-repo's own files, applied inside the exported graph, and matches sentence-transformers'
-definition (masked pooling, then L2 normalise). Fixtures are tiny random-weight models."""
+"""Embedding models from a downloaded sentence-transformers repo. Downshift reads the recipe
+from the own files of the repo and applies it inside the exported graph. The result matches the
+definition of sentence-transformers (masked pooling, then L2 normalization). The fixtures are
+small models with random weights."""
 
 import json
 import re
@@ -22,7 +23,7 @@ from downshift.adapters.embedding import (  # noqa: E402
     read_recipe,
     resolve_recipe,
 )
-from downshift.cli import main  # noqa: E402
+from downshift.cli import main, runtime  # noqa: E402
 from downshift.loading import LoadError, LoadSpec, load_model  # noqa: E402
 from downshift.serve.app import build_app  # noqa: E402
 from downshift.serve.engine import prepare_serving  # noqa: E402
@@ -51,6 +52,11 @@ def _reference(path: str, texts: list[str], max_length: int, mode: str, normaliz
             vec = tokens[0]
         elif mode == "max":
             vec = tokens.max(0).values
+        elif mode == "lasttoken":
+            vec = tokens[-1]
+        elif mode == "weightedmean":
+            weights = torch.arange(1, len(tokens) + 1, dtype=tokens.dtype).unsqueeze(-1)
+            vec = (tokens * weights).sum(0) / weights.sum()
         else:
             vec = tokens.sum(0) / len(tokens) ** 0.5
         out.append(torch.nn.functional.normalize(vec, dim=0) if normalize else vec)
@@ -90,13 +96,18 @@ def test_repo_without_modules_json_has_no_recipe(tmp_path):
     assert resolve_recipe(path, None, None, has_head=False) is None
 
 
-@pytest.mark.parametrize("flag", ["pooling_mode_lasttoken", "pooling_mode_weightedmean_tokens"])
-def test_a_pooling_mode_we_do_not_apply_is_refused(tmp_path, flag):
+@pytest.mark.parametrize(
+    ("flag", "mode"),
+    [("pooling_mode_lasttoken", "lasttoken"), ("pooling_mode_weightedmean_tokens", "weightedmean")],
+)
+def test_last_token_and_weighted_mean_flags_are_read_from_the_recipe(tmp_path, flag, mode):
     pooling = {**hf_repo.MEAN_POOLING, "pooling_mode_mean_tokens": False, flag: True}
     path = hf_repo.write_encoder_repo(tmp_path, pooling=pooling)
 
-    with pytest.raises(LoadError, match=flag):
-        load_model(LoadSpec(path))
+    recipe = read_recipe(Path(path))
+
+    assert recipe is not None
+    assert recipe.pooling == mode
 
 
 def test_two_pooling_modes_at_once_are_refused(tmp_path):
@@ -118,7 +129,7 @@ def test_a_dense_module_is_refused_and_none_is_the_way_out(tmp_path):
 
     with pytest.raises(LoadError, match="Dense.*--pooling none"):
         load_model(LoadSpec(path))
-    with pytest.raises(LoadError, match="Dense"):  # naming a pooling does not skip the check
+    with pytest.raises(LoadError, match="Dense"):  # a named pooling does not skip the check
         load_model(LoadSpec(path, pooling="mean"))
 
     assert load_model(LoadSpec(path, pooling="none")).model is not None
@@ -136,7 +147,7 @@ def test_embedding_serves_on_onnx_runtime_with_the_pooling_in_the_graph(state):
     assert len(output.shape) == 2  # [batch, dim], not [batch, seq, dim]
     assert state.embedding is not None
     assert state.embedding.describe() == "mean pooling, L2-normalised"
-    assert state.notes == []  # informational, so not dressed up as a warning
+    assert state.notes == []  # informational, so it is not shown as a warning
 
 
 def test_served_embeddings_match_the_reference_definition(client, repo):
@@ -158,8 +169,8 @@ def test_a_row_does_not_depend_on_what_it_is_batched_with(client):
 
 
 def test_the_authors_max_seq_length_wins_over_the_position_embeddings(client):
-    """Position embeddings allow 32; the repo says it was trained at 16, so 16 tokens is the
-    most a row may have: one more is refused rather than silently cut."""
+    """The position embeddings allow 32. The repo says that it was trained at 16. A row can
+    therefore have at most 16 tokens. One more token is refused and not cut without a message."""
     fifteen = " ".join(["hello"] * 14)  # + [CLS] [SEP] = 16: fits
     seventeen = " ".join(["hello"] * 15)  # 17: one over
 
@@ -178,6 +189,8 @@ def test_schema_says_what_kind_of_vector_this_is(client):
         "dimension": hf_repo.HIDDEN,
         "max_seq_length": 16,
         "from": "modules.json",
+        "prompts": {},
+        "default_prompt": None,
     }
     assert schema["text_input"]["max_length"] == 16
 
@@ -185,7 +198,7 @@ def test_schema_says_what_kind_of_vector_this_is(client):
 # --- overrides ----------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("mode", ["cls", "max", "mean_sqrt_len"])
+@pytest.mark.parametrize("mode", ["cls", "max", "mean_sqrt_len", "lasttoken", "weightedmean"])
 def test_pooling_override_changes_the_served_pooling(repo, mode):
     loaded = load_model(LoadSpec(repo, pooling=mode, normalize=False))
     client = TestClient(
@@ -279,6 +292,56 @@ def test_mean_sqrt_len_divides_by_the_root_of_the_real_length():
     )
 
 
+def test_last_token_is_the_last_attended_position_under_either_padding():
+    row = torch.tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+    pad = torch.tensor([[100.0, -100.0]])
+    right = torch.cat([row, pad])[None]
+    left = torch.cat([pad, row])[None]
+    right_mask = torch.tensor([[1, 1, 1, 0]])
+    left_mask = torch.tensor([[0, 1, 1, 1]])
+
+    assert pool(right, right_mask, "lasttoken").tolist() == [[5.0, 6.0]]
+    assert pool(left, left_mask, "lasttoken").tolist() == [[5.0, 6.0]]
+
+
+def test_last_token_in_a_mixed_batch():
+    hidden = torch.arange(24, dtype=torch.float32).reshape(3, 4, 2)
+    mask = torch.tensor([[1, 1, 0, 0], [0, 0, 1, 1], [1, 1, 1, 1]])
+
+    assert pool(hidden, mask, "lasttoken").tolist() == [[2.0, 3.0], [14.0, 15.0], [22.0, 23.0]]
+
+
+def test_weighted_mean_matches_the_reference_formula():
+    hidden, mask = _padded()
+
+    def reference(tokens):
+        weights = [i + 1 for i in range(len(tokens))]
+        return [
+            sum(w * t[d] for w, t in zip(weights, tokens, strict=True)) / sum(weights)
+            for d in range(2)
+        ]
+
+    got = pool(hidden, mask, "weightedmean")
+
+    assert got[0].tolist() == pytest.approx(reference([[1.0, 2.0], [3.0, 4.0]]))
+    assert got[1].tolist() == pytest.approx(reference([[5.0, 6.0], [7.0, 8.0], [9.0, 10.0]]))
+
+
+@pytest.mark.needs_torch_26
+@pytest.mark.parametrize("mode", ["lasttoken", "weightedmean"])
+def test_last_token_and_weighted_mean_export_on_a_repo_without_a_recipe(tmp_path, mode):
+    path = hf_repo.write_encoder_repo(tmp_path, modules=None, pooling=None, max_seq_length=None)
+    loaded = load_model(LoadSpec(path, pooling=mode))
+    state = prepare_serving(loaded, ServeOptions(pooling=mode))
+
+    assert state.verdict.status == "CLEAN", state.verdict.reason
+    assert state.embedding is not None
+    assert state.embedding.origin == "--pooling"
+    client = TestClient(build_app(state))
+    got = np.array(client.post("/predict", json={"text": TEXTS}).json()["outputs"]["output_0"])
+    assert got == pytest.approx(_reference(path, TEXTS, 32, mode, normalize=False), abs=1e-5)
+
+
 # --- the CLI flags ------------------------------------------------------------------------
 
 
@@ -290,17 +353,17 @@ def _cli(*args: str):
 
 @pytest.fixture(scope="module")
 def onnx_path(state, tmp_path_factory) -> str:
-    """repo's model, already exported to a standalone .onnx - the counterpart to serving
-    repo directly, for the --tokenizer-from tests below."""
+    """The model of the repo, already exported to a standalone .onnx file. It is the equivalent
+    of serving the repo directly, for the --tokenizer-from tests below."""
     path = tmp_path_factory.mktemp("onnx") / "model.onnx"
     path.write_bytes(state.verdict.onnx_bytes)
     return str(path)
 
 
 def _stub_uvicorn_server(monkeypatch) -> dict:
-    """Single-worker `serve` binds via uvicorn.Server directly; stand in for it so the CLI
-    test runs the real loader thread without opening a socket. Local, minimal copy of
-    test_cli.py's _fake_uvicorn_server - kept here rather than imported across test modules."""
+    """A single-worker `serve` binds through uvicorn.Server directly. This stand-in lets the CLI
+    test run the real loader thread without a socket. It is a small local copy of
+    _fake_uvicorn_server of test_cli.py. It is here and not imported across test modules."""
     import uvicorn
 
     captured: dict = {}
@@ -341,7 +404,7 @@ def test_serve_tokenizer_from_attaches_text_input_end_to_end(monkeypatch, onnx_p
     serving = captured["app"].state.serving
     assert serving.hf_source == repo
     assert serving.text is not None
-    assert serving.verdict.status == "UNVERIFIED"  # no --reference given: numerics untouched
+    assert serving.verdict.status == "UNVERIFIED"  # no --reference given: no numerics check
 
 
 @pytest.mark.needs_torch_26
@@ -367,7 +430,7 @@ def test_check_takes_the_pooling_flags(repo):
 def test_check_rejects_an_unknown_pooling(repo):
     result = _cli("check", repo, "--pooling", "median")
 
-    assert result.exit_code == 2  # typer's own usage error
+    assert result.exit_code == 2  # the own usage error of typer
     assert "median" in result.output
 
 
@@ -378,14 +441,14 @@ def test_check_reports_an_unusable_recipe_as_a_usage_error(tmp_path):
     result = _cli("check", path)
 
     assert result.exit_code == main.EXIT_USAGE
-    assert "pooling_mode_lasttoken" in result.output
+    assert "2 pooling modes" in result.output
 
 
 @pytest.mark.parametrize("command", ["check", "export", "serve"])
 def test_the_flags_are_on_every_command_that_loads_a_model(command):
     result = _cli(command, "--help")
 
-    plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)  # rich colours the option names
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)  # rich colors the option names
     assert "--pooling" in plain
     assert "--no-normalize" in plain
 
@@ -406,7 +469,7 @@ def _worker_args(repo: str, *, pooling=None, normalize=None, **artifact) -> main
 
 def _rebuilt(monkeypatch, args: main.ServeArgs) -> TestClient:
     monkeypatch.setenv(main._SERVE_ARGS_ENV, args.to_json())
-    api = main._serve_app_factory()
+    api = runtime._serve_app_factory()
     with TestClient(api):
         api.state.loader_thread.join(timeout=60)
     return TestClient(api)
@@ -420,13 +483,10 @@ def test_onnx_artifact_worker_still_takes_text_and_reports_the_recipe(
     onnx_path.write_bytes(state.verdict.onnx_bytes)
     args = _worker_args(
         repo,
-        backend="onnxruntime",
         verdict=state.verdict.to_dict(),
         input_names=list(state.input_names),
-        notes=[],
         onnx_path=str(onnx_path),
-        kind=state.source_kind,  # what the parent's serve_cmd ships
-        hf_source=state.hf_source,
+        kind=state.source_kind,  # what serve_cmd of the parent sends
     )
 
     worker = _rebuilt(monkeypatch, args)
@@ -443,10 +503,9 @@ def test_torch_artifact_worker_still_takes_text_and_reports_the_recipe(monkeypat
     )
     args = _worker_args(
         repo,
-        backend="torch",
         verdict=torch_state.verdict.to_dict(),
-        notes=[],
-        hf_source=torch_state.hf_source,
+        input_names=list(torch_state.input_names),
+        kind=torch_state.source_kind,
     )
 
     worker = _rebuilt(monkeypatch, args)
@@ -468,3 +527,58 @@ def test_worker_args_carry_the_overrides(monkeypatch, repo):
 
     schema = worker.get("/schema").json()["embedding"]
     assert (schema["pooling"], schema["normalized"]) == ("cls", False)
+
+
+def test_the_recipe_reads_named_prompts_and_the_default_prompt_name(tmp_path):
+    path = hf_repo.write_encoder_repo(tmp_path)
+    (tmp_path / "config_sentence_transformers.json").write_text(
+        json.dumps(
+            {"prompts": {"query": "Q: ", "document": "", "bad": 3}, "default_prompt_name": "query"}
+        )
+    )
+
+    recipe = read_recipe(Path(path))
+
+    assert recipe is not None
+    assert recipe.prompts == {
+        "query": "Q: ",
+        "document": "",
+    }  # values that are not strings are dropped
+    assert recipe.default_prompt == "query"
+
+
+def test_a_default_prompt_name_with_no_such_prompt_is_ignored(tmp_path):
+    path = hf_repo.write_encoder_repo(tmp_path)
+    (tmp_path / "config_sentence_transformers.json").write_text(
+        json.dumps({"prompts": {"query": "Q: "}, "default_prompt_name": "nope"})
+    )
+
+    recipe = read_recipe(Path(path))
+
+    assert recipe is not None and recipe.default_prompt is None
+
+
+def test_a_repo_without_the_file_has_no_prompts(tmp_path):
+    recipe = read_recipe(Path(hf_repo.write_encoder_repo(tmp_path)))
+
+    assert recipe is not None and recipe.prompts == {} and recipe.default_prompt is None
+
+
+def test_pooling_flag_on_a_bare_repo_still_reads_the_prompts(tmp_path):
+    path = hf_repo.write_encoder_repo(tmp_path, modules=None, pooling=None)
+    (tmp_path / "config_sentence_transformers.json").write_text(
+        json.dumps({"prompts": {"query": "Q: "}})
+    )
+
+    recipe = resolve_recipe(path, "lasttoken", None, has_head=False)
+
+    assert recipe is not None and recipe.prompts == {"query": "Q: "}
+
+
+def test_the_pooled_output_is_float32_whatever_the_hidden_dtype():
+    from downshift.adapters.embedding import EmbeddingRecipe, PoolingHead
+
+    head = PoolingHead(EmbeddingRecipe("lasttoken", True, None, "--pooling"))
+    hidden = torch.randn(2, 5, 8).bfloat16()
+
+    assert head(hidden, torch.ones(2, 5, dtype=torch.long)).dtype == torch.float32

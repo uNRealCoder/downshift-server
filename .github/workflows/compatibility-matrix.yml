@@ -1,7 +1,8 @@
 name: Compatibility matrix
 
-# The matrix is the project's core claim. A stale one is worse than none, so it is
-# regenerated weekly against current torch/onnxruntime and opened as a PR when it changes.
+# The matrix is the core claim of the project. An old matrix is worse than no matrix. The job
+# therefore regenerates it every week against the current torch and onnxruntime. It opens a PR if
+# the matrix changes.
 
 on:
   schedule:

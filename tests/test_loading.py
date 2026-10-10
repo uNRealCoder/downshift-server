@@ -1,4 +1,4 @@
-"""load_model(): every accepted CLI model form and the error for each rejected one."""
+"""load_model(): each accepted CLI model form, and the error for each form that downshift rejects."""
 
 import sys
 
@@ -35,7 +35,7 @@ def test_explicit_inputs_spec_overrides_sibling():
 @pytest.mark.parametrize(
     ("spec", "message"),
     [
-        ("tests.models.no_such_module:make_model", "can't import"),
+        ("tests.models.no_such_module:make_model", "cannot import"),
         ("tests.models.clean_mlp:no_such_attr", "no attribute"),
         ("tests.models.clean_mlp:make_inputs", "not an nn.Module"),
     ],
@@ -87,7 +87,7 @@ def test_missing_onnx_file_is_an_error(tmp_path):
 
 def test_existing_onnx_file_is_passed_through(tmp_path):
     path = tmp_path / "m.onnx"
-    path.write_bytes(b"")  # load_model only checks existence; intake parses later
+    path.write_bytes(b"")  # load_model checks only that the file exists. intake parses it later
 
     loaded = load_model(LoadSpec(str(path)))
 
@@ -131,7 +131,7 @@ def test_unrecognized_existing_file_suffix_is_rejected(tmp_path):
     path = tmp_path / "model.xyz"
     path.write_text("hi")
 
-    with pytest.raises(LoadError, match="don't know how to load"):
+    with pytest.raises(LoadError, match="unknown file type"):
         load_model(LoadSpec(str(path)))
 
 
@@ -159,7 +159,7 @@ def test_hf_load_failure_is_wrapped_in_load_error(tmp_path, monkeypatch):
 
     monkeypatch.setattr(hf_repo, "load_pretrained", boom)
 
-    with pytest.raises(LoadError, match="can't load"):
+    with pytest.raises(LoadError, match="incomplete Hugging Face repo"):
         load_model(LoadSpec(str(tmp_path)))
 
 

@@ -1,5 +1,5 @@
-"""Hazard: stochastic layer. Verification is meaningless unless the model is in eval()
-at export time."""
+"""Hazard: stochastic layer. Verification has no meaning unless the model is in eval() at the
+time of the export."""
 
 import torch
 from torch import nn
@@ -17,7 +17,7 @@ class DropoutModel(nn.Module):
 
 def make_model() -> DropoutModel:
     model = DropoutModel()
-    model.eval()  # the point of this fixture; drop it and verification goes random
+    model.eval()  # the purpose of this fixture. Without it, verification becomes random
     return model
 
 

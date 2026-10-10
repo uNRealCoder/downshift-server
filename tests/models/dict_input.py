@@ -1,4 +1,4 @@
-"""Hazard: dataclass container input. The same flattening problem PyG Data has, without
+"""Hazard: dataclass container input. It has the same flattening problem as PyG Data, without
 the PyG dependency."""
 
 from dataclasses import dataclass

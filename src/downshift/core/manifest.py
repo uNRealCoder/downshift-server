@@ -1,6 +1,5 @@
-"""Provenance sidecar written next to every exported .onnx."""
+"""The provenance file that downshift writes next to each exported .onnx file."""
 
-import hashlib
 import json
 from datetime import UTC, datetime
 from enum import IntEnum
@@ -9,9 +8,11 @@ from pathlib import Path
 import onnx
 import onnxruntime
 import torch
+from onnx.external_data_helper import ExternalDataInfo, uses_external_data
 
+from downshift.core.memo import sha256_file
 from downshift.core.verdict import ExportVerdict
-from downshift.sources import hide_paths, path_basename
+from downshift.sources import path_basename
 
 
 class _DTYPE_NAMES(IntEnum):
@@ -23,17 +24,9 @@ class _DTYPE_NAMES(IntEnum):
     bf16 = onnx.TensorProto.BFLOAT16
 
 
-# A plain value->name dict, so a miss is a dict lookup rather than an IntEnum ValueError;
-# most initializers (int64 indices, bools, ...) are misses, and this runs in a loop.
+# A plain value->name dict. A miss is then a dict lookup and not a ValueError of an IntEnum.
+# Most initializers (int64 indices, bools, ...) are misses, and this code runs in a loop.
 _DTYPE_LOOKUP: dict[int, str] = {member.value: member.name for member in _DTYPE_NAMES}
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _dtype_name(code: int) -> str | None:
@@ -54,24 +47,37 @@ def observed_dtype(onnx_path: Path) -> str | None:
     return None
 
 
+def external_data_files(onnx_path: Path) -> list[str]:
+    """Every external-data location the graph's initializers reference, in first-use order."""
+    proto = onnx.load(str(onnx_path), load_external_data=False)
+    locations: dict[str, None] = {}
+    for init in proto.graph.initializer:
+        if uses_external_data(init):
+            locations[ExternalDataInfo(init).location] = None
+    return list(locations)
+
+
 def build_manifest(
     onnx_path: Path, verdict: ExportVerdict, source_path: Path | None, package_version: str
 ) -> dict:
-    # The manifest travels with the exported file, so it names files and never records where
-    # they sat on this machine (which would carry the exporter's directory layout, and their
-    # username, to whoever receives the artifact). The hashes identify the files.
-    paths = (onnx_path, source_path)
-    verdict_dict = verdict.to_dict()
+    # The manifest goes with the exported file. It names files and never records where they
+    # were on this machine. A path would give the directory layout and the user name of the
+    # exporter to each person who receives the artifact. The hashes identify the files.
+    verdict_dict = verdict.redacted_dict((onnx_path, source_path))
     verdict_dict["onnx_path"] = onnx_path.name if verdict_dict["onnx_path"] else None
-    verdict_dict["reason"] = hide_paths(verdict_dict["reason"], paths)
-    verdict_dict["warnings"] = [hide_paths(w, paths) for w in verdict_dict["warnings"]]
     return {
         "downshift_version": package_version,
         "created_utc": datetime.now(UTC).isoformat(timespec="seconds"),
         "onnx_file": onnx_path.name,
-        "onnx_sha256": _sha256(onnx_path),
+        "onnx_sha256": sha256_file(onnx_path),
+        "external_data": [
+            {"file": location, "sha256": sha256_file(onnx_path.parent / location)}
+            for location in external_data_files(onnx_path)
+        ],
         "source_model": path_basename(str(source_path)) if source_path else None,
-        "source_sha256": _sha256(source_path) if source_path and source_path.is_file() else None,
+        "source_sha256": sha256_file(source_path)
+        if source_path and source_path.is_file()
+        else None,
         "versions": {
             "torch": torch.__version__,
             "onnx": onnx.__version__,

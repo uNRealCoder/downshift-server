@@ -1,6 +1,5 @@
-"""FastAPI app over a ServingState. The same routes regardless of which backend is behind it."""
+"""The FastAPI app over a ServingState. The routes are the same for both backends."""
 
-import asyncio
 import contextvars
 import hmac
 import logging
@@ -12,7 +11,6 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import asdict
 from typing import Any
 
-import orjson
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
@@ -24,9 +22,14 @@ from downshift.core.phase import CURRENT_PROGRESS, LoadProgress
 from downshift.logs import request_id_var
 from downshift.serve.engine import ServingState
 from downshift.serve.middleware import load_middleware
-from downshift.serve.predict import PREDICT_PATHS, NumpyJSONResponse, as_batch, run_predict
+from downshift.serve.options import ExecutionChoice
+from downshift.serve.predict import (
+    BINARY_REQUEST_TYPES,
+    SAFETENSORS_MEDIA_TYPE,
+    NumpyJSONResponse,
+    run_predict,
+)
 from downshift.serve.schemas import (
-    GRAPH_INPUTS,
     BackendInfo,
     GraphPredictRequest,
     HealthResponse,
@@ -37,56 +40,24 @@ from downshift.serve.schemas import (
     SchemaResponse,
     VerdictInfo,
 )
-from downshift.settings import API_KEY, DEFAULT_MAX_BODY_BYTES
+from downshift.settings import API_KEY
 from downshift.sources import LABEL_KINDS, display_source, hide_paths
 
 logger = logging.getLogger("downshift.serve")
 access_logger = logging.getLogger("downshift.access")
 
-NOT_READY_RETRY_AFTER = 2  # seconds a client should wait before asking again
+NOT_READY_RETRY_AFTER = 2  # the number of seconds that a client waits before it asks again
 
-# Probes: exempt from the API key, and logged at DEBUG so they don't flood the default output.
+# Probes: the API key does not apply to them, and downshift logs them at DEBUG. They then do not flood the default output.
 _PROBE_PATHS = frozenset({"/health", "/ready"})
 
 
 def _route_path(scope: Scope) -> str:
-    """The path relative to where this app is mounted: from Starlette 0.33 on, scope["path"]
-    keeps the mount prefix (app_for(...) is meant to be mounted), so "/model/health" must
-    still count as the /health probe."""
+    """The path relative to the place where this app is mounted. From Starlette 0.33,
+    scope["path"] keeps the mount prefix (app_for(...) is made to be mounted). "/model/health"
+    must therefore still count as the /health probe."""
     path: str = scope["path"]
     return path.removeprefix(scope.get("root_path", ""))
-
-
-class _OrjsonRequest(Request):
-    async def json(self) -> Any:
-        if not hasattr(self, "_json"):
-            parse_start = time.perf_counter()
-            self._json = orjson.loads(await self.body())
-            self.state.parse_ms = (time.perf_counter() - parse_start) * 1000
-        return self._json
-
-    async def parse_in(self, executor: Any) -> None:
-        """Pre-parse the body in `executor`, off the event loop; json() (called later, as
-        part of FastAPI's own request-body-to-Pydantic resolution) then just returns the
-        cached result instead of doing the parse itself. Used for the predict routes (P3):
-        without this, a body near --max-body-bytes runs orjson.loads() straight on the loop,
-        stalling /health, /ready and every other in-flight request for however long that
-        takes.
-
-        Malformed JSON is left for json() to raise the usual way: self._json stays unset, so
-        FastAPI's own request-body-to-Pydantic resolution calls json() itself and gets the
-        same orjson.JSONDecodeError (a json.JSONDecodeError subclass) it already turns into a
-        422 - paying for a second, synchronous parse only on that error path.
-        """
-        parse_start = time.perf_counter()
-        body = await self.body()
-        loop = asyncio.get_running_loop()
-        try:
-            parsed = await loop.run_in_executor(executor, orjson.loads, body)
-        except ValueError:
-            return
-        self._json = parsed
-        self.state.parse_ms = (time.perf_counter() - parse_start) * 1000
 
 
 def _body_too_large(observed: int, limit: int) -> JSONResponse:
@@ -102,8 +73,8 @@ def _body_too_large(observed: int, limit: int) -> JSONResponse:
 
 
 def _not_ready_error() -> HTTPException:
-    """Raised by /metadata, /schema and the predict routes while a loader-built app has no
-    ServingState yet (see build_app's loader parameter)."""
+    """/metadata, /schema and the predict routes raise this while an app that a loader built
+    has no ServingState yet (see the loader parameter of build_app)."""
     return HTTPException(
         503, "model is not ready", headers={"Retry-After": str(NOT_READY_RETRY_AFTER)}
     )
@@ -120,8 +91,8 @@ def _capacity_error(state: ServingState) -> HTTPException:
 
 
 async def _read_body_limited(request: Request, limit: int) -> bytes | JSONResponse:
-    """request.stream(), with a running total: a 413 the moment it passes `limit`, instead of
-    accumulating the whole body first (P2 - request.body() does exactly that)."""
+    """request.stream(), with a running total. It gives a 413 when the total passes `limit`. It
+    does not first collect the whole body (P2 - request.body() does this)."""
     chunks: list[bytes] = []
     total = 0
     async for chunk in request.stream():
@@ -132,80 +103,134 @@ async def _read_body_limited(request: Request, limit: int) -> bytes | JSONRespon
     return b"".join(chunks)
 
 
-class OrjsonRoute(APIRoute):
-    """Parse request bodies with orjson: several times faster than stdlib on MiB-scale bodies.
+# The largest body that --execution inline parses on the event loop. A chunked body (no
+# Content-Length) always goes to the pools.
+INLINE_MAX_BODY_BYTES = 64 * 1024
 
-    orjson's JSONDecodeError subclasses the stdlib one, so malformed JSON still maps to 422.
-    Also enforces --max-body-bytes: a Content-Length over the limit is rejected without
-    reading the body; without one (chunked), the body is read as it lands and the 413 fires
-    the moment the running total passes the limit (P2), not after the whole body arrived.
 
-    For /predict and /predict/graph, a slot is admitted *before* any of that (P1): an
-    overloaded server answers 503 without buffering or parsing a byte. The slot is released
-    in `finally`, so every exit (413, 400, a validation error, the client disconnecting)
-    releases it exactly once. Once the body is in hand, orjson.loads() itself also runs in
-    state.executor rather than on the loop (P3): a body near --max-body-bytes would otherwise
-    block /health, /ready and every other in-flight request for the parse.
+_UNSUPPORTED_MEDIA_TYPE = (
+    "unsupported Content-Type; send JSON (application/json) or safetensors "
+    f"({SAFETENSORS_MEDIA_TYPE}, or application/octet-stream)"
+)
+
+
+def _content_type(request: Request) -> str:
+    return request.headers.get("content-type", "").split(";")[0].strip().lower()
+
+
+async def _predict(
+    request: Request,
+    state: ServingState,
+    graph: bool,
+    admitted_at: float,
+) -> Response:
+    """An admitted predict: the content type, then --max-body-bytes, then run_predict on the raw
+    body.
+
+    If Content-Length is more than the limit, the server refuses the request without a read of
+    the body. It reads a chunked body while it arrives. It refuses it when the running total
+    passes the limit (P2), and not after the whole body arrived. The timings of each stage are in
+    the state of the scope. RequestIdMiddleware reads them again from there for the request line
+    (U1)."""
+    content_type = _content_type(request)
+    binary = content_type in BINARY_REQUEST_TYPES
+    if content_type and not binary and "json" not in content_type:
+        return JSONResponse({"detail": _UNSUPPORTED_MEDIA_TYPE}, status_code=415)
+    limit = state.options.max_body_bytes
+    content_length = request.headers.get("content-length")
+    if content_length is not None and content_length.isdigit():
+        if int(content_length) > limit:
+            return _body_too_large(int(content_length), limit)
+        body = await request.body()
+    else:
+        read = await _read_body_limited(request, limit)
+        if isinstance(read, JSONResponse):
+            return read
+        body = read
+
+    timings: dict[str, float] = {}
+    request.state.timings_ms = timings
+    return await run_predict(
+        state,
+        body,
+        graph=graph,
+        binary=binary,
+        inline=state.execution == ExecutionChoice.inline
+        and not binary
+        and content_length is not None
+        and len(body) <= INLINE_MAX_BODY_BYTES,
+        admitted_at=admitted_at,
+        timings_ms=timings,
+        accept_safetensors=SAFETENSORS_MEDIA_TYPE in request.headers.get("accept", "").lower(),
+    )
+
+
+class PredictRoute(APIRoute):
+    """/predict and /predict/graph. _predict serves them directly from the raw body. FastAPI does
+    not resolve the body. run_predict parses it (orjson), validates it (the pydantic model of the
+    route), and prepares it in one prep-pool hop. It never does this on the event loop (P3). The
+    endpoint functions only document the JSON body in the OpenAPI schema.
+
+    Downshift first admits a slot (P1). An overloaded server answers 503 without a buffer or a
+    parse of one byte. Downshift releases the slot in `finally`. Each exit (413, 400, a
+    validation error, a client that disconnects) therefore releases it exactly one time.
     """
 
     def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
-        handler = super().get_route_handler()
-        is_predict = self.path in PREDICT_PATHS
+        graph = self.path == "/predict/graph"
 
         async def route_handler(request: Request) -> Response:
-            current: ServingState | None = request.app.state.serving
-            # Before the loader lands there is no ServingState to read a limit from yet;
-            # fall back to the default so a large body is still rejected before parsing.
-            limit = (
-                current.options.max_body_bytes if current is not None else DEFAULT_MAX_BODY_BYTES
-            )
-            wrapped = _OrjsonRequest(request.scope, request.receive)
-
-            admitted = False
-            if is_predict:
-                if current is None:
-                    raise _not_ready_error()
-                if not current.try_admit():
-                    raise _capacity_error(current)
-                admitted = True
-                wrapped.state.admitted_at = time.monotonic()
-
+            state: ServingState | None = request.app.state.serving
+            if state is None:
+                raise _not_ready_error()
+            if not state.try_admit():
+                raise _capacity_error(state)
             try:
-                content_length = request.headers.get("content-length")
-                if content_length is not None and content_length.isdigit():
-                    if int(content_length) > limit:
-                        return _body_too_large(int(content_length), limit)
-                else:
-                    result = await _read_body_limited(request, limit)
-                    if isinstance(result, JSONResponse):
-                        return result
-                    wrapped._body = result
-                if is_predict:
-                    assert current is not None
-                    await wrapped.parse_in(current.executor)
-                return await handler(wrapped)
+                return await _predict(request, state, graph, time.monotonic())
             finally:
-                if admitted:
-                    assert current is not None
-                    current.release()
+                state.release()
 
         return route_handler
 
 
-# The predict routes: orjson response, and PredictResponse kept in the OpenAPI schema without
-# the response_model re-validation walk over every output.
+async def predict(req: PredictRequest | None = None) -> Response:
+    """Never called (PredictRoute serves the route): documents the JSON body for OpenAPI."""
+    raise NotImplementedError
+
+
+async def predict_graph(req: GraphPredictRequest | None = None) -> Response:
+    """Never called (PredictRoute serves the route): documents the JSON body for OpenAPI."""
+    raise NotImplementedError
+
+
+# The predict routes: an orjson response. PredictResponse stays in the OpenAPI schema, without
+# the validation of response_model again over each output.
+_BINARY_BODY = {"schema": {"type": "string", "format": "binary"}}
 _PREDICT_ROUTE: dict[str, Any] = {
     "response_class": NumpyJSONResponse,
-    "responses": {200: {"model": PredictResponse}},
+    "responses": {
+        200: {
+            "model": PredictResponse,
+            "content": {SAFETENSORS_MEDIA_TYPE: _BINARY_BODY},
+        }
+    },
+    "openapi_extra": {
+        "requestBody": {
+            "content": {
+                SAFETENSORS_MEDIA_TYPE: _BINARY_BODY,
+                "application/octet-stream": _BINARY_BODY,
+            }
+        }
+    },
 }
 
 
 def require_serving(request: Request) -> ServingState:
     """The loaded model, or a 503.
 
-    Every route that needs a ServingState depends on this, so a route added later cannot
-    forget the guard by omitting a copy of it. /ready is deliberately not a caller: being
-    unloaded is its answer, not an error.
+    Each route that needs a ServingState depends on this. A route that you add later therefore
+    cannot forget the guard by omission of a copy of it. /ready is not a caller, by design. Its
+    answer is that the model is not loaded. This is not an error.
     """
     current: ServingState | None = request.app.state.serving
     if current is None:
@@ -213,31 +238,18 @@ def require_serving(request: Request) -> ServingState:
     return current
 
 
-def _predict_context(request: Request) -> dict[str, Any]:
-    """run_predict's per-request keywords. The parse/codec/infer split dict it fills lives in
-    the scope's state, which is where RequestIdMiddleware reads it back for the request
-    line (U1)."""
-    timings: dict[str, float] = {}
-    request.state.timings_ms = timings
-    return {
-        "admitted_at": request.state.admitted_at,
-        "parse_ms": getattr(request.state, "parse_ms", 0.0),
-        "timings_ms": timings,
-    }
-
-
 class RequestIdMiddleware:
-    """Pure ASGI, not BaseHTTPMiddleware (which buffers the whole response body to let a
-    handler rewrite headers, extra copies this doesn't need): reads X-Request-Id or makes
-    one, stores it on request.state, and echoes it on the response. "See the server log"
-    then has something to search for.
+    """This is pure ASGI and not BaseHTTPMiddleware. BaseHTTPMiddleware buffers the whole
+    response body to let a handler rewrite headers. This code does not need these extra copies.
+    The middleware reads X-Request-Id or makes one, stores it on request.state, and returns it
+    in the response. "See the server log" then has a search key.
 
-    It also binds the id to `request_id_var` for the request, so every log line emitted
-    while serving it carries it, and (with `access_log`) writes the one request line (U1):
-    method, path, status, duration and, for the predict routes, the parse/codec/infer split
-    they leave in the scope's state as "timings_ms". WARNING from status 400 up, DEBUG for
-    the /health and /ready probes (a 503 from /ready while loading is its normal answer),
-    INFO otherwise.
+    It also binds the ID to `request_id_var` for the request. Each log line that downshift
+    emits while it serves the request then has the ID. With `access_log`, it writes the one
+    request line (U1): method, path, status, duration and, for the predict routes, the split
+    of parse, codec and infer. The routes leave the split in the state of the scope as
+    "timings_ms". The level is WARNING from status 400, DEBUG for the probes /health and /ready
+    (a 503 from /ready during the load is its normal answer), and INFO for all other requests.
     """
 
     def __init__(self, app: ASGIApp, access_log: bool = True) -> None:
@@ -266,7 +278,7 @@ class RequestIdMiddleware:
         try:
             await self.app(scope, receive, send_with_request_id)
         except Exception:
-            # ServerErrorMiddleware, outside this one, turns it into the 500 response.
+            # ServerErrorMiddleware, outside this middleware, turns it into the 500 response.
             if status is None:
                 status = 500
             raise
@@ -303,10 +315,10 @@ class RequestIdMiddleware:
 
 
 class ApiKeyMiddleware:
-    """DOWNSHIFT_SERVER_API_KEY (U7), read via settings.py so it applies to app_for() too
-    (ruling 5). None (unset) means unauthenticated - the caller already warned about that at
-    build_app time. Pure ASGI, like RequestIdMiddleware; /health and /ready are exempt so a
-    probe never needs the key.
+    """DOWNSHIFT_SERVER_API_KEY (U7). Downshift reads it through settings.py, so it also applies
+    to app_for() (ruling 5). None (unset) means no authentication. The caller already gave a
+    warning about this at build_app time. This is pure ASGI, like RequestIdMiddleware.
+    /health and /ready are exempt, so a probe never needs the key.
     """
 
     def __init__(self, app: ASGIApp, api_key: str | None) -> None:
@@ -321,8 +333,9 @@ class ApiKeyMiddleware:
 
         header = Headers(scope=scope).get("authorization", "")
         scheme, _, token = header.partition(" ")
-        # Starlette decodes header bytes as latin-1, so latin-1 gets the client's raw bytes
-        # back; compare_digest on a non-ASCII str would raise (a 500) instead of failing.
+        # Starlette decodes header bytes as latin-1. Latin-1 therefore gives the raw bytes of the
+        # client back. compare_digest on a str that is not ASCII would raise an error (a 500) and
+        # would not fail the check.
         if scheme.lower() != "bearer" or not hmac.compare_digest(
             token.encode("latin-1"), self._key_bytes
         ):
@@ -339,11 +352,11 @@ class ApiKeyMiddleware:
 def _loader_lifespan(
     loader: Callable[[], ServingState],
 ) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
-    """Runs `loader` on a background thread, started when the app actually begins serving
-    (not when build_app is called), and lands the result on app.state.serving. A raising
-    loader leaves app.state.serving None forever from this function's point of view alone;
-    the caller (serve_cmd) arranges for that to end the process instead, by closing over
-    the uvicorn.Server and setting should_exit itself before re-raising.
+    """Run `loader` on a background thread. It starts when the app begins to serve (and not when
+    build_app is called). The result goes to app.state.serving. If the loader raises an error,
+    app.state.serving stays None forever, as far as this function can see. The caller
+    (serve_cmd) makes sure that this ends the process. It holds the uvicorn.Server and sets
+    should_exit itself before it raises the error again.
     """
 
     @asynccontextmanager
@@ -352,18 +365,18 @@ def _loader_lifespan(
         app.state.load_progress = progress
 
         def run() -> None:
-            # Runs in a fresh Context (see below), so this set() is only ever visible to this
-            # thread's call stack - the phase-reporting calls inside engine.py's builders
-            # (U4) read it back via CURRENT_PROGRESS.get() without a parameter threaded
-            # through every builder and the CLI's own loader closure.
+            # This runs in a new Context (see below). This set() is therefore visible only to the
+            # call stack of this thread. The calls that report the phase inside the builders of
+            # engine.py (U4) read it again with CURRENT_PROGRESS.get(). Downshift does not pass
+            # a parameter through each builder and through the loader closure of the CLI.
             CURRENT_PROGRESS.set(progress)
             try:
                 app.state.serving = loader()
             except Exception:
-                # Not logged at error/exception level: a caller with a reporting path of its
-                # own (serve_cmd re-raises this on the main thread) would otherwise print the
-                # traceback twice, once here unconditionally and once gated by --log-level
-                # debug. --log-level debug still sees it here.
+                # Not logged at the error or exception level. A caller with its own reporting
+                # path (serve_cmd raises this error again on the main thread) would otherwise
+                # print the traceback two times. Once here without a condition, and once with
+                # the gate --log-level debug. --log-level debug still sees it here.
                 logger.debug("model failed to load; /ready will not turn 200", exc_info=True)
 
         thread = threading.Thread(
@@ -384,19 +397,20 @@ def build_app(
     api_key: str | None = API_KEY,
     access_log: bool = True,
 ) -> FastAPI:
-    """With `state`, the app serves it immediately (library use, tests). With `loader`
-    instead, the app binds with no ServingState at all: /health is 200 right away, /ready
-    is 503, and /metadata, /schema and the predict routes are 503, until the loader (run on
-    a background thread started by the lifespan, once the app is actually served) lands one.
+    """With `state`, the app serves it immediately (library use, tests). With `loader` instead,
+    the app binds with no ServingState. /health is 200 immediately. /ready is 503. /metadata,
+    /schema and the predict routes are 503 until the loader gives one. (The lifespan starts the
+    loader on a background thread when the app is served.)
 
-    `api_key`, when set, requires "Authorization: Bearer <api_key>" on every route but
-    /health and /ready (U7); it defaults to DOWNSHIFT_SERVER_API_KEY (settings.API_KEY) so
-    the env var reaches app_for() and this function equally (ruling 5). Pass a value (or
-    None to force it off) to override that default for a library caller. An empty string
-    counts as unset: DOWNSHIFT_SERVER_API_KEY="" must not make "Bearer " a valid credential.
+    If you set `api_key`, every route except /health and /ready needs "Authorization: Bearer
+    <api_key>" (U7). It defaults to DOWNSHIFT_SERVER_API_KEY (settings.API_KEY). The
+    environment variable then reaches app_for() and this function in the same way (ruling 5).
+    To override that default for a library caller, pass a value (or None to turn it off). An
+    empty string counts as unset. DOWNSHIFT_SERVER_API_KEY="" must not make "Bearer " a valid
+    credential.
 
-    `access_log` False drops the one request line RequestIdMiddleware writes on the
-    `downshift.access` logger (U1); the request id is still set and echoed.
+    `access_log` False removes the one request line that RequestIdMiddleware writes on the
+    `downshift.access` logger (U1). The request ID is still set and returned.
     """
     if (state is None) == (loader is None):
         raise ValueError("build_app needs exactly one of state or loader")
@@ -404,8 +418,9 @@ def build_app(
     api_key = api_key or None
     if api_key is None:
         logger.warning(
-            "DOWNSHIFT_SERVER_API_KEY is not set, so the endpoints are unauthenticated. Set "
-            "it to require a fixed API key, or add your own authentication middleware."
+            "DOWNSHIFT_SERVER_API_KEY is not set, so the endpoints (including /metadata) are "
+            "unauthenticated. Set it to require a fixed API key, or add your own "
+            "authentication middleware."
         )
 
     app = FastAPI(
@@ -413,25 +428,25 @@ def build_app(
         version=downshift.__version__,
         lifespan=_loader_lifespan(loader) if loader is not None else None,
     )
-    app.router.route_class = OrjsonRoute
     app.state.serving = state
-    # Starlette makes the *last*-registered middleware the outermost layer, so registration
-    # order here is back to front: load_middleware's user middleware goes on first (innermost,
-    # right next to the routes, so it only ever sees authenticated traffic), ApiKeyMiddleware
-    # next (the gate), and RequestIdMiddleware last (outermost, so access logging and the
-    # X-Request-Id header still cover 401s and everything else uniformly).
+    # Starlette makes the *last* registered middleware the outermost layer. The registration
+    # order here is therefore from back to front. The user middleware of load_middleware goes
+    # first (innermost, directly next to the routes, so it sees only authenticated traffic).
+    # ApiKeyMiddleware is next (the gate). RequestIdMiddleware is last (outermost). The access
+    # log and the X-Request-Id header then cover 401 responses and all other responses in the
+    # same way.
     load_middleware(app, middleware)
     app.add_middleware(ApiKeyMiddleware, api_key=api_key)
     app.add_middleware(RequestIdMiddleware, access_log=access_log)
 
     @app.exception_handler(Exception)
     async def _unhandled_exception(request: Request, exc: Exception) -> JSONResponse:
-        # ServerErrorMiddleware, which dispatches this handler, sits outside
-        # RequestIdMiddleware (Starlette always makes it the outermost layer), so its
-        # response bypasses our send wrapper; set the header here too, directly on the
-        # response, rather than relying on that wrapper for this one path.
+        # ServerErrorMiddleware dispatches this handler. It is outside RequestIdMiddleware
+        # (Starlette always makes it the outermost layer). Its response therefore bypasses our
+        # send wrapper. Set the header here too, directly on the response. Do not rely on that
+        # wrapper for this one path.
         request_id = getattr(request.state, "request_id", None)
-        # RequestIdMiddleware has already reset request_id_var by the time this runs.
+        # RequestIdMiddleware has already reset request_id_var when this code runs.
         token = request_id_var.set(request_id)
         try:
             logger.exception(
@@ -467,28 +482,24 @@ def build_app(
 
     @app.get("/metadata", response_model=MetadataResponse)
     async def metadata(current: ServingState = Depends(require_serving)) -> MetadataResponse:
-        # Free-text fields quote the path an exception was handed (ORT's "Load model from
-        # ...", transformers' "Can't load tokenizer for ..."); a client gets the name only.
+        # Free-text fields quote the path that an exception received (the "Load model from ..."
+        # of ORT, the "Can't load tokenizer for ..." of transformers). A client gets the name
+        # only.
         located = () if current.source_kind in LABEL_KINDS else (current.source,)
         paths = (*located, current.verdict.onnx_path, current.hf_source)
-        verdict = current.verdict.to_dict()
-        verdict["reason"] = hide_paths(verdict["reason"], paths)
-        verdict["warnings"] = [hide_paths(w, paths) for w in verdict["warnings"]]
+        from downshift.serve.describe import axes_info, limits_info
+
         return MetadataResponse(
             model=display_source(current.source, current.source_kind),
             family=current.verdict.model_family,
-            verdict=VerdictInfo.model_validate(verdict),
+            verdict=VerdictInfo.model_validate(current.verdict.redacted_dict(paths)),
+            axes=axes_info(current),
             backend=BackendInfo.model_validate(current.backend.metadata().to_dict()),
             input_names=list(current.input_names),
             notes=[hide_paths(note, paths) for note in current.notes],
             version=downshift.__version__,
-            limits={
-                "max_body_bytes": current.options.max_body_bytes,
-                "max_input_bytes": current.options.max_input_bytes,
-                "max_concurrency": current.options.max_concurrency,
-                "max_queue": current.options.max_queue,
-                "request_timeout": current.options.request_timeout,
-            },
+            limits=limits_info(current),
+            execution=current.execution.value,
             boot=dict(current.timings),
             warmup=asdict(current.warmup_stats) if current.warmup_stats is not None else None,
         )
@@ -497,41 +508,18 @@ def build_app(
     async def schema(
         request: Request, current: ServingState = Depends(require_serving)
     ) -> SchemaResponse:
-        """What to POST: every input's name, dtype and shape, and an example body.
+        """What to POST: the name, dtype and shape of each input, and an example body.
 
-        Cheap enough to build per request (it reads the backend's declared IO and fills a
-        small example), so nothing is cached and it always matches the running graph.
+        It is cheap to build for each request (it reads the IO that the backend declares and
+        fills a small example). Nothing is cached, so it always matches the running graph.
         """
         from downshift.serve.describe import describe
 
         return describe(current, f"{str(request.base_url).rstrip('/')}/predict")
 
-    @app.post("/predict", **_PREDICT_ROUTE)
-    async def predict(
-        req: PredictRequest, request: Request, current: ServingState = Depends(require_serving)
-    ) -> NumpyJSONResponse:
-        text = as_batch(req.text) if req.text is not None else None
-        return await run_predict(
-            current, req.inputs, req.output_encoding, text, **_predict_context(request)
+    for path, endpoint in (("/predict", predict), ("/predict/graph", predict_graph)):
+        app.router.add_api_route(
+            path, endpoint, methods=["POST"], route_class_override=PredictRoute, **_PREDICT_ROUTE
         )
-
-    @app.post("/predict/graph", **_PREDICT_ROUTE)
-    async def predict_graph(
-        req: GraphPredictRequest,
-        request: Request,
-        current: ServingState = Depends(require_serving),
-    ) -> NumpyJSONResponse:
-        if not GRAPH_INPUTS <= set(current.input_names):
-            raise HTTPException(
-                400,
-                f"model is not graph-shaped: inputs are {list(current.input_names)}, "
-                "expected at least 'x' and 'edge_index'",
-            )
-        # No dtype hints needed: to_numpy takes the backend's declared dtype (int64 for
-        # edge_index on both backends), and integer lists default to int64 anyway.
-        inputs: dict[str, Any] = {"x": req.x, "edge_index": req.edge_index}
-        if req.edge_attr is not None:
-            inputs["edge_attr"] = req.edge_attr
-        return await run_predict(current, inputs, req.output_encoding, **_predict_context(request))
 
     return app

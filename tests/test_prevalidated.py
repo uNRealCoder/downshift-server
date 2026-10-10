@@ -1,5 +1,6 @@
-"""intake(): a .onnx someone else produced, with and without a reference model."""
+"""intake(): a .onnx file that someone else made, with and without a reference model."""
 
+import downshift
 from downshift.core import verify as verify_mod
 from downshift.core.prevalidated import intake
 from tests.models import clean_mlp
@@ -29,7 +30,7 @@ def test_intake_with_matching_reference_is_clean(exported_mlp):
     assert verdict.status == "CLEAN", verdict.reason
     assert verdict.exit_code == 0
     assert verdict.recommended_backend == "onnxruntime"
-    assert verdict.model_family == "generic-torch"
+    assert verdict.model_family == "generic"
     assert verdict.input_names == ("x",)
     assert verdict.numerics is not None and verdict.numerics.passed
 
@@ -53,7 +54,7 @@ def test_intake_with_reference_fails_via_onnx_runtime_not_a_crash(exported_mlp, 
 
 def test_intake_with_different_reference_is_degraded(exported_mlp):
     path, _, _ = exported_mlp
-    other = clean_mlp.make_model()  # fresh random weights: the graph no longer matches
+    other = clean_mlp.make_model()  # new random weights: the graph no longer matches
 
     verdict = intake(path, reference=other, example_inputs=clean_mlp.make_inputs())
 
@@ -63,3 +64,25 @@ def test_intake_with_different_reference_is_degraded(exported_mlp):
     assert verdict.numerics is not None
     assert verdict.numerics.failures > 0
     assert verdict.numerics.max_abs_err > verdict.numerics.tolerance_abs
+
+
+def test_intake_serves_an_onnx_with_an_external_data_file(tmp_path, monkeypatch):
+    from downshift.core import capture as capture_mod
+    from downshift.serve.engine import serving_state_from_artifact
+    from downshift.serve.options import ServeOptions
+
+    monkeypatch.setattr(capture_mod, "EXTERNAL_DATA_THRESHOLD", 0)
+    path = tmp_path / "ext.onnx"
+    exported = downshift.export(clean_mlp.make_model(), path, clean_mlp.make_inputs())
+    assert exported.status == "CLEAN", exported.reason
+    assert (tmp_path / "ext.onnx.data").is_file()
+
+    verdict = intake(path)
+
+    assert verdict.status == "UNVERIFIED"
+    assert verdict.onnx_path == path
+    assert verdict.op_types["Gemm"] == 2
+    state = serving_state_from_artifact(
+        str(path), verdict, ServeOptions(k=1, device="cpu", warmup=1), verdict.input_names, []
+    )
+    assert state.backend.name == "onnxruntime"

@@ -1,5 +1,5 @@
-"""downshift.logs (the one logging sink) and the per-request line the ASGI middleware writes on
-the `downshift.access` logger."""
+"""downshift.logs (the one logging sink) and the line for each request that the ASGI middleware
+writes on the `downshift.access` logger."""
 
 import io
 import logging
@@ -25,8 +25,8 @@ _LINE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} (\w+) ([\w.]+): (.*)$"
 
 @pytest.fixture
 def restore_logging():
-    """setup_logging is process-global (force=True on the root logger, captured warnings);
-    put every logger it touches back so it cannot leak into other tests."""
+    """setup_logging is global for the process (force=True on the root logger, captured
+    warnings). Put each logger that it touches back, so that it cannot leak into other tests."""
     saved = {}
     for name in _TOUCHED:
         target = logging.getLogger(name)
@@ -97,7 +97,7 @@ def test_setup_logging_captures_warnings(restore_logging):
 
 
 def test_uvicorn_loggers_share_the_handler(restore_logging):
-    for name in _UVICORN:  # what uvicorn's own dictConfig leaves behind
+    for name in _UVICORN:  # what the own dictConfig of uvicorn leaves
         own = logging.getLogger(name)
         own.handlers[:] = [logging.NullHandler()]
         own.propagate = False
@@ -164,7 +164,14 @@ def test_predict_writes_one_request_line_with_timings(client, caplog):
     assert re.fullmatch(r"POST /predict 200 \d+\.\d ms", record.getMessage())
     assert (record.method, record.path, record.status) == ("POST", "/predict", 200)
     assert record.duration_ms > 0
-    assert set(record.timings_ms) == {"parse", "codec", "infer"}
+    assert set(record.timings_ms) == {
+        "parse",
+        "prep_wait",
+        "prep",
+        "infer_wait",
+        "infer",
+        "encode",
+    }
 
 
 def test_health_is_debug_only(client, caplog):
@@ -190,7 +197,8 @@ def test_a_client_error_is_logged_at_warning(client, caplog):
     (record,) = _access_records(caplog)
     assert record.levelno == logging.WARNING
     assert record.status == 400
-    assert not hasattr(record, "timings_ms")
+    # Rejected during the parse in the prep pool. Only the wait for that pool is logged.
+    assert set(record.timings_ms) == {"prep_wait"}
 
 
 def test_access_log_off_logs_nothing_but_still_echoes_the_request_id(mlp_state, caplog):

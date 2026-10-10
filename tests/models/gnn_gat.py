@@ -1,8 +1,9 @@
 """GNN fixture: 3-layer GAT node classifier.
 
-GATConv's attention-weighted aggregation is the scatter-heavy pattern most likely to trip
-the ONNX translation of scatter_reduce. On torch 2.14 / torch_geometric 2.8 it exports
-CLEAN; see scatter_include_self_false for the case that doesn't.
+The aggregation of GATConv with attention weights has many scatter operations. It is the
+pattern that most likely causes a fault in the ONNX translation of scatter_reduce. On torch 2.14
+and torch_geometric 2.8, it exports as CLEAN. See scatter_include_self_false for the case that
+does not.
 """
 
 import torch

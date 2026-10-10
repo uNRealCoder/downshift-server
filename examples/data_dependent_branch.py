@@ -1,4 +1,4 @@
-"""FAILED: a Python `if` on a tensor value, which torch.export can't trace."""
+"""FAILED: a Python `if` on a tensor value. torch.export cannot trace it."""
 
 import torch
 from torch import nn

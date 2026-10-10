@@ -1,16 +1,19 @@
 # Adapters
 
-How downshift turns an arbitrary `nn.Module` into something `torch.export` can trace, how
-adapters are found, and how to write your own.
+This page describes how downshift turns an `nn.Module` into a module that `torch.export` can trace, how downshift finds adapters, and how to write your own adapter.
 
 ## What an adapter does
 
-An adapter knows one model family well enough to do two things: build example inputs when
-the caller gave none, and turn the model plus inputs into a flat, fixed-arity tensor
-signature that `torch.export` can trace, along with everything the verification step needs
-to generate more samples. `downshift.core.verdict.prepare_model` is the only caller: it
-resolves an adapter, synthesizes inputs if needed (`downshift.core.inputs.synthesize`),
-and calls `adapter.prepare(...)`.
+An adapter knows one model family. It does two jobs:
+
+1. It builds example inputs when the caller gave none.
+2. It turns the model and the inputs into a flat tensor signature with a fixed number of arguments. `torch.export` can trace this signature. The adapter also gives the verification step what it needs to generate more samples.
+
+`downshift.core.verdict.prepare_model` is the only caller. It does these steps:
+
+1. It resolves an adapter.
+2. If necessary, it synthesizes inputs (`downshift.core.inputs.synthesize`).
+3. It calls `adapter.prepare(...)`.
 
 ## The `Adapter` protocol
 
@@ -21,36 +24,20 @@ from downshift.adapters.base import Adapter, Prepared
 @runtime_checkable
 class Adapter(Protocol):
     name: str
-    family: str
 
     def matches(self, model: nn.Module, example_inputs: tuple | None) -> bool: ...
     def example_inputs(self, model: nn.Module) -> tuple | None: ...
-    def prepare(self, model: nn.Module, example_inputs: tuple) -> Prepared: ...
+    def prepare(
+        self, model: nn.Module, example_inputs: tuple, axis_max: dict[str, int] | None = None
+    ) -> Prepared: ...
 ```
 
-It's a `typing.Protocol` marked `@runtime_checkable`, so `isinstance(obj, Adapter)` works
-structurally - a custom adapter doesn't need to inherit from anything, it needs these five
-attributes with matching signatures.
+The protocol is a `typing.Protocol` with the `@runtime_checkable` mark. `isinstance(obj, Adapter)` therefore checks the structure. A custom adapter does not inherit from anything. It needs these four attributes with matching signatures:
 
-- **`name: str`** - the identifier used to select it: `--adapter name`, `adapter="name"`
-  on `check()`/`export()`/`intake()`/`prepare_model()`, and what `registry.get()` looks up.
-- **`family: str`** - usually the same string as `name`, but conceptually distinct: it's
-  what ends up in `ExportVerdict.model_family` and `/metadata`'s `family` field, i.e. the
-  thing a human reads, not the thing a user types on `--adapter`.
-- **`matches(model, example_inputs) -> bool`** - called by `registry.detect()`, in
-  registration order (see below), when no `--adapter`/`adapter=` was given. The first
-  adapter whose `matches()` returns `True` wins; write it to check something structural
-  (the built-in `pyg` adapter checks for a `MessagePassing` layer) rather than something
-  incidental, since a false positive here silently steals a model from a better-fitting
-  adapter.
-- **`example_inputs(model) -> tuple | None`** - called only when the caller supplied no
-  `example_inputs` at all. Return a tuple of forward-arguments you can construct from the
-  model alone (shapes read off a first `Linear`/`Conv` layer, a Hugging Face config's
-  `hidden_size`, ...), or `None` if you can't guess - `synthesize()` then raises
-  `ValueError` naming exactly how to pass inputs explicitly.
-- **`prepare(model, example_inputs) -> Prepared`** - the adapter's core job: return
-  export-ready everything. `example_inputs` here is always a tuple (already resolved, by
-  the caller or by `example_inputs()` above), never `None`.
+- **`name: str`** is the identifier that selects the adapter. It is used in `--adapter name`, in `adapter="name"` on `check()`, `export()`, `intake()` and `prepare_model()`, and in `registry.get()`. It is also the value that `ExportVerdict.model_family` and the `family` field of `/metadata` report. Set `Prepared.family` to this value.
+- **`matches(model, example_inputs) -> bool`** is called by `registry.detect()`, in the order of registration (see below), when the caller gave no `--adapter` or `adapter=`. The first adapter that returns `True` wins. Check something structural. For example, the built-in `pyg` adapter checks for a `MessagePassing` layer. Do not check something incidental. A false positive takes a model away from an adapter that fits better, and nobody sees this.
+- **`example_inputs(model) -> tuple | None`** is called only when the caller gave no `example_inputs`. Return a tuple of forward arguments that you can build from the model alone. For example, read the shapes from the first `Linear` or `Conv` layer, or use `hidden_size` from a Hugging Face config. If you cannot guess, return `None`. `synthesize()` then raises a `ValueError` that tells the caller how to pass inputs explicitly.
+- **`prepare(model, example_inputs) -> Prepared`** is the main job of the adapter. It returns everything that is ready for export. `example_inputs` is always a tuple. The caller or `example_inputs()` already resolved it. It is never `None`.
 
 ## `Prepared`
 
@@ -62,57 +49,36 @@ class Prepared:
     input_names: tuple[str, ...]
     dynamic_shapes: tuple  # per input: {axis: torch.export.Dim} or None
     vary_fn: VaryFn | None  # sample i -> inputs; None means the shared-axis-0 default
-    family: str
+    family: str  # the adapter's name
 ```
 
-- `model` doesn't have to be the same object the caller passed in - wrap it if the real
-  model's `forward` takes a dataclass, a dict, or keyword-only arguments that
-  `torch.export` can't trace directly. Whatever `model` is, its `forward` must take
-  exactly `len(input_names)` positional tensor arguments.
-- `inputs` and `input_names` are parallel tuples: `inputs[i]` is the example value for
-  `input_names[i]`.
-- `dynamic_shapes` is parallel to both: one entry per input, either `None` (fully static)
-  or a `{axis_index: torch.export.Dim(...)}` dict. `downshift.core.shapes` has the helpers
-  built-in adapters use to build these (`apply_dynamic_override` for the `--dynamic` CLI
-  override, `dim_bounds`/`alternative_sizes` for sampling within them).
-- `vary_fn`, when not `None`, is called as `vary_fn(i)` for `i` in `range(k)` during
-  verification and must return a tuple shaped like `inputs`; `vary_fn(0)` must return
-  exactly the baseline `inputs` (sample 0 is never varied - it's the "does this even work
-  at the traced shape" check). Leave it `None` to get `make_shared_axis0_vary_fn`'s
-  default: every dynamic input's axis 0 moves together, staying close to the example
-  (tiled rows plus small noise for floats, values sampled within the observed range for
-  integers) rather than generating unrelated noise.
-- `dynamic_dims` is a derived property, not a field: `{input_name: sorted(axes)}` for
-  every input whose `dynamic_shapes` entry is non-empty - this is what ends up in
-  `ExportVerdict.dynamic_dims`.
+- `model` can be a different object from the model that the caller passed in. Wrap the model if its `forward` takes a dataclass, a dict, or keyword-only arguments that `torch.export` cannot trace. The `forward` of `model` must take exactly `len(input_names)` positional tensor arguments.
+- `inputs` and `input_names` are parallel tuples. `inputs[i]` is the example value for `input_names[i]`.
+- `dynamic_shapes` is also parallel to both. It has one entry for each input. The entry is `None` (fully static) or a `{axis_index: torch.export.Dim(...)}` dict. `downshift.core.shapes` has the helpers that the built-in adapters use to build these entries:
+  - `apply_dynamic_override` applies the `--dynamic` CLI override.
+  - `dim_bounds` and `alternative_sizes` sample inside the bounds.
+- `vary_fn`, if it is not `None`, is called as `vary_fn(i)` for `i` in `range(k)` during verification. It must return a tuple with the same shape as `inputs`. `vary_fn(0)` must return exactly the baseline `inputs`. Sample 0 is never varied. It checks that the model works at the traced shape.
+- If `vary_fn` is `None`, downshift uses the default of `make_shared_axis0_vary_fn`. Axis 0 of every dynamic input moves together. The samples stay close to the example. For floats, the sampler tiles rows and adds small noise. For integers, it takes values from the observed range. It does not generate unrelated noise.
+- `dynamic_dims` is a derived property and not a field. It is `{input_name: sorted(axes)}` for each input that has a non-empty `dynamic_shapes` entry. This is the value in `ExportVerdict.dynamic_dims`.
 
-## Resolution: `detect()` / `available()` / `get()`
+## Resolution: `detect()`, `available()` and `get()`
 
-All in `downshift.adapters.registry`.
+All three are in `downshift.adapters.registry`.
 
-- **`get(name)`** loads exactly one adapter by name, without importing any other family's
-  optional dependency. Three forms, tried in order: a `path/to/adapter.py[:attr]` spec
-  (split on the literal `.py:` so a Windows drive letter's colon is never mistaken for the
-  separator) loads straight from a file via `load_from_file`; a built-in name (`generic`,
-  `pyg`, `hf`) imports that one module directly; anything else is looked up among
-  registered entry points. Raises `LoadError` (a `ValueError` subclass, defined in
-  `downshift._imports` and re-exported by `downshift.loading`) if nothing matches.
-- **`available()`** returns every adapter that can currently be loaded: entry points under
-  the `downshift.adapters` group (skipping any whose `ImportError` means an optional
-  dependency isn't installed), plus the built-ins whose gating module (`transformers` for
-  `hf`, `torch_geometric` for `pyg`; `generic` has none) is already in `sys.modules` - so
-  discovery for a plain PyTorch model never imports either. `generic` is always moved to
-  the end regardless of registration order. Results are cached per process, keyed by which
-  optional families were in play at the time (a plugin importing its own optional
-  dependency later can only add entries to that cache, never remove one).
-- **`detect(model, example_inputs)`** calls `available()` and returns the first adapter
-  whose `matches()` is `True`. Raises `RuntimeError` if none match (only possible if even
-  `generic` is unavailable, which shouldn't happen in a normal install).
+- **`get(name)`** loads exactly one adapter by name. It does not import the optional dependency of another family. It tries three forms in this order:
+  1. A `path/to/adapter.py[:attr]` spec. Downshift splits on the literal `.py:`. This way, the colon of a Windows drive letter is never the separator. `load_from_file` loads the adapter directly from the file.
+  2. A built-in name (`generic`, `pyg`, `hf`). Downshift imports that one module directly.
+  3. Any other name. Downshift looks for it among the registered entry points.
 
-Order matters: `available()` tries entry points, then the built-ins in the fixed order
-`hf`, `pyg`, `generic`, with `generic` always pushed last no matter where it came from.
-Write `matches()` narrowly enough that your adapter doesn't shadow one that should have
-run first.
+  If nothing matches, `get` raises `LoadError`. `LoadError` is a subclass of `ValueError`. It is defined in `downshift._imports` and `downshift.loading` re-exports it.
+- **`available()`** returns every adapter that downshift can load now. It includes:
+  - The entry points in the `downshift.adapters` group. It skips an entry point if an `ImportError` shows that an optional dependency is not installed.
+  - The built-in adapters whose gating module is already in `sys.modules`. The gating module is `transformers` for `hf` and `torch_geometric` for `pyg`. `generic` has none.
+
+  Because of this rule, the search for adapters for a plain PyTorch model never imports either module. `generic` always goes to the end, in all cases. Downshift caches the results for each process. The key of the cache is the set of optional families in use at that time. If a plugin imports its own optional dependency later, the cache can only gain entries. It never loses one.
+- **`detect(model, example_inputs)`** calls `available()` and returns the first adapter whose `matches()` is `True`. If none match, it raises `RuntimeError`. This can happen only if `generic` is also not available. A normal installation does not have this fault.
+
+The order is important. `available()` tries the entry points first. It then tries the built-in adapters in the fixed order `hf`, `pyg`, `generic`. `generic` is always last, wherever it came from. Make `matches()` narrow, so that your adapter does not take the place of an adapter that must run first.
 
 ## Registering by entry point
 
@@ -121,45 +87,31 @@ run first.
 myfamily = "my_pkg.adapter:MyAdapter"
 ```
 
-The entry point names the adapter class, and the registry instantiates it with no
-arguments - the same way it builds the built-ins, none of which keeps a module-level
-instance. An entry point that names a ready-made instance instead is used
-as-is, so plugins written against the older `ADAPTER = MyAdapter()` convention still load.
+The entry point names the adapter class. The registry creates an instance with no arguments. It builds the built-in adapters in the same way, and none of them keeps a module-level instance. If an entry point names a ready-made instance, downshift uses it as it is. Plugins that use the older `ADAPTER = MyAdapter()` convention continue to load.
 
-**The module stays cheap to import.** `available()` imports every registered entry
-point's module just to build the adapter list, on every process that calls `check`,
-`export`, or `serve` - even for a model the adapter will never end up handling. An
-`ImportError` while loading an entry point is treated as "this adapter's optional
-dependency isn't installed" and silently skipped, which means a *different* kind of
-import failure (a typo, a genuinely broken dependency chain) is silently skipped too. Put
-your model library's own import, and anything else heavy, inside `prepare()` - which only
-runs once `matches()` has already said yes - not at the module scope that defines
-`MyAdapter`. This is exactly why the built-in `hf` and `pyg` adapters are
-*not* entry points: `HFAdapter`/`PyGAdapter` need `transformers`/`torch_geometric` already
-imported just to define the class, so they can't follow their own rule. `registry.py`
-loads them directly instead, gated on `"transformers" in sys.modules` /
-`"torch_geometric" in sys.modules`, so a plain-PyTorch `check` never imports either.
+**Keep the import of the module cheap.** `available()` imports the module of each registered entry point to build the adapter list. It does this in each process that calls `check`, `export` or `serve`. It does this also for a model that the adapter will never handle.
+
+An `ImportError` while loading an entry point means "the optional dependency of this adapter is not installed". Downshift skips the adapter without a message. A different kind of import failure is also skipped without a message. Examples are a typo and a broken dependency chain.
+
+Put the import of your model library, and all other heavy imports, inside `prepare()`. `prepare()` runs only after `matches()` has returned `True`. Do not put them in the module scope that defines `MyAdapter`.
+
+For this reason, the built-in `hf` and `pyg` adapters are not entry points. `HFAdapter` and `PyGAdapter` need `transformers` and `torch_geometric` to be imported before they can define the class. They cannot follow this rule. `registry.py` loads them directly. It loads them only if `"transformers" in sys.modules` or `"torch_geometric" in sys.modules`. A `check` on a plain PyTorch model never imports either library.
 
 ## One-off adapters: a bare `.py` file
 
-No install, no entry point, no `pyproject.toml` change:
+You do not need an installation, an entry point or a change to `pyproject.toml`:
 
 ```bash
 downshift check my_model:model --adapter path/to/pointcloud_adapter.py
 ```
 
-Point at the class with `--adapter path/to/pointcloud_adapter.py:MyAdapter` and
-`registry.load_from_file` instantiates it with no arguments. A bare `.py` path looks up a
-module-level `ADAPTER` instead, which may name the class (`ADAPTER = MyAdapter`) or an
-instance. Either way, the loaded object is checked with
-`isinstance(obj, Adapter)` and `load_from_file` raises `LoadError` with a specific message
-if it doesn't implement all five attributes.
+To name the class, use `--adapter path/to/pointcloud_adapter.py:MyAdapter`. `registry.load_from_file` creates an instance with no arguments. For a bare `.py` path, downshift looks for a module-level `ADAPTER`. It can name the class (`ADAPTER = MyAdapter`) or be an instance.
+
+In both cases, downshift checks the loaded object with `isinstance(obj, Adapter)`. If the object does not implement all four attributes, `load_from_file` raises `LoadError` with a specific message.
 
 ## Seeding a custom sampler
 
-`--seed` only reaches a custom `vary_fn` if that function draws its randomness from
-torch's own global RNG (`torch.rand`, `torch.randint`, `torch.randn`, ...), because
-`verify()` seeds and calls every sample inside a single `torch.random.fork_rng()` block:
+`--seed` reaches a custom `vary_fn` only if the function takes its random numbers from the global RNG of torch (`torch.rand`, `torch.randint`, `torch.randn`, and others). `verify()` seeds the RNG and calls every sample inside one `torch.random.fork_rng()` block:
 
 ```python
 with torch.random.fork_rng(devices=[]):
@@ -169,19 +121,13 @@ with torch.random.fork_rng(devices=[]):
         ...
 ```
 
-`fork_rng` means this never disturbs the caller's own global RNG state outside the
-`with` block, but it also means an adapter that keeps its own `random.Random()` instance,
-or calls `numpy.random` directly, is invisible to `--seed` - its samples will differ
-between runs even at the same seed. The built-in `hf` and `pyg` adapters' `vary_fn`s both
-draw from `torch`'s global functions for exactly this reason; write yours the same way if
-you want `-k`/`--samples` runs to be reproducible.
+`fork_rng` makes sure that the global RNG state of the caller does not change outside the `with` block. The result is that `--seed` does not see some sources of random numbers. Examples are an adapter that keeps its own `random.Random()` instance and an adapter that calls `numpy.random` directly. The samples of such an adapter are different in each run, also with the same seed.
+
+The `vary_fn` functions of the built-in `hf` and `pyg` adapters take their numbers from the global functions of torch for this reason. Write your function in the same way if you want `-k` and `--samples` runs to be reproducible.
 
 ## A complete minimal adapter
 
-A toy "point cloud" family: a model whose `forward` takes two co-indexed tensors, point
-coordinates and per-point features - a case the built-in `generic` adapter gets wrong,
-since it would mark axis 0 of each input dynamic independently instead of tying them
-together.
+This example is a toy "point cloud" family. The `forward` of the model takes two tensors with the same first axis: point coordinates and features for each point. The built-in `generic` adapter handles this case in a wrong way. It marks axis 0 of each input as dynamic separately. It does not tie the axes together.
 
 ```python
 import torch
@@ -201,7 +147,6 @@ class PointCloudNet(nn.Module):
 
 class PointCloudAdapter:
     name = "pointcloud"
-    family = "pointcloud"
 
     def matches(self, model: nn.Module, example_inputs: tuple | None) -> bool:
         return isinstance(model, PointCloudNet)
@@ -212,7 +157,9 @@ class PointCloudAdapter:
         n = 50
         return torch.randn(n, coord_dim), torch.randn(n, in_features - coord_dim)
 
-    def prepare(self, model: nn.Module, example_inputs: tuple) -> Prepared:
+    def prepare(
+        self, model: nn.Module, example_inputs: tuple, axis_max: dict[str, int] | None = None
+    ) -> Prepared:
         point_dim = torch.export.Dim("num_points", min=1, max=1 << 16)
         return Prepared(
             model=model,
@@ -220,17 +167,13 @@ class PointCloudAdapter:
             input_names=("points", "features"),
             dynamic_shapes=({0: point_dim}, {0: point_dim}),
             vary_fn=None,  # the default axis-0 sampler already ties both inputs together
-            family=self.family,
+            family=self.name,
         )
 ```
 
-Both inputs' axis 0 share one `torch.export.Dim`, so `torch.export` knows `points` and
-`features` must always have the same point count - `vary_fn=None` is enough here because
-`make_shared_axis0_vary_fn` already varies every dynamic input's axis 0 together by
-default; a custom `vary_fn` is only needed when inputs vary in a way that isn't "all
-dynamic axes move to the same size."
+Axis 0 of both inputs shares one `torch.export.Dim`. `torch.export` therefore knows that `points` and `features` always have the same number of points. `vary_fn=None` is enough here. `make_shared_axis0_vary_fn` already varies axis 0 of all dynamic inputs together. You need a custom `vary_fn` only when the inputs vary in a different way, not "all dynamic axes move to the same size".
 
-Use it without registering anything:
+To use the adapter without a registration:
 
 ```python
 import downshift
@@ -240,11 +183,10 @@ model = PointCloudNet().eval()
 verdict = downshift.check(model, adapter=PointCloudAdapter())
 ```
 
-or from the CLI, unregistered:
+To use it from the CLI without a registration:
 
 ```bash
 downshift check my_model:model --adapter path/to/pointcloud_adapter.py:PointCloudAdapter
 ```
 
-or registered for auto-detection and `--adapter pointcloud`, via
-`[project.entry-points."downshift.adapters"]` as shown above.
+To use it with auto-detection and `--adapter pointcloud`, register it with `[project.entry-points."downshift.adapters"]`, as shown above.

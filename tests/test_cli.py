@@ -1,4 +1,4 @@
-"""CLI contract: exit codes and JSON. Banner and table text are deliberately not asserted."""
+"""The CLI contract: exit codes and JSON. The tests do not assert the text of the banner and the tables, by design."""
 
 import json
 import os
@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
 import downshift
-from downshift.cli import main
+from downshift.cli import main, runtime
 from downshift.cli.main import app
 from downshift.loading import LoadSpec
 from downshift.serve.options import ServeOptions
@@ -70,8 +70,8 @@ def test_check_bad_spec_is_usage_error():
 
 
 def test_check_imports_a_model_module_from_the_current_directory(tmp_path, monkeypatch):
-    # The `downshift` console script, unlike `python -m downshift`, does not put the current
-    # directory on sys.path by itself; the CLI does.
+    # The `downshift` console script does not put the current directory on sys.path by itself.
+    # `python -m downshift` does. The CLI does it in both cases.
     (tmp_path / "cwd_model.py").write_text(
         "from tests.models.clean_mlp import make_inputs, make_model\n"
     )
@@ -155,7 +155,7 @@ def test_check_unsafe_load_prints_a_warning(tmp_path: Path):
     result = run("check", str(path), "--unsafe-load", "--json")
 
     assert result.exit_code in (0, 1, 2, 3), result.output
-    assert "arbitrary code" in result.output
+    assert "Arbitrary code can run" in result.output
 
 
 def test_export_rejects_an_onnx_model_as_input(exported: Path, tmp_path: Path):
@@ -183,7 +183,7 @@ def test_check_onnx_without_reference_is_unverified(exported: Path):
 
 
 def test_check_onnx_against_different_init_is_degraded(exported: Path):
-    # make_model() builds a fresh random init, so the graph on disk can't match it.
+    # make_model() builds a new random init, so the graph on disk cannot match it.
     result = run("check", str(exported / "clean_mlp.onnx"), "--reference", CLEAN, "--json")
     assert result.exit_code == 2, result.output
     data = parse(result)
@@ -230,10 +230,10 @@ def test_slug(spec: str, expected: str):
 
 
 def _fake_uvicorn_server(monkeypatch, captured: dict) -> None:
-    """Single-worker `serve` now binds via uvicorn.Server directly (not uvicorn.run), so
-    should_exit is reachable from the loader thread. Stand in for it: capture the config,
-    and drive the app's lifespan the way a real server would (so the loader thread the
-    plan describes actually runs and lands app.state.serving), without opening a socket.
+    """A single-worker `serve` binds through uvicorn.Server directly (and not uvicorn.run). The
+    loader thread can therefore reach should_exit. This test stands in for it. It captures the
+    config and drives the lifespan of the app in the way that a real server does. The loader
+    thread that the plan describes then runs and sets app.state.serving. No socket opens.
     """
 
     def fake_init(self, config) -> None:
@@ -258,10 +258,11 @@ def _fake_uvicorn_server(monkeypatch, captured: dict) -> None:
 
 
 def _serve_captured(monkeypatch, *extra_args: str) -> tuple:
-    """Run `serve CLEAN --warmup 1 <extra_args>` with uvicorn stubbed out: uvicorn.run for
-    `--workers` > 1 (unchanged), uvicorn.Server for the single-worker bind-first path.
+    """Run `serve CLEAN --warmup 1 <extra_args>` with uvicorn replaced by a stub. For
+    `--workers` > 1, the stub is uvicorn.run (it did not change). For the single-worker path
+    that binds first, the stub is uvicorn.Server.
 
-    Returns (CliRunner result, the captured config values plus the app).
+    It returns (the CliRunner result, the captured config values plus the app).
     """
     pytest.importorskip("downshift.serve.app")
     captured: dict = {}
@@ -277,7 +278,7 @@ def test_serve_builds_app(monkeypatch):
     assert captured["port"] == 9999
     serving = captured["app"].state.serving
     assert serving.verdict.status == "CLEAN"
-    # Tensor-IO options not given on the command line come from settings.
+    # Tensor-IO options that the command line does not give come from settings.
     assert serving.options.output_encoding == main.settings.OUTPUT_ENCODING == "json"
     assert serving.options.max_input_bytes == main.settings.MAX_INPUT_BYTES
 
@@ -334,14 +335,16 @@ def test_serve_no_access_log_disables_it(monkeypatch):
     assert _app_access_log(captured["app"]) is False
 
 
-def test_serve_rejects_unknown_output_encoding():
-    result = run("serve", CLEAN, "--output-encoding", "hex")
-    assert result.exit_code == 2, result.output  # typer usage error: not a choice
+@pytest.mark.parametrize("value", ["hex", "safetensors"])
+def test_serve_rejects_unknown_output_encoding(value):
+    result = run("serve", CLEAN, "--output-encoding", value)
+    assert result.exit_code == 2, result.output  # typer usage error: not one of the choices
 
 
 def test_serve_load_failure_on_the_loader_thread_exits_with_the_usual_code(monkeypatch):
-    """A model that fails to load in the background thread must still end the process with
-    the exit code _exit_on_error would give it synchronously, not serve 503 forever."""
+    """A model that fails to load in the background thread must still end the process. The exit
+    code is the code that _exit_on_error gives in a synchronous call. The server must not serve
+    503 forever."""
     captured: dict = {}
     _fake_uvicorn_server(monkeypatch, captured)
 
@@ -383,7 +386,7 @@ def test_serve_workers_uses_an_import_string_factory(monkeypatch):
 
 
 def test_serve_workers_splits_threads_across_the_cpu_count(monkeypatch):
-    monkeypatch.setattr(os, "cpu_count", lambda: 16)
+    monkeypatch.setattr(main.settings, "usable_cpus", lambda: 16)
     _, captured = _serve_captured(monkeypatch, "--workers", "4")
     assert captured["workers"] == 4
 
@@ -392,7 +395,7 @@ def test_serve_workers_splits_threads_across_the_cpu_count(monkeypatch):
 
 
 def test_serve_workers_explicit_intra_op_threads_wins(monkeypatch):
-    monkeypatch.setattr(os, "cpu_count", lambda: 16)
+    monkeypatch.setattr(main.settings, "usable_cpus", lambda: 16)
     _serve_captured(monkeypatch, "--workers", "4", "--intra-op-threads", "7")
 
     args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
@@ -401,7 +404,7 @@ def test_serve_workers_explicit_intra_op_threads_wins(monkeypatch):
 
 def _rebuilt_app():
     """What a --workers worker does: rebuild the app from the env, then let the loader run."""
-    api = main._serve_app_factory()
+    api = runtime._serve_app_factory()
     with TestClient(api):
         api.state.loader_thread.join(timeout=60)
     return api
@@ -435,8 +438,9 @@ def test_serve_app_factory_rebuilds_the_app_from_env(monkeypatch):
 
 
 def test_a_worker_that_cannot_load_exits_with_uvicorns_startup_failure_code(monkeypatch):
-    """uvicorn's worker supervisor respawns a worker that dies with any other code, which
-    would reload the same failing model forever; STARTUP_FAILURE makes it stop the server."""
+    """The worker supervisor of uvicorn starts a worker again if it dies with any other code.
+    It would then reload the same failing model forever. STARTUP_FAILURE makes it stop the
+    server."""
     pytest.importorskip("downshift.serve.app")
     from uvicorn.config import STARTUP_FAILURE
 
@@ -464,9 +468,9 @@ def test_a_worker_that_cannot_load_exits_with_uvicorns_startup_failure_code(monk
 
 
 def test_serve_workers_writes_and_ships_the_onnx_artifact(monkeypatch):
-    """Parent-side: the .onnx the parent exported exists on disk, and its bytes plus the
-    verdict are what the workers get, before the (stubbed) uvicorn.run's `finally` cleans
-    the temp file up."""
+    """On the side of the parent: the .onnx file that the parent exported exists on disk. Its
+    bytes and the verdict are what the workers get. This is before the `finally` of the stubbed
+    uvicorn.run cleans up the temporary file."""
     seen: dict = {}
 
     def fake_run(app, **kw):
@@ -484,11 +488,48 @@ def test_serve_workers_writes_and_ships_the_onnx_artifact(monkeypatch):
     assert seen["workers"] == 2
     assert seen["access_log"] is False
     args = seen["args"]
-    assert args.artifact.backend == "onnxruntime"
+    assert args.artifact.onnx_path is not None  # the parent serves the graph
     assert args.artifact.verdict is not None
     assert args.artifact.verdict["status"] == "CLEAN"
     assert args.artifact.input_names == ["x"]
     assert len(seen["onnx_bytes"]) > 0
+
+
+def test_export_with_external_data_writes_both_files_and_lists_the_data_file(
+    tmp_path: Path, monkeypatch
+):
+    from downshift.core import capture as capture_mod
+
+    monkeypatch.setattr(capture_mod, "EXTERNAL_DATA_THRESHOLD", 0)
+    result = run("export", CLEAN, "-o", str(tmp_path), "--json")
+    assert result.exit_code == 0, result.output
+
+    assert (tmp_path / "clean_mlp.onnx").is_file()
+    assert (tmp_path / "clean_mlp.onnx.data").is_file()
+    manifest = json.loads((tmp_path / "clean_mlp.manifest.json").read_text())
+    assert [entry["file"] for entry in manifest["external_data"]] == ["clean_mlp.onnx.data"]
+
+
+def test_serve_workers_hands_an_external_data_export_to_the_workers(monkeypatch):
+    """The parent drops its state before the workers load. The .onnx file and the data file next
+    to it must still be there. A worker that is built again from the handoff must serve."""
+    from downshift.core import capture as capture_mod
+
+    monkeypatch.setattr(capture_mod, "EXTERNAL_DATA_THRESHOLD", 0)
+    seen: dict = {}
+
+    def fake_run(app, **kw):
+        args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
+        onnx_path = Path(args.artifact.onnx_path)
+        seen["files"] = sorted(p.name for p in onnx_path.parent.iterdir() if p.suffix != ".npz")
+        seen["api"] = _rebuilt_app()
+
+    monkeypatch.setattr(uvicorn, "run", fake_run)
+    result = run("serve", CLEAN, "--warmup", "1", "--workers", "2", "--no-access-log")
+    assert result.exit_code == 0, result.output
+
+    assert seen["files"] == ["model.onnx", "model.onnx.data"]
+    assert seen["api"].state.serving.backend.name == "onnxruntime"
 
 
 def test_serve_workers_degraded_ships_a_torch_artifact_and_warns(monkeypatch):
@@ -500,15 +541,14 @@ def test_serve_workers_degraded_ships_a_torch_artifact_and_warns(monkeypatch):
     assert result.exit_code == 0, result.output
     assert "each worker independently reloads and re-warms" in result.output
     args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
-    assert args.artifact.backend == "torch"
     assert args.artifact.verdict is not None
     assert args.artifact.verdict["status"] == "DEGRADED"
     assert args.artifact.onnx_path is None
 
 
 def test_serve_app_factory_from_onnx_artifact_never_calls_capture(monkeypatch, tmp_path):
-    """Worker rebuild from an onnxruntime artifact must not re-run capture()/verify(): the
-    parent already did that once."""
+    """A worker that is built again from an onnxruntime artifact must not run capture() or
+    verify() again. The parent already did that one time."""
     pytest.importorskip("downshift.serve.app")
     onnx_path = tmp_path / "clean_mlp.onnx"
     verdict = downshift.export(clean_mlp.make_model(), onnx_path, clean_mlp.make_inputs())
@@ -530,12 +570,10 @@ def test_serve_app_factory_from_onnx_artifact_never_calls_capture(monkeypatch, t
         middleware=None,
         log_level="warning",
         artifact=main.ArtifactHandoff(
-            backend="onnxruntime",
             verdict=verdict.to_dict(),
             input_names=list(verdict.input_names),
-            notes=[],
             onnx_path=str(onnx_path),
-            feeds_path=None,
+            kind="import-spec",
         ),
     )
     monkeypatch.setenv(main._SERVE_ARGS_ENV, args.to_json())
@@ -549,7 +587,7 @@ def test_serve_app_factory_from_onnx_artifact_never_calls_capture(monkeypatch, t
 def test_version_eager_flag():
     result = run("--version")
     assert result.exit_code == 0
-    assert main.__version__ in result.stdout
+    assert result.stdout.strip() == main.__version__
 
 
 def test_help_still_works_with_no_args_is_help():
@@ -557,3 +595,71 @@ def test_help_still_works_with_no_args_is_help():
     assert result.exit_code == 0
     assert "check" in result.output
     assert "serve" in result.output
+
+
+def test_check_axis_max_lowers_the_served_bound():
+    result = run("check", CLEAN, "--axis-max", "dim0=20", "--json")
+    assert result.exit_code == 0, result.output
+    assert parse(result)["axes"][0]["served_max"] == 20
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["seq=4", "dim0=999999", "dim0", "dim0=abc", "dim0=0"],
+    ids=["unknown-name", "above-ceiling", "no-value", "non-int", "zero"],
+)
+def test_check_bad_axis_max_is_usage_error(value):
+    result = run("check", CLEAN, "--axis-max", value, "--json")
+    assert result.exit_code == 4, result.output
+    assert result.stdout == ""
+
+
+def test_serve_axis_max_round_trips_through_serve_args():
+    from downshift.cli.runtime import ServeArgs
+
+    args = ServeArgs(
+        load=LoadSpec(CLEAN),
+        options=ServeOptions(axis_max={"dim0": 20}),
+        reference=None,
+        middleware=None,
+        log_level="warning",
+    )
+    assert ServeArgs.from_json(args.to_json()).options.axis_max == {"dim0": 20}
+
+
+def test_serve_passes_prep_threads(monkeypatch):
+    result, captured = _serve_captured(monkeypatch, "--prep-threads", "3")
+    assert captured["app"].state.serving.options.prep_threads == 3
+    assert "3 prep threads" in result.output
+
+
+def test_serve_execution_defaults_to_threadpool(monkeypatch):
+    _, captured = _serve_captured(monkeypatch)
+    assert captured["app"].state.serving.options.execution == "threadpool"
+
+
+def test_serve_passes_execution_inline(monkeypatch):
+    result, captured = _serve_captured(monkeypatch, "--execution", "inline")
+    assert captured["app"].state.serving.options.execution == "inline"
+    assert "Execution" in result.output
+    assert "event loop" in result.output
+
+
+def test_serve_rejects_an_unknown_execution_mode(monkeypatch):
+    result = run("serve", CLEAN, "--execution", "auto")
+    assert result.exit_code == 2, result.output
+
+
+def test_serve_execution_round_trips_through_serve_args():
+    from downshift.cli.runtime import ServeArgs
+    from downshift.serve.options import ExecutionChoice
+
+    args = ServeArgs(
+        load=LoadSpec(CLEAN),
+        options=ServeOptions(execution=ExecutionChoice.inline),
+        reference=None,
+        middleware=None,
+        log_level="warning",
+    )
+    restored = ServeArgs.from_json(args.to_json()).options.execution
+    assert restored is ExecutionChoice.inline

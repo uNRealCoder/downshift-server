@@ -1,11 +1,11 @@
-"""Export-core integration tests: adapter prep, capture, verification, verdict, run over
-every hazard fixture.
+"""Integration tests for the export core: the adapter prep, the capture, the verification and the
+verdict, run on each hazard fixture.
 
-Expected statuses are what torch 2.14 actually does, not what the fixtures were written
-to provoke. Two worth knowing about: custom_autograd is CLEAN because torch.export traces
-straight through the Function's forward (clamp and multiply, both traceable), and
-scatter_include_self_false is DEGRADED rather than FAILED because it exports under
-strict=False and silently returns wrong numbers. Verification is what catches the second.
+The expected statuses are what torch 2.14 does. They are not what the fixtures were written to
+cause. Two cases are important. custom_autograd is CLEAN, because torch.export traces directly
+through the forward of the Function (clamp and multiply can both be traced).
+scatter_include_self_false is DEGRADED and not FAILED, because it exports under strict=False
+and returns wrong numbers without a message. Verification finds the second case.
 """
 
 import pytest
@@ -61,7 +61,7 @@ def test_clean_mlp_verdict_fields() -> None:
 
     assert verdict.capture_strategy == "strict=False"
     assert verdict.opset is not None
-    assert verdict.op_types  # non-empty: Gemm/Relu/Gemm for this model
+    assert verdict.op_types  # not empty: Gemm, Relu and Gemm for this model
     assert verdict.numerics is not None
     assert verdict.numerics.passed
     assert verdict.recommended_backend == "onnxruntime"
@@ -78,8 +78,8 @@ def test_check_switches_a_training_mode_model_to_eval_with_a_warning() -> None:
 
 
 def test_bf16_weights_fixture_fails_via_onnx_runtime_not_a_crash() -> None:
-    """ORT's CPU EP has no bf16 Gemm kernel; that must become a FAILED verdict, not a
-    raised exception out of check()."""
+    """The CPU EP of ORT has no bf16 Gemm kernel. This must become a FAILED verdict. It must not
+    be an exception that check() raises."""
     model = bf16_weights.make_model()
     inputs = bf16_weights.make_inputs()
 
@@ -88,7 +88,7 @@ def test_bf16_weights_fixture_fails_via_onnx_runtime_not_a_crash() -> None:
     assert verdict.status == "FAILED"
     assert verdict.recommended_backend == "torch"
     assert "ONNX Runtime" in verdict.reason
-    assert verdict.capture_strategy is not None  # torch.export/torch.onnx.export both worked
+    assert verdict.capture_strategy is not None  # torch.export and torch.onnx.export both worked
     assert verdict.opset is not None
     assert verdict.op_types
 
@@ -108,7 +108,7 @@ def test_build_verdict_uses_first_failure_and_mines_unsupported_ops_from_all(mon
     first = RuntimeError("aten.scatter_reduce.two not supported")
     second = RuntimeError("generic export failure mentioning aten.index_put too")
 
-    def fake_capture(model, inputs, dynamic_shapes=None):
+    def fake_capture(model, inputs, dynamic_shapes=None, external_data_threshold=None):
         return CaptureResult(
             success=False,
             capture_strategy=None,
@@ -122,8 +122,8 @@ def test_build_verdict_uses_first_failure_and_mines_unsupported_ops_from_all(mon
     verdict = verdict_mod.build_verdict(prepared)
 
     assert verdict.status == "FAILED"
-    assert "aten.scatter_reduce" in verdict.reason  # the first failure, not the second's
-    assert verdict.unsupported_ops == ["index_put", "scatter_reduce"]  # mined from both
+    assert "aten.scatter_reduce" in verdict.reason  # the first failure and not the second
+    assert verdict.unsupported_ops == ["index_put", "scatter_reduce"]  # taken from both
     assert verdict.capture_exceptions == [("strict=False", first), ("strict=True", second)]
 
 
@@ -151,11 +151,20 @@ def test_scatter_fixture_numerics_actually_diverge() -> None:
     ids=["clean", "degraded", "failed"],
 )
 def test_verdict_round_trips_through_dict(module, status: str) -> None:
-    """from_dict(v.to_dict()) must reproduce to_dict() exactly, since this is how a
-    `serve --workers N` worker gets its verdict without redoing capture/verify itself."""
+    """from_dict(v.to_dict()) must reproduce to_dict() exactly. A `serve --workers N` worker
+    gets its verdict in this way. It does not do the capture and the verification again."""
     verdict = downshift.check(module.make_model(), module.make_inputs(), k=4)
     assert verdict.status == status, verdict.reason
 
     rebuilt = verdict_mod.ExportVerdict.from_dict(verdict.to_dict())
 
     assert rebuilt.to_dict() == verdict.to_dict()
+
+
+def test_axes_survive_the_dict_round_trip() -> None:
+    verdict = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(), k=4)
+    assert verdict.axes
+
+    rebuilt = verdict_mod.ExportVerdict.from_dict(verdict.to_dict())
+
+    assert rebuilt.axes == verdict.axes

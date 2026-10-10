@@ -1,6 +1,6 @@
-"""Small pieces added in the 0.4.0 review round: axis-bound and ServeArgs JSON hand-offs, RoBERTa
-position limits, the load-phase reporter, stderr capture off the main thread, the new limit
-defaults and the plain-text banner."""
+"""Small parts that we added in the 0.4.0 review round: the JSON handoffs of axis bounds and
+ServeArgs, the RoBERTa position limits, the load-phase reporter, the capture of stderr off the
+main thread, the new limit defaults and the plain-text banner."""
 
 import io
 import json
@@ -17,15 +17,10 @@ from downshift import settings
 from downshift.cli import render
 from downshift.cli.runtime import ArtifactHandoff, ServeArgs
 from downshift.core import capture as capture_module
+from downshift.core.axes import DimBound, axis_bounds_from_json, axis_bounds_to_json
 from downshift.core.phase import CURRENT_PROGRESS, LoadProgress, Phase, report
 from downshift.loading import LoadSpec, load_model
-from downshift.serve.engine import (
-    DimBound,
-    ServeOptions,
-    axis_bounds_from_json,
-    axis_bounds_to_json,
-    prepare_serving,
-)
+from downshift.serve.engine import ServeOptions, prepare_serving
 from downshift.serve.options import BackendChoice
 from downshift.serve.schemas import OutputEncoding
 from tests.conftest import subprocess_env
@@ -67,15 +62,12 @@ def _serve_args(**overrides) -> ServeArgs:
         "middleware": ["pkg.mod:Mw"],
         "log_level": "info",
         "artifact": ArtifactHandoff(
-            backend="onnxruntime",
             verdict={"status": "CLEAN"},
             input_names=["input_ids", "attention_mask"],
-            notes=["a note"],
             onnx_path="model.onnx",
             feeds_path="feeds.npz",
             axis_bounds=axis_bounds_to_json(BOUNDS),
             kind="onnx-file",
-            hf_source="path/to/repo/dir",
         ),
         "access_log": False,
         "tokenizer_from": "path/to/repo/dir",
@@ -190,8 +182,8 @@ def test_report_updates_the_current_progress():
 
 @pytest.fixture
 def stderr_seen_by_export(monkeypatch) -> list:
-    """torch.export.export replaced by a spy that records sys.stderr and fails, so capture()
-    runs its stderr handling without paying for a real export."""
+    """torch.export.export is replaced by a spy that records sys.stderr and fails. capture() then
+    runs its stderr handling without the cost of a real export."""
     seen: list = []
 
     def spy(*args, **kwargs):
@@ -253,13 +245,14 @@ def test_off_thread_capture_still_collects_torch_logging():
 
 
 def test_the_body_and_timeout_defaults():
-    assert settings.DEFAULT_MAX_BODY_BYTES == 64 * 1024 * 1024
+    assert settings.DEFAULT_MAX_BODY_BYTES == 32 * 1024 * 1024
     assert settings.DEFAULT_REQUEST_TIMEOUT == 30.0
 
 
 def _serve_options_in_a_child(**env: str) -> dict:
-    """ServeOptions() as a fresh interpreter sees it: its defaults are read from settings when
-    downshift.serve.options is first imported, so an in-process reload cannot show them."""
+    """ServeOptions() as a new interpreter sees it. Downshift reads its defaults from settings
+    when downshift.serve.options is first imported. A reload in the same process cannot show
+    them."""
     code = (
         "import json; from downshift.serve.options import ServeOptions; o = ServeOptions(); "
         "print(json.dumps({'max_body_bytes': o.max_body_bytes, 'request_timeout': o.request_timeout}))"
@@ -275,7 +268,7 @@ def _serve_options_in_a_child(**env: str) -> dict:
 
 def test_serve_options_pick_up_the_new_defaults():
     assert _serve_options_in_a_child() == {
-        "max_body_bytes": 64 * 1024 * 1024,
+        "max_body_bytes": 32 * 1024 * 1024,
         "request_timeout": 30.0,
     }
 

@@ -1,6 +1,6 @@
-"""A downloaded Hugging Face repo directory: the task head is kept, /predict takes text, and a
-classifier answers with probabilities. Fixtures are tiny random-weight models with a hand-built
-tokenizer written to tmp_path, so nothing is downloaded."""
+"""A downloaded Hugging Face repo directory. Downshift keeps the task head, /predict takes text,
+and a classifier answers with probabilities. The fixtures are small models with random weights.
+A tokenizer that we built by hand is written to tmp_path, so nothing is downloaded."""
 
 import numpy as np
 import pytest
@@ -56,8 +56,8 @@ def embedding_dir(tmp_path_factory) -> str:
 
 @pytest.fixture(scope="module")
 def embedding_onnx(embedding_dir, tmp_path_factory) -> str:
-    """embedding_dir's model, already exported to a standalone .onnx: what a user who ran
-    optimum, Olive, or their own export script would hand to `serve --tokenizer-from`."""
+    """The model of embedding_dir, already exported to a standalone .onnx file. A user who ran
+    optimum, Olive, or an own export script gives this to `serve --tokenizer-from`."""
     loaded = load_model(LoadSpec(embedding_dir))
     input_ids = torch.randint(0, 100, (2, 8))
     example = (input_ids, torch.ones_like(input_ids))
@@ -92,7 +92,7 @@ def test_classifier_serves_on_onnx_runtime_and_returns_logits(classifier_state):
     assert classifier_state.verdict.status == "CLEAN", classifier_state.verdict.reason
     assert classifier_state.backend.name == "onnxruntime"
     (output,) = classifier_state.backend.metadata().outputs
-    assert output.shape[-1] == 3  # class logits, not [batch, seq, hidden]
+    assert output.shape[-1] == 3  # class logits and not [batch, seq, hidden]
 
 
 def test_text_request_returns_probabilities(classifier_client):
@@ -144,7 +144,7 @@ def test_over_length_text_is_refused_not_truncated(classifier_client):
     r = classifier_client.post("/predict", json={"text": ["hello", long]})
 
     assert r.status_code == 400, r.text
-    assert "refused rather than cut" in r.text
+    assert "is refused and not cut" in r.text
     assert "row 1:" in r.text and "row 0:" not in r.text
 
 
@@ -234,7 +234,8 @@ def test_sigmoid_scores_each_label_on_its_own():
 def test_no_predictions_when_the_output_is_not_a_class_score():
     assert _text_io(None, None).predictions(np.zeros((1, 3))) is None
     assert _text_io(SOFTMAX, LABELS).predictions(np.zeros((1, 4, 3))) is None  # token-level
-    assert _text_io(SOFTMAX, LABELS).predictions(np.zeros((1, 5))) is None  # label count differs
+    # The label count is different.
+    assert _text_io(SOFTMAX, LABELS).predictions(np.zeros((1, 5))) is None
 
 
 # --- a bare .onnx served with --tokenizer-from pointing at its Hugging Face repo --------------
@@ -248,12 +249,12 @@ def test_onnx_plus_tokenizer_from_gets_pooling_and_text_input(embedding_onnx, em
     assert state.embedding is not None
     assert state.embedding.pooling == "mean"
     assert state.text is not None
-    # No --reference was given: --tokenizer-from alone does not verify numerics.
+    # No --reference was given. --tokenizer-from alone does not verify the numerics.
     assert state.verdict.status == "UNVERIFIED"
 
     client = TestClient(build_app(state))
     body = client.post("/predict", json={"text": ["hello world"]}).json()
-    assert body["shapes"]["output_0"] == [1, hf_repo.HIDDEN]  # pooled, not token-level
+    assert body["shapes"]["output_0"] == [1, hf_repo.HIDDEN]  # pooled and not at token level
 
 
 @pytest.fixture(scope="module")
@@ -270,9 +271,9 @@ def encoder_onnx(encoder_dir, tmp_path_factory) -> str:
 
 @pytest.mark.needs_torch_26
 def test_tokenizer_from_does_not_claim_pooling_a_token_level_graph(encoder_onnx, embedding_dir):
-    """embedding_dir declares mean pooling, but the served graph is the bare encoder: /schema
-    must not report an embedding recipe the graph never applies, and should say why the
-    output is token-level instead."""
+    """embedding_dir declares mean pooling, but the served graph is the bare encoder. /schema
+    must not report an embedding recipe that the graph never applies. It must say why the output
+    is at token level."""
     opts = ServeOptions(pooling="cls")
     state = prepare_serving(load_model(LoadSpec(encoder_onnx)), opts, tokenizer_from=embedding_dir)
 
@@ -287,8 +288,9 @@ def test_tokenizer_from_does_not_claim_pooling_a_token_level_graph(encoder_onnx,
 
 @pytest.mark.needs_torch_26
 def test_reference_and_tokenizer_from_are_independent(embedding_onnx, embedding_dir):
-    """--reference verifies numerics; --tokenizer-from supplies the tokenizer; passing both,
-    naming the same directory, does both jobs at once without either implying the other."""
+    """--reference verifies the numerics. --tokenizer-from supplies the tokenizer. If you pass
+    both and name the same directory, each option does its own job. Neither option implies the
+    other."""
     state = prepare_serving(
         load_model(LoadSpec(embedding_onnx)),
         reference=load_model(LoadSpec(embedding_dir)),
@@ -312,8 +314,8 @@ def test_onnx_alone_has_no_text_input_and_is_unverified(embedding_onnx):
 
 @pytest.mark.needs_torch_26
 def test_reference_alone_does_not_turn_on_text_input(embedding_onnx, embedding_dir):
-    """--reference is purely numeric: naming an HF repo directory there, with no
-    --tokenizer-from, verifies the graph but does not attach a tokenizer."""
+    """--reference is only numeric. If you name an HF repo directory there, without
+    --tokenizer-from, it verifies the graph. It does not attach a tokenizer."""
     state = prepare_serving(
         load_model(LoadSpec(embedding_onnx)), reference=load_model(LoadSpec(embedding_dir))
     )
@@ -324,9 +326,9 @@ def test_reference_alone_does_not_turn_on_text_input(embedding_onnx, embedding_d
 
 
 def test_hf_dir_as_model_wins_over_tokenizer_from(encoder_dir, embedding_dir):
-    """When MODEL is itself a Hugging Face repo directory, its own tokenizer is used even if
-    --tokenizer-from names a different one; --tokenizer-from's role only applies to a bare
-    .onnx MODEL, which has no tokenizer of its own to prefer."""
+    """If MODEL is itself a Hugging Face repo directory, downshift uses its own tokenizer. This
+    is true also if --tokenizer-from names a different one. --tokenizer-from applies only to a
+    bare .onnx MODEL. Such a model has no tokenizer of its own to prefer."""
     state = prepare_serving(load_model(LoadSpec(encoder_dir)), tokenizer_from=embedding_dir)
 
     assert state.hf_source == encoder_dir
@@ -348,16 +350,15 @@ def test_tokenizer_from_must_be_an_hf_repo_directory(tmp_path):
 
 @pytest.mark.needs_torch_26
 def test_worker_rebuild_attaches_text_from_a_carried_hf_source(embedding_onnx, embedding_dir):
-    """serving_state_from_artifact is what a `--workers N` worker calls to rebuild from the
-    parent's already-verified onnx artifact; it takes no reference model or --tokenizer-from
-    string to re-validate, so a worker does neither - the resolved hf_source path (shipped in
-    ArtifactHandoff) is enough on its own."""
+    """A `--workers N` worker calls serving_state_from_artifact to build again from the onnx
+    artifact that the parent already verified. It takes no reference model and no
+    --tokenizer-from string to validate again. A worker does neither. The resolved hf_source
+    path (sent in ArtifactHandoff) is enough on its own."""
     base = prepare_serving(load_model(LoadSpec(embedding_onnx)))
-    assert base.text is None  # no --tokenizer-from given here: nothing to carry yet
+    assert base.text is None  # no --tokenizer-from here: nothing to carry yet
 
     rebuilt = serving_state_from_artifact(
         embedding_onnx,
-        base.verdict.onnx_path,
         base.verdict,
         base.options,
         base.input_names,
@@ -371,8 +372,8 @@ def test_worker_rebuild_attaches_text_from_a_carried_hf_source(embedding_onnx, e
 
 @pytest.mark.needs_torch_26
 def test_app_for_takes_tokenizer_from_independent_of_reference(embedding_onnx, embedding_dir):
-    """The library entry point offers the same split as the CLI: tokenizer_from= supplies
-    text input, reference= verifies numerics, and neither implies the other."""
+    """The library entry point has the same split as the CLI. tokenizer_from= supplies the text
+    input. reference= verifies the numerics. Neither implies the other."""
     client = TestClient(app_for(embedding_onnx, tokenizer_from=embedding_dir, warmup=1))
 
     r = client.get("/schema").json()
@@ -381,3 +382,98 @@ def test_app_for_takes_tokenizer_from_independent_of_reference(embedding_onnx, e
 
     body = client.post("/predict", json={"text": ["hello world"]}).json()
     assert body["shapes"]["output_0"] == [1, hf_repo.HIDDEN]
+
+
+# --- decoder embedder: left and right padding, named prompts (0.5.0 E3, E5) -------------------
+
+import json  # noqa: E402
+
+TEXTS = ["hello", "the capital hello world", "world the"]
+
+
+def _decoder_state(path):
+    return prepare_serving(load_model(LoadSpec(str(path))), ServeOptions(warmup=0))
+
+
+def _embed(client: TestClient, **body) -> np.ndarray:
+    response = client.post("/predict", json=body)
+    assert response.status_code == 200, response.text
+    return np.asarray(response.json()["outputs"]["output_0"])
+
+
+@pytest.mark.needs_torch_26
+def test_decoder_text_gives_one_vector_per_row_equal_under_either_padding(tmp_path):
+    (tmp_path / "left").mkdir()
+    (tmp_path / "right").mkdir()
+    left = hf_repo.write_decoder_repo(tmp_path / "left", recipe="lasttoken", padding_side="left")
+    right = hf_repo.write_decoder_repo(tmp_path / "right", recipe="lasttoken", padding_side="right")
+    left_state = _decoder_state(left)
+    right_state = _decoder_state(right)
+    assert left_state.backend.name == right_state.backend.name == "onnxruntime"
+    assert left_state.text is not None and left_state.text.tokenizer.padding_side == "left"
+    assert right_state.text is not None and right_state.text.tokenizer.padding_side == "right"
+
+    on_left = _embed(TestClient(build_app(left_state)), text=TEXTS)
+    on_right = _embed(TestClient(build_app(right_state)), text=TEXTS)
+
+    assert on_left.shape == (len(TEXTS), hf_repo.DECODER_HIDDEN)
+    assert np.allclose(on_left, on_right, atol=1e-4)
+    assert np.allclose(np.linalg.norm(on_left, axis=1), 1.0, atol=1e-4)  # the recipe normalizes
+
+
+@pytest.fixture(scope="module")
+def prompted_client(tmp_path_factory) -> TestClient:
+    path = tmp_path_factory.mktemp("prompted")
+    hf_repo.write_decoder_repo(
+        path, recipe="lasttoken", prompts={"query": "the ", "document": "world "}
+    )
+    return TestClient(build_app(_decoder_state(path)))
+
+
+@pytest.mark.needs_torch_26
+def test_prompt_name_prepends_the_named_prompt_before_tokenizing(prompted_client):
+    named = _embed(prompted_client, text=["capital"], prompt_name="query")
+    typed = _embed(prompted_client, text=["the capital"])
+    plain = _embed(prompted_client, text=["capital"])
+
+    assert np.allclose(named, typed, atol=1e-6)
+    assert not np.array_equal(named, plain)
+
+
+@pytest.mark.needs_torch_26
+def test_unknown_prompt_name_is_a_400_listing_the_names_with_a_cut_echo(prompted_client):
+    response = prompted_client.post("/predict", json={"text": ["hi"], "prompt_name": "x" * 500})
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert "['document', 'query']" in detail
+    assert "x" * 64 not in detail  # the repr, with the quotes, is cut at 64 characters
+    assert len(detail) < 200
+
+
+@pytest.mark.needs_torch_26
+def test_prompt_name_without_text_is_a_400(prompted_client):
+    response = prompted_client.post(
+        "/predict",
+        json={"inputs": {"input_ids": [[1]], "attention_mask": [[1]]}, "prompt_name": "query"},
+    )
+
+    assert response.status_code == 400
+    assert "text" in response.json()["detail"]
+
+
+@pytest.mark.needs_torch_26
+def test_default_prompt_name_applies_when_a_request_names_none(tmp_path):
+    path = hf_repo.write_decoder_repo(tmp_path, recipe="lasttoken", prompts={"query": "the "})
+    config_file = tmp_path / "config_sentence_transformers.json"
+    config = json.loads(config_file.read_text())
+    config["default_prompt_name"] = "query"
+    config_file.write_text(json.dumps(config))
+    client = TestClient(build_app(_decoder_state(path)))
+
+    schema = client.get("/schema").json()["embedding"]
+    assert schema["prompts"] == {"query": "the "}
+    assert schema["default_prompt"] == "query"
+    assert np.allclose(
+        _embed(client, text=["capital"]), _embed(client, text=["capital"], prompt_name="query")
+    )

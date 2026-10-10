@@ -1,4 +1,4 @@
-"""normalize_dtype() and to_numpy() edge cases not reached through the HTTP layer."""
+"""The edge cases of normalize_dtype() and to_numpy() that the HTTP layer does not reach."""
 
 import numpy as np
 import pytest
@@ -46,14 +46,14 @@ def test_to_numpy_base64_is_a_zero_copy_view():
     out = to_numpy("x", b64_input(arr))
     np.testing.assert_array_equal(out, arr)
     assert out.dtype == np.int16
-    assert not out.flags.owndata  # frombuffer view over the decoded buffer, nothing copied
+    assert not out.flags.owndata  # a frombuffer view over the decoded buffer. Nothing is copied
     assert out.flags.c_contiguous
-    # pybase64 decodes into a bytearray, so torch can wrap the view without copying it.
+    # pybase64 decodes into a bytearray, so torch can wrap the view without a copy.
     assert out.flags.writeable == (BASE64_CODEC == "pybase64")
 
 
 def test_to_numpy_base64_explicit_dtype_wins_over_declared():
-    # The backend declared float, the client sent int64; no silent cast either way.
+    # The backend declared float and the client sent int64. There is no silent cast in either case.
     out = to_numpy("x", b64_input(np.arange(4, dtype=np.int64)), "tensor(float)")
     assert out.dtype == np.int64
 
@@ -80,3 +80,33 @@ def test_to_numpy_base64_respects_max_bytes_keyword():
 def test_to_numpy_base64_big_endian_is_rejected_before_decoding():
     with pytest.raises(ValueError, match=r"'x'.*little-endian"):
         to_numpy("x", {"data": "definitely not base64", "dtype": ">i4", "shape": [1]})
+
+
+def test_axis_info_sampled_defaults_to_none():
+    from downshift.serve.schemas import AxisInfo
+
+    info = AxisInfo(input="x", axis=0, name="dim0", served_min=1, served_max=9)
+
+    assert info.sampled_min is None and info.sampled_max is None
+    assert AxisInfo.model_validate(info.model_dump()) == info
+
+
+def test_openapi_lists_the_binary_content_types(mlp_client):
+    paths = mlp_client.get("/openapi.json").json()["paths"]
+    for route in ("/predict", "/predict/graph"):
+        op = paths[route]["post"]
+        request = set(op["requestBody"]["content"])
+        assert {
+            "application/json",
+            "application/vnd.safetensors",
+            "application/octet-stream",
+        } <= request
+        response = set(op["responses"]["200"]["content"])
+        assert {"application/json", "application/vnd.safetensors"} <= response
+
+
+def test_server_wide_output_encoding_stays_json_or_base64():
+    from downshift.serve.schemas import OutputEncoding, RequestOutputEncoding
+
+    assert {e.value for e in OutputEncoding} == {"json", "base64"}
+    assert "safetensors" in {e.value for e in RequestOutputEncoding}
