@@ -1,8 +1,8 @@
-"""P1: adapter discovery must not import optional model families that aren't in play.
+"""P1: adapter discovery must not import optional model families that are not in use.
 
-Both checks need a fresh interpreter: `tests/test_adapters.py` imports transformers and
-torch_geometric at module level, which would make them look "in play" no matter what the
-registry does.
+Both checks need a new interpreter. `tests/test_adapters.py` imports transformers and
+torch_geometric at module level. They would then look "in use", for all actions of the
+registry.
 """
 
 import subprocess

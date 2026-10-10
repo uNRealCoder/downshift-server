@@ -1,5 +1,6 @@
-"""The serving hardening from the 0.4.0 review round: API key, request-body limits, admission
-before the body is read, bf16 models, input range checks, /ready phases, torch error mapping."""
+"""The hardening of the serving from the 0.4.0 review round: the API key, the limits on the
+request body, the admission before the body is read, bf16 models, the checks of input ranges,
+the /ready phases and the mapping of torch errors."""
 
 import dataclasses
 import logging
@@ -147,7 +148,7 @@ def test_a_chunked_body_over_the_limit_is_413(limited):
         "/predict", content=_chunked(*parts), headers={"content-type": "application/json"}
     )
 
-    assert "content-length" not in resp.request.headers  # the premise: it really was chunked
+    assert "content-length" not in resp.request.headers  # the premise: the body was chunked
     assert resp.status_code == 413
     assert "--max-body-bytes" in resp.json()["detail"]
 
@@ -179,7 +180,7 @@ def test_a_content_length_over_the_limit_is_413_before_the_handler_runs(
         headers={"content-type": "application/json"},
     )
 
-    assert resp.status_code == 413  # not 422: the body was never parsed
+    assert resp.status_code == 413  # and not 422: nobody parsed the body
     assert calls == []
 
 
@@ -197,10 +198,10 @@ def test_a_full_server_answers_503_without_reading_the_body(tight_state):
 
     resp = client.post("/predict", content=b"x" * (BODY_LIMIT * 2))
 
-    assert resp.status_code == 503  # not 413: admission comes first
+    assert resp.status_code == 503  # and not 413: the admission is first
     assert resp.headers["retry-after"] == "1"
     assert "at capacity" in resp.json()["detail"]
-    assert tight_state.in_flight == 1  # a refused request never held a slot
+    assert tight_state.in_flight == 1  # a request that was refused never held a slot
     tight_state.release()
     assert tight_state.in_flight == 0
 
@@ -221,7 +222,7 @@ def test_every_exit_releases_the_admitted_slot(tight_state, kwargs, status):
 
     assert resp.status_code == status, resp.text
     assert tight_state.in_flight == 0
-    assert client.post("/predict", json=MLP_INPUT).status_code == 200  # and the slot is reusable
+    assert client.post("/predict", json=MLP_INPUT).status_code == 200  # the slot can be used again
 
 
 # --- bf16 ------------------------------------------------------------------------------------
@@ -249,16 +250,17 @@ def test_a_bf16_model_schema_reports_float32_inputs(bf16_client):
     assert entry["dtype"] == "float32"
 
 
-# Hand-built graphs pin ir_version: make_model stamps the installed onnx's newest IR version,
-# which can be ahead of what the installed onnxruntime reads (onnx 1.20 writes IR 14 while
-# onnxruntime 1.23 stops at 13). 8 is the lowest that allows opset 17.
+# Graphs that we build by hand pin ir_version. make_model uses the newest IR version of the
+# installed onnx. It can be newer than the version that the installed onnxruntime reads (onnx
+# 1.20 writes IR 14, and onnxruntime 1.23 stops at 13). 8 is the lowest version that allows
+# opset 17.
 
 
 def _bf16_output_onnx_bytes() -> bytes:
-    """A graph ORT's CPU EP can actually execute (Cast, not Gemm - which has no bf16 CPU
-    kernel, see tests/models/bf16_weights.py) but whose declared output is bfloat16: the
-    case OnnxRuntimeBackend.infer's OrtValue/DLPack widening (B1) covers, since
-    OrtValue.numpy() has no bfloat16/float16 numpy dtype to convert to."""
+    """A graph that the CPU EP of ORT can run (Cast, and not Gemm, which has no bf16 CPU kernel.
+    See tests/models/bf16_weights.py) but whose declared output is bfloat16. This is the case
+    that the OrtValue and DLPack widening (B1) of OnnxRuntimeBackend.infer covers.
+    OrtValue.numpy() has no bfloat16 or float16 numpy dtype to convert to."""
     import onnx
     from onnx import TensorProto, helper
 
@@ -298,8 +300,8 @@ def _fp16_output_onnx_bytes() -> bytes:
 
 
 def test_onnxruntime_backend_widens_a_float16_output_without_dlpack(monkeypatch):
-    """fp16 has a numpy dtype, so it must not depend on OrtValue.__dlpack__, which older
-    onnxruntime releases (the 1.17 floor) do not have."""
+    """fp16 has a numpy dtype. It must therefore not depend on OrtValue.__dlpack__. Older
+    onnxruntime releases (the floor of 1.17) do not have it."""
     backend = OnnxRuntimeBackend(_fp16_output_onnx_bytes(), device="cpu")
     monkeypatch.setattr(torch, "from_dlpack", _no_dlpack)
 
@@ -327,8 +329,8 @@ def test_a_bfloat16_output_on_an_onnxruntime_without_dlpack_says_what_to_do():
 @pytest.mark.parametrize(
     ("declared", "expected"),
     [
-        ("tensor(float)", "float32"),  # ORT's spelling
-        ("tensor(float32)", "float32"),  # the torch backend's spelling
+        ("tensor(float)", "float32"),  # the spelling of ORT
+        ("tensor(float32)", "float32"),  # the spelling of the torch backend
         ("tensor(float64)", "float64"),
         ("tensor(bfloat16)", "float32"),  # bf16 is float32 on the wire
         ("tensor(int64)", "int64"),
@@ -345,7 +347,7 @@ def test_normalize_dtype_reads_both_backends_spellings(declared, expected):
 
 # --- Hugging Face: token-id range and axis bounds --------------------------------------------
 
-HF_MAX_POSITIONS = 32  # hf_repo.MAX_POSITIONS, kept here so the import stays lazy
+HF_MAX_POSITIONS = 32  # hf_repo.MAX_POSITIONS. It is here so that the import stays lazy
 
 
 @pytest.fixture(scope="module")
@@ -499,8 +501,9 @@ def test_a_server_side_runtime_error_in_forward_is_a_500(torch_state, monkeypatc
 
 
 def test_any_error_in_forward_after_the_input_checks_is_a_500(torch_state, monkeypatch):
-    """The input's names, dtypes, ranks and fixed axes are checked before infer, so whatever
-    the model raises past that is the server's fault, whatever its message says."""
+    """Downshift checks the names, dtypes, ranks and fixed axes of the input before infer. An
+    error that the model raises after that is a fault of the server. The message does not
+    change this."""
     monkeypatch.setattr(torch_state.backend, "module", _Failing("kaboom: an unrelated failure"))
     client = TestClient(build_app(torch_state, api_key=None), raise_server_exceptions=False)
 

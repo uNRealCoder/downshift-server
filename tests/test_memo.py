@@ -1,6 +1,6 @@
-"""The in-process export memo (0.5.0 C1): what its key is made of, who reads and writes it, and
-that a second boot of the same model skips export and verify (and, for a Hugging Face repo
-directory, never loads the weights)."""
+"""The in-process export memo (0.5.0 C1): what its key contains, who reads and writes it, and
+that a second boot of the same model skips the export and the verification. (For a Hugging Face
+repo directory, it never loads the weights.)"""
 
 import importlib.util
 import os
@@ -77,7 +77,7 @@ def test_the_key_is_stable_and_follows_the_weights():
     first = memo.model_key(model, inputs, **RUN)
 
     assert memo.model_key(model, inputs, **RUN) == first
-    assert memo.model_key(mlp(), inputs, **RUN) == first  # same seed, same weights
+    assert memo.model_key(mlp(), inputs, **RUN) == first  # the same seed and the same weights
     assert memo.model_key(mlp(seed=1), inputs, **RUN) != first
 
 
@@ -191,7 +191,7 @@ def test_the_memo_is_an_lru_of_two():
     memo_ = ExportMemo(max_entries=2)
     for name in ("a", "b"):
         memo_.put(name, fake_entry())
-    assert memo_.get("a") is not None  # touching "a" makes "b" the oldest
+    assert memo_.get("a") is not None  # a read of "a" makes "b" the oldest
     memo_.put("c", fake_entry())
 
     assert "b" not in memo_
@@ -299,7 +299,7 @@ def test_cache_false_bypasses_both_ways(tmp_path, count_builds):
 
     downshift.check(model, inputs, k=1)
     downshift.export(model, tmp_path / "m.onnx", inputs, k=1, cache=False)
-    assert len(count_builds) == 3  # export ignored the stored entry
+    assert len(count_builds) == 3  # export did not use the stored entry
 
     app = app_for(model, inputs, k=1, warmup=1, cache=False)
     assert {"export", "verify"} <= set(boot(app))

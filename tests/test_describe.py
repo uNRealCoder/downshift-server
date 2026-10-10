@@ -1,7 +1,7 @@
-"""GET /schema: does it tell a caller enough to build a request that actually works?
+"""GET /schema: does it give a caller enough information to build a request that works?
 
-The load-bearing assertion in here is that the example body /schema hands out, posted back
-to /predict unchanged, returns 200. Everything else describes that body.
+The most important assertion here is this one: the example body that /schema gives, posted
+back to /predict unchanged, returns 200. All other tests describe that body.
 """
 
 import pytest
@@ -31,7 +31,7 @@ def test_schema_describes_the_inputs_and_the_example_actually_works(mlp_client, 
 
     (x,) = body["inputs"]
     assert x["name"] == "x"
-    assert x["dtype"] == "float32"  # not ORT's own "tensor(float)"
+    assert x["dtype"] == "float32"  # and not "tensor(float)" of ORT
     assert x["required"] is True
     assert x["shape"][1] == 16 and x["example_shape"] == [1, 16]
 
@@ -114,7 +114,7 @@ def test_outputs_unknown_on_a_torch_backend_without_example_inputs(mlp_state, mo
         (16, 16),
         ("batch", "batch"),
         ("seq", "seq"),
-        ("s77", DYNAMIC_AXIS),  # torch.export's own symbol names mean nothing to a caller
+        ("s77", DYNAMIC_AXIS),  # the symbol names of torch.export mean nothing to a caller
         ("u3", DYNAMIC_AXIS),
         (None, DYNAMIC_AXIS),
         (0, DYNAMIC_AXIS),

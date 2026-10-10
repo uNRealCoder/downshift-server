@@ -1,9 +1,9 @@
-"""ExportVerdict: the one object everything else reads.
+"""ExportVerdict: the one object that all other code reads.
 
-CLEAN      exports, numerics match, survives shapes it wasn't traced on -> serve via ORT
-DEGRADED   exports but numerics drift past tolerance             -> serve via torch
-FAILED     won't export                                          -> serve via torch
-UNVERIFIED a .onnx handed to us with no reference model         -> serve via ORT, say so
+CLEAN      exports, the numbers match, works on shapes that it was not traced on -> serve via ORT
+DEGRADED   exports, but the numbers differ by more than the tolerance           -> serve via torch
+FAILED     does not export                                                      -> serve via torch
+UNVERIFIED a .onnx file that we received with no reference model                -> serve via ORT, say so
 """
 
 import copy
@@ -45,8 +45,8 @@ from downshift.sources import hide_paths
 
 
 class Status(StrEnum):
-    """A verdict's outcome; see the module docstring. Equal to its plain string, so JSON and
-    the manifest carry "CLEAN" etc. as before."""
+    """The outcome of a verdict. See the module docstring. It is equal to its plain string. JSON
+    and the manifest therefore carry "CLEAN" and the other values as before."""
 
     CLEAN = "CLEAN"
     DEGRADED = "DEGRADED"
@@ -55,8 +55,8 @@ class Status(StrEnum):
 
 
 class BackendName(StrEnum):
-    """The concrete backends a verdict can recommend/serve; never "auto" (that's a CLI-only
-    selection sentinel, not a real backend) - see engine.BackendChoice."""
+    """The concrete backends that a verdict can recommend and serve. It is never "auto". "auto"
+    is a selection value for the CLI only and not a real backend. See engine.BackendChoice."""
 
     onnxruntime = "onnxruntime"
     torch = "torch"
@@ -73,7 +73,7 @@ class ExportVerdict:
     model_family: str
     capture_strategy: str | None
     opset: int | None
-    op_types: dict[str, int]  # count-descending histogram
+    op_types: dict[str, int]  # histogram, in descending order of count
     numerics: NumericsReport | None
     recommended_backend: BackendName
     reason: str
@@ -86,13 +86,13 @@ class ExportVerdict:
     onnx_path: Path | None = None
     onnx_program: object | None = field(default=None, repr=False)  # torch.onnx.ONNXProgram
     onnx_bytes: bytes = field(default=b"", repr=False)  # serialized once by capture()
-    # Keeps the external-data temp directory (onnx_path lives in it) alive; never serialized.
+    # Keeps the temporary directory for external data alive (onnx_path is in it). Never serialized.
     _tmpdir: object | None = field(default=None, repr=False)
-    # The CPU session verify ran on; never serialized. take_session() hands it to the server.
+    # The CPU session that verify ran on. Never serialized. take_session() gives it to the server.
     _session: object | None = field(default=None, repr=False, compare=False)
     prepared: Prepared | None = field(default=None, repr=False)
-    # Debug-only: not JSON-able, excluded from to_dict(); the CLI logs these at --log-level
-    # debug when the status is FAILED.
+    # For debugging only. Not JSON-able, and to_dict() excludes them. The CLI logs them at
+    # --log-level debug when the status is FAILED.
     capture_stderr: str = field(default="", repr=False)
     capture_exceptions: list[tuple[str, Exception]] = field(default_factory=list, repr=False)
 
@@ -132,14 +132,16 @@ class ExportVerdict:
         }
 
     def take_session(self) -> Any:
-        """The ONNX Runtime session verify built, once: the verdict lets go of it, so a server
-        that builds its own does not keep a second copy of the weights alive."""
+        """The ONNX Runtime session that verify built, one time. The verdict lets go of it. A
+        server that builds its own session then does not keep a second copy of the weights
+        alive."""
         session, self._session = self._session, None
         return session
 
     def redacted_dict(self, paths: Iterable[str | Path | None]) -> dict:
-        """to_dict() for someone outside this machine: free-text fields quote whatever path an
-        exception was handed, so `paths` are reduced to their names in reason and warnings."""
+        """to_dict() for someone outside this machine. Free-text fields quote the path that an
+        exception received. Downshift therefore reduces `paths` to their names in reason and
+        warnings."""
         data = self.to_dict()
         data["reason"] = hide_paths(data["reason"], paths)
         data["warnings"] = [hide_paths(w, paths) for w in data["warnings"]]
@@ -147,11 +149,12 @@ class ExportVerdict:
 
     @classmethod
     def from_dict(cls, data: dict) -> "ExportVerdict":
-        """Rebuild from to_dict()'s output, e.g. in a `serve --workers N` worker that takes
-        its verdict from the parent's export instead of running one itself. `prepared` and
-        `onnx_program` weren't serialized, so they come back None; the caller sets
-        `onnx_path` afterwards if the ONNX graph now lives at a worker-local temp path.
-        `shape_generalization`/`_reason` are derived properties, so they're ignored here.
+        """Build the verdict again from the output of to_dict(). Example: a `serve --workers N`
+        worker takes its verdict from the export of the parent and does not run one itself.
+        Downshift did not serialize `prepared` and `onnx_program`, so they come back as None.
+        If the ONNX graph is now at a temporary path in the worker, the caller sets `onnx_path`
+        afterward. `shape_generalization` and `_reason` are derived properties, so this
+        function ignores them.
         """
         numerics_data = data.get("numerics")
         numerics = NumericsReport.from_dict(numerics_data) if numerics_data is not None else None
@@ -176,8 +179,8 @@ class ExportVerdict:
 
 
 def axes_for(prepared: Prepared, numerics: NumericsReport | None) -> list[AxisFact]:
-    """The served bounds from the export's dynamic_shapes next to what verify sampled
-    (None when `numerics` is None)."""
+    """The served bounds from the dynamic_shapes of the export, next to what verify sampled
+    (None if `numerics` is None)."""
     return axis_facts(
         dynamic_bounds(prepared.input_names, prepared.dynamic_shapes),
         prepared.input_names,
@@ -188,9 +191,11 @@ def axes_for(prepared: Prepared, numerics: NumericsReport | None) -> list[AxisFa
 def numerics_outcome(
     numerics: NumericsReport, passed_prefix: str, failed_prefix: str
 ) -> tuple[Status, BackendName, str]:
-    """Numerics decide the verdict: pass -> CLEAN via ORT, fail -> DEGRADED via torch.
+    """The numerics decide the verdict. If they pass, the verdict is CLEAN via ORT. If they fail,
+    it is DEGRADED via torch.
 
-    The prefixes open the reason string; the sample counts and error are appended.
+    The prefixes start the reason string. Downshift adds the sample counts and the error after
+    them.
     """
     err = f"(max abs err {numerics.max_abs_err:.2e})"
     if numerics.passed:
@@ -211,9 +216,9 @@ def _tied_weight_warnings(model: torch.nn.Module) -> list[str]:
 
 
 def _drop_frame_locals(exc: BaseException | None) -> None:
-    """A kept exception's traceback pins every torch.export frame's locals (FX graphs, fake
-    tensors, the model) for as long as the verdict lives. Clearing them keeps the formatted
-    traceback, which is all the debug log reads."""
+    """The traceback of a kept exception holds the locals of each torch.export frame (FX graphs,
+    fake tensors, the model) as long as the verdict lives. Downshift clears them. The formatted
+    traceback stays. The debug log reads only that."""
     seen: set[int] = set()
     while exc is not None and id(exc) not in seen:
         seen.add(id(exc))
@@ -230,15 +235,17 @@ def prepare_model(
     vary: VaryFn | str | None = None,
     axis_max: dict[str, int] | None = None,
 ) -> Prepared:
-    """Pick an adapter, synthesise inputs if needed, and flatten into export form.
+    """Select an adapter, synthesize inputs if necessary, and flatten the model into the form
+    for export.
 
-    vary overrides the adapter's own vary_fn: a spec string is imported like --adapter's
-    custom-file form (fn(i) -> inputs; fn(0) should return the example).
+    vary replaces the own vary_fn of the adapter. Downshift imports a spec string in the same
+    way as the custom-file form of --adapter (fn(i) -> inputs, and fn(0) must return the
+    example).
 
-    axis_max ({axis name: largest size to serve}, --axis-max) lowers the named Dims' max and
-    pins verification sample 1 at those sizes. The adapter does it for its own axes; with
-    `dynamic` the adapter's axes are replaced by `<input>_<axis>` ones, so it is applied to
-    those here instead.
+    axis_max ({axis name: largest size to serve}, --axis-max) lowers the maximum of the named
+    Dims. It also pins verification sample 1 at those sizes. The adapter does this for its own
+    axes. With `dynamic`, downshift replaces the axes of the adapter with `<input>_<axis>`
+    axes. In that case, downshift applies axis_max to those here.
     """
     if isinstance(adapter, str):
         adapter = registry.get(adapter)
@@ -269,13 +276,13 @@ def build_verdict(
     timings: dict[str, float] | None = None,
     _external_data_threshold: int | None = None,
 ) -> ExportVerdict:
-    """Capture, then verify. verify_numerics=False is the --no-verify escape hatch: the
-    graph is still produced but the verdict is UNVERIFIED, never CLEAN.
+    """Capture, then verify. verify_numerics=False is the --no-verify escape. Downshift still
+    makes the graph, but the verdict is UNVERIFIED and never CLEAN.
 
-    `timings`, when given, gets Phase.export (the capture() call) and Phase.verify (the
-    verify() call) wall-clock seconds added to it, and the serve loader's /ready is told
-    which of the two is running (see core/phase.py) - the CLI's Boot banner row and /metadata's
-    `boot` field read it back from ServingState.timings (see serve/engine.py).
+    If you give `timings`, downshift adds the wall-clock seconds of Phase.export (the capture()
+    call) and Phase.verify (the verify() call) to it. It also tells /ready of the serve loader
+    which of the two runs (see core/phase.py). The Boot row of the CLI banner and the `boot`
+    field of /metadata read it again from ServingState.timings (see serve/engine.py).
     """
     warnings = _tied_weight_warnings(prepared.model)
     if prepared.model.training:
@@ -292,8 +299,9 @@ def build_verdict(
     )
     if timings is not None:
         timings[Phase.export] = time.perf_counter() - capture_start
-    # exceptions is normally one entry per strategy tried; a translation failure (torch.export
-    # itself succeeded) has none of those, so it falls back to the single exception it raised.
+    # exceptions normally has one entry for each strategy that was tried. A translation failure
+    # (torch.export itself succeeded) has none of these. It then uses the one exception that it
+    # raised.
     capture_exceptions = result.exceptions or (
         [(result.capture_strategy or "translation", result.exception)]
         if result.exception is not None
@@ -327,8 +335,9 @@ def build_verdict(
         exc = result.exception
         message = f"{type(exc).__name__}: {exc}" if exc is not None else "export failed"
         verdict.reason = message.splitlines()[0]
-        # Mined from every strategy's message when there were several (strict=True's message
-        # is often generic and would lose whatever strict=False said about the real op).
+        # Taken from the message of each strategy, if there were several. The message of
+        # strict=True is often generic. It would lose what strict=False said about the real
+        # operation.
         messages = [str(e) for _, e in result.exceptions] if result.exceptions else [message]
         verdict.unsupported_ops = sorted({op for m in messages for op in _ATEN_OP.findall(m)})
         return verdict
@@ -399,22 +408,23 @@ def check(
     cache: bool = True,
     _memo_key: str | None = None,
 ) -> ExportVerdict:
-    """Export in memory, verify, and return the verdict. Writes nothing to disk.
+    """Export in memory, verify, and return the verdict. It writes nothing to disk.
 
-    A CLEAN or DEGRADED result is also kept in the in-process export memo (core/memo.py), for
-    export() and app_for() to reuse; check() itself never reads it, since it is the audit gate.
-    `cache=False` keeps nothing.
+    Downshift also keeps a CLEAN or DEGRADED result in the in-process export memo
+    (core/memo.py). export() and app_for() can reuse it. check() itself never reads the memo,
+    because it is the audit gate. `cache=False` keeps nothing.
 
-    fp16=True casts a deep copy of `model` to float16 and leaves the caller's model and
-    its parameters untouched; `example_inputs`, if given, are cast on the copies used for
-    export, not the tensors the caller passed in. The model IS still switched to eval()
-    in place if it was in training mode (see the "training mode" warning on the returned
-    verdict) - with fp16=True that happens to the copy, so the caller's model keeps
-    whichever mode it was already in.
+    fp16=True casts a deep copy of `model` to float16. The model of the caller and its
+    parameters do not change. If you give `example_inputs`, downshift casts the copies that it
+    uses for the export. It does not cast the tensors that the caller passed in. Downshift
+    still switches the model to eval() in place if it was in training mode (see the "training
+    mode" warning on the returned verdict). With fp16=True, this happens to the copy. The model
+    of the caller then keeps the mode that it already had.
 
-    atol/rtol default to None, meaning "pick by the model's floating dtype" (see
-    verify.default_tolerances). seed makes the verification samples reproducible. vary
-    overrides the adapter's own vary_fn; see prepare_model, which also says what axis_max does.
+    atol and rtol are None by default. This means "select by the floating dtype of the model"
+    (see verify.default_tolerances). seed makes the verification samples reproducible. vary
+    replaces the own vary_fn of the adapter. See prepare_model, which also says what axis_max
+    does.
     """
     key = None
     if cache and verify_numerics:
@@ -451,8 +461,8 @@ def check(
 
 
 def unverified_verdict(prepared: Prepared, reason: str, output_axes: list[str]) -> ExportVerdict:
-    """The verdict for a model whose export was skipped (`--backend torch`): served eagerly,
-    with the served axis bounds and no numerics."""
+    """The verdict for a model whose export was skipped (`--backend torch`). Downshift serves it
+    eagerly, with the served axis bounds and without numerics."""
     return ExportVerdict(
         status=Status.UNVERIFIED,
         model_family=prepared.family,

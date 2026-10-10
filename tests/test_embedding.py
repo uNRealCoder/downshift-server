@@ -1,6 +1,7 @@
-"""Embedding models from a downloaded sentence-transformers repo: the recipe is read from the
-repo's own files, applied inside the exported graph, and matches sentence-transformers'
-definition (masked pooling, then L2 normalise). Fixtures are tiny random-weight models."""
+"""Embedding models from a downloaded sentence-transformers repo. Downshift reads the recipe
+from the own files of the repo and applies it inside the exported graph. The result matches the
+definition of sentence-transformers (masked pooling, then L2 normalization). The fixtures are
+small models with random weights."""
 
 import json
 import re
@@ -128,7 +129,7 @@ def test_a_dense_module_is_refused_and_none_is_the_way_out(tmp_path):
 
     with pytest.raises(LoadError, match="Dense.*--pooling none"):
         load_model(LoadSpec(path))
-    with pytest.raises(LoadError, match="Dense"):  # naming a pooling does not skip the check
+    with pytest.raises(LoadError, match="Dense"):  # a named pooling does not skip the check
         load_model(LoadSpec(path, pooling="mean"))
 
     assert load_model(LoadSpec(path, pooling="none")).model is not None
@@ -146,7 +147,7 @@ def test_embedding_serves_on_onnx_runtime_with_the_pooling_in_the_graph(state):
     assert len(output.shape) == 2  # [batch, dim], not [batch, seq, dim]
     assert state.embedding is not None
     assert state.embedding.describe() == "mean pooling, L2-normalised"
-    assert state.notes == []  # informational, so not dressed up as a warning
+    assert state.notes == []  # informational, so it is not shown as a warning
 
 
 def test_served_embeddings_match_the_reference_definition(client, repo):
@@ -168,8 +169,8 @@ def test_a_row_does_not_depend_on_what_it_is_batched_with(client):
 
 
 def test_the_authors_max_seq_length_wins_over_the_position_embeddings(client):
-    """Position embeddings allow 32; the repo says it was trained at 16, so 16 tokens is the
-    most a row may have: one more is refused rather than silently cut."""
+    """The position embeddings allow 32. The repo says that it was trained at 16. A row can
+    therefore have at most 16 tokens. One more token is refused and not cut without a message."""
     fifteen = " ".join(["hello"] * 14)  # + [CLS] [SEP] = 16: fits
     seventeen = " ".join(["hello"] * 15)  # 17: one over
 
@@ -352,17 +353,17 @@ def _cli(*args: str):
 
 @pytest.fixture(scope="module")
 def onnx_path(state, tmp_path_factory) -> str:
-    """repo's model, already exported to a standalone .onnx - the counterpart to serving
-    repo directly, for the --tokenizer-from tests below."""
+    """The model of the repo, already exported to a standalone .onnx file. It is the equivalent
+    of serving the repo directly, for the --tokenizer-from tests below."""
     path = tmp_path_factory.mktemp("onnx") / "model.onnx"
     path.write_bytes(state.verdict.onnx_bytes)
     return str(path)
 
 
 def _stub_uvicorn_server(monkeypatch) -> dict:
-    """Single-worker `serve` binds via uvicorn.Server directly; stand in for it so the CLI
-    test runs the real loader thread without opening a socket. Local, minimal copy of
-    test_cli.py's _fake_uvicorn_server - kept here rather than imported across test modules."""
+    """A single-worker `serve` binds through uvicorn.Server directly. This stand-in lets the CLI
+    test run the real loader thread without a socket. It is a small local copy of
+    _fake_uvicorn_server of test_cli.py. It is here and not imported across test modules."""
     import uvicorn
 
     captured: dict = {}
@@ -403,7 +404,7 @@ def test_serve_tokenizer_from_attaches_text_input_end_to_end(monkeypatch, onnx_p
     serving = captured["app"].state.serving
     assert serving.hf_source == repo
     assert serving.text is not None
-    assert serving.verdict.status == "UNVERIFIED"  # no --reference given: numerics untouched
+    assert serving.verdict.status == "UNVERIFIED"  # no --reference given: no numerics check
 
 
 @pytest.mark.needs_torch_26
@@ -429,7 +430,7 @@ def test_check_takes_the_pooling_flags(repo):
 def test_check_rejects_an_unknown_pooling(repo):
     result = _cli("check", repo, "--pooling", "median")
 
-    assert result.exit_code == 2  # typer's own usage error
+    assert result.exit_code == 2  # the own usage error of typer
     assert "median" in result.output
 
 
@@ -447,7 +448,7 @@ def test_check_reports_an_unusable_recipe_as_a_usage_error(tmp_path):
 def test_the_flags_are_on_every_command_that_loads_a_model(command):
     result = _cli(command, "--help")
 
-    plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)  # rich colours the option names
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)  # rich colors the option names
     assert "--pooling" in plain
     assert "--no-normalize" in plain
 
@@ -485,7 +486,7 @@ def test_onnx_artifact_worker_still_takes_text_and_reports_the_recipe(
         verdict=state.verdict.to_dict(),
         input_names=list(state.input_names),
         onnx_path=str(onnx_path),
-        kind=state.source_kind,  # what the parent's serve_cmd ships
+        kind=state.source_kind,  # what serve_cmd of the parent sends
     )
 
     worker = _rebuilt(monkeypatch, args)
@@ -539,7 +540,10 @@ def test_the_recipe_reads_named_prompts_and_the_default_prompt_name(tmp_path):
     recipe = read_recipe(Path(path))
 
     assert recipe is not None
-    assert recipe.prompts == {"query": "Q: ", "document": ""}  # non-string values are dropped
+    assert recipe.prompts == {
+        "query": "Q: ",
+        "document": "",
+    }  # values that are not strings are dropped
     assert recipe.default_prompt == "query"
 
 

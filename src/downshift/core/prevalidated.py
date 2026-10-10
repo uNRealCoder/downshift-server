@@ -1,7 +1,7 @@
-"""Intake for a .onnx file someone else produced (Olive, a notebook, whatever).
+"""Intake for a .onnx file that someone else made (Olive, a notebook, or other tools).
 
-No reference model -> UNVERIFIED. We serve it, we just say we never checked it.
-With --reference -> the normal verify path, exactly as for a fresh export.
+No reference model: the verdict is UNVERIFIED. Downshift serves the file and says that it never
+checked it. With --reference: the normal verification path, the same as for a new export.
 """
 
 import time
@@ -47,8 +47,8 @@ def intake(
     axis_max: dict[str, int] | None = None,
     timings: dict[str, float] | None = None,
 ) -> ExportVerdict:
-    """`timings`, when given, gets Phase.verify added to it (there is no export phase for a
-    pre-built ONNX graph); see build_verdict's docstring."""
+    """If you give `timings`, downshift adds Phase.verify to it. A pre-built ONNX graph has no
+    export phase. See the docstring of build_verdict."""
     onnx_path = Path(onnx_path)
     opset, op_types, input_names = _graph_summary(onnx_path)
 

@@ -1,6 +1,6 @@
-"""Small pieces added in the 0.4.0 review round: axis-bound and ServeArgs JSON hand-offs, RoBERTa
-position limits, the load-phase reporter, stderr capture off the main thread, the new limit
-defaults and the plain-text banner."""
+"""Small parts that we added in the 0.4.0 review round: the JSON handoffs of axis bounds and
+ServeArgs, the RoBERTa position limits, the load-phase reporter, the capture of stderr off the
+main thread, the new limit defaults and the plain-text banner."""
 
 import io
 import json
@@ -182,8 +182,8 @@ def test_report_updates_the_current_progress():
 
 @pytest.fixture
 def stderr_seen_by_export(monkeypatch) -> list:
-    """torch.export.export replaced by a spy that records sys.stderr and fails, so capture()
-    runs its stderr handling without paying for a real export."""
+    """torch.export.export is replaced by a spy that records sys.stderr and fails. capture() then
+    runs its stderr handling without the cost of a real export."""
     seen: list = []
 
     def spy(*args, **kwargs):
@@ -250,8 +250,9 @@ def test_the_body_and_timeout_defaults():
 
 
 def _serve_options_in_a_child(**env: str) -> dict:
-    """ServeOptions() as a fresh interpreter sees it: its defaults are read from settings when
-    downshift.serve.options is first imported, so an in-process reload cannot show them."""
+    """ServeOptions() as a new interpreter sees it. Downshift reads its defaults from settings
+    when downshift.serve.options is first imported. A reload in the same process cannot show
+    them."""
     code = (
         "import json; from downshift.serve.options import ServeOptions; o = ServeOptions(); "
         "print(json.dumps({'max_body_bytes': o.max_body_bytes, 'request_timeout': o.request_timeout}))"

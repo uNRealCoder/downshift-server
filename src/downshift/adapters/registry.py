@@ -1,7 +1,7 @@
-"""Adapter lookup: built-ins, anything registered under the `downshift.adapters` entry-point
-group, and one-off adapters loaded straight from a user's .py file. Adapters whose optional
-dependency is missing, or whose family hasn't been imported by anything yet, are skipped
-silently.
+"""Adapter lookup: the built-in adapters, all adapters that are registered under the
+`downshift.adapters` entry-point group, and one-off adapters that downshift loads directly from
+a .py file of the user. Downshift skips an adapter without a message if its optional dependency
+is missing, or if nothing has imported its family yet.
 """
 
 import importlib.util
@@ -19,19 +19,20 @@ from downshift.adapters.base import Adapter, Family
 ENTRY_POINT_GROUP = "downshift.adapters"
 
 
-# Most specific first; generic last so it only wins when nothing else matches. Each spec names
-# an adapter class, which the registry instantiates. The third element is the module whose
-# presence in sys.modules means the family is actually in play (so discovery never imports
-# transformers/torch_geometric on their behalf); None for generic, which has no optional
-# dependency to gate on.
+# The most specific first. generic is last, so it wins only if nothing else matches. Each spec
+# names an adapter class, and the registry creates an instance of it. The third element is the
+# module whose presence in sys.modules means that the family is in use. (Discovery therefore
+# never imports transformers or torch_geometric for them.) It is None for generic, which has no
+# optional dependency to gate on.
 _BUILTIN_SPECS = (
     (Family.hf, "downshift.adapters.hf:HFAdapter", "transformers"),
     (Family.pyg, "downshift.adapters.pyg:PyGAdapter", "torch_geometric"),
     (Family.generic, "downshift.adapters.generic:GenericAdapter", None),
 )
 
-# available() keyed by which built-ins are in play; a plugin's own imports (or a custom
-# adapter's) can only add entries, never remove one already cached for this process.
+# The cache of available(). The key is the set of built-in adapters that are in use. The imports
+# of a plugin (or of a custom adapter) can only add entries. They never remove an entry that is
+# already in the cache of this process.
 _cache: dict[frozenset[str], dict[str, Adapter]] = {}
 
 
@@ -50,17 +51,18 @@ def _load_spec(spec: str) -> Adapter | None:
 
 
 def load_from_file(path_str: str, attr: str = "ADAPTER") -> Adapter:
-    """Load a user's adapter from a standalone .py file, outside any installed package.
+    """Load the adapter of a user from a standalone .py file, outside all installed packages.
 
-    `attr` names the adapter class, instantiated with no args (`ADAPTER = MyAdapter`, or
-    `--adapter file.py:MyAdapter`), or an already-built `Adapter`-shaped instance.
+    `attr` names the adapter class, and downshift creates an instance with no arguments
+    (`ADAPTER = MyAdapter`, or `--adapter file.py:MyAdapter`). It can also name an instance of
+    the right shape for an `Adapter` that is already built.
     """
     path = Path(path_str)
     if not path.is_file():
         raise LoadError(f"{path} does not exist")
     spec = importlib.util.spec_from_file_location(f"downshift._custom_adapter_{path.stem}", path)
     if spec is None or spec.loader is None:
-        raise LoadError(f"can't import {path} as a Python module")
+        raise LoadError(f"cannot import {path} as a Python module")
     module = importlib.util.module_from_spec(spec)
     try:
         spec.loader.exec_module(module)
@@ -75,8 +77,8 @@ def load_from_file(path_str: str, attr: str = "ADAPTER") -> Adapter:
     obj = _instantiate(obj)
     if not isinstance(obj, Adapter):
         raise LoadError(
-            f"{path}:{attr} is a {type(obj).__name__}, not an Adapter — it needs `name`, "
-            "matches(), example_inputs(), and prepare(); see GenericAdapter for "
+            f"{path}:{attr} is a {type(obj).__name__} and not an Adapter. It needs `name`, "
+            "matches(), example_inputs() and prepare(). See GenericAdapter for "
             "the shape to implement."
         )
     return obj
@@ -100,7 +102,7 @@ def available() -> dict[str, Adapter]:
         builtin = _load_spec(spec)
         if builtin is not None:
             adapters.setdefault(builtin.name, builtin)
-    # Generic must be tried last regardless of registration order.
+    # generic must be tried last, for all orders of registration.
     generic = adapters.pop(Family.generic, None)
     if generic is not None:
         adapters[Family.generic] = generic
@@ -110,8 +112,8 @@ def available() -> dict[str, Adapter]:
 
 def get(name: str) -> Adapter:
     """Load exactly one adapter by name, without pulling in every other family's import."""
-    # path/to/adapter.py[:attr]. Split on ".py:", not the last ":", so a Windows drive
-    # letter's colon (`C:\...`) is never taken for the path:attr separator.
+    # path/to/adapter.py[:attr]. Split on ".py:" and not on the last ":". The colon of a Windows
+    # drive letter (`C:\...`) is then never the separator between the path and attr.
     path, sep, attr = name.partition(".py:")
     if sep:
         return load_from_file(path + ".py", attr)

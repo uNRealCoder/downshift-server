@@ -1,8 +1,8 @@
-"""Numerical verification. Mandatory: an export isn't a success until this passes.
+"""Numerical verification. It is mandatory. An export is not a success until this passes.
 
-Runs K samples through the torch model and the ONNX graph, varying dynamic dims so at
-least some samples have shapes the exporter never saw. That's what catches a graph that
-traced fine but froze a shape or specialised a data-dependent branch.
+It runs K samples through the torch model and through the ONNX graph. It varies the dynamic
+dimensions, so at least some samples have shapes that the exporter did not see. This finds a
+graph that traced without an error but froze a shape or specialized a data-dependent branch.
 """
 
 import logging
@@ -22,11 +22,11 @@ report_logger = logging.getLogger(REPORT_LOGGER)
 
 
 class OnnxRuntimeError(RuntimeError):
-    """ONNX Runtime itself failed: it couldn't load the graph or couldn't run a sample.
+    """ONNX Runtime itself failed. It could not load the graph, or it could not run a sample.
 
-    Distinct from a numeric mismatch (still a NumericsReport failure) and from the torch
-    model raising (a ValueError, since that's a caller-supplied-shape problem, not an
-    ONNX Runtime one).
+    This is different from a numeric mismatch (which is still a failure in a NumericsReport). It
+    is also different from an error that the torch model raises (a ValueError, because it is a
+    problem with a shape that the caller supplied and not a problem of ONNX Runtime).
     """
 
 
@@ -48,15 +48,15 @@ class NumericsReport:
     max_abs_err: float
     max_rel_err: float
     failures: int
-    # None when the baseline sample itself failed (shape generalization was never evaluated),
-    # False when the baseline passes but a varied shape fails, True otherwise.
+    # None if the baseline sample itself failed (downshift did not evaluate the shape
+    # generalization). False if the baseline passes but a varied shape fails. True otherwise.
     shape_generalization: bool | None
     tolerance_abs: float
     tolerance_rel: float
     tolerance_dtype: str = (
         "float32"  # the dtype whose default (tolerance_abs, tolerance_rel) applied
     )
-    tolerance_overridden: bool = False  # --atol/--rtol picked the values, not tolerance_dtype
+    tolerance_overridden: bool = False  # --atol or --rtol set the values, not tolerance_dtype
     baseline_failed: bool = False
     worst: WorstMismatch | None = None
     sample_shapes: list[list[tuple[int, ...]]] = field(default_factory=list)
@@ -111,12 +111,12 @@ class NumericsReport:
 
 
 def default_tolerances(model: torch.nn.Module) -> tuple[str, float, float]:
-    """(dtype name, atol, rtol) picked by the narrowest floating dtype present.
+    """(dtype name, atol, rtol), selected by the narrowest floating dtype that is present.
 
-    bfloat16 or float16 anywhere in the parameters wins first, since their tolerances are
-    the loosest and a model that mixes them with float32 is only as precise as its worst
-    dtype. float64 wins only when it's the *only* floating dtype - a model that mixes
-    float32 and float64 is still bound by float32's precision. float32 is the fallback.
+    If bfloat16 or float16 is in the parameters, it wins first. Their tolerances are the
+    loosest. A model that mixes them with float32 has only the precision of its worst dtype.
+    float64 wins only if it is the *only* floating dtype. A model that mixes float32 and float64
+    still has the precision of float32. float32 is the fallback.
     """
     dtypes = {p.dtype for p in model.parameters() if p.is_floating_point()}
     if torch.bfloat16 in dtypes:
@@ -158,10 +158,10 @@ _ort_logging_quieted = False
 
 
 def quiet_ort_logging() -> None:
-    """Silence ONNX Runtime's C++ logger (it otherwise prints every client-caused failure to
-    stderr, bypassing our own logging). Only takes effect before the first session in the
-    process is built (P6), so every session-creating call site calls this first; safe to call
-    more than once.
+    """Silence the C++ logger of ONNX Runtime. Otherwise, it prints each failure that a client
+    caused to stderr, and it bypasses the logging of downshift. It has an effect only before
+    the first session in the process is built (P6). Each place that creates a session
+    therefore calls this first. You can call it more than one time.
     """
     global _ort_logging_quieted
     if _ort_logging_quieted:
@@ -175,8 +175,8 @@ def new_session(
     providers: list[str] | None = None,
     options: ort.SessionOptions | None = None,
 ) -> ort.InferenceSession:
-    """The one place an InferenceSession is built (CPU unless `providers` says otherwise), so
-    ORT's logger is always quieted first (P6)."""
+    """The one place that builds an InferenceSession (CPU, unless `providers` says otherwise).
+    The logger of ORT is therefore always quiet first (P6)."""
     quiet_ort_logging()
     source = model if isinstance(model, bytes) else str(model)
     return ort.InferenceSession(
@@ -191,11 +191,12 @@ def _to_session(onnx_model: bytes | str | Path | ort.InferenceSession) -> ort.In
 
 
 def load_session(onnx_model: bytes | str | Path | ort.InferenceSession) -> ort.InferenceSession:
-    """The CPU session verify() runs the samples on; OnnxRuntimeError when ORT can't load the
-    graph. The caller keeps it so the server can reuse it instead of building a second one."""
+    """The CPU session that verify() runs the samples on. It raises OnnxRuntimeError if ORT
+    cannot load the graph. The caller keeps it. The server can then reuse it and does not need
+    to build a second one."""
     try:
         return _to_session(onnx_model)
-    except Exception as exc:  # noqa: BLE001 - reported as a verdict, not a crash
+    except Exception as exc:  # noqa: BLE001 - reported as a verdict and not as a crash
         raise OnnxRuntimeError(
             f"onnxruntime could not load the exported graph: {first_line(exc)}"
         ) from exc
@@ -227,16 +228,16 @@ def _bounds_text(dynamic_shapes: tuple | None) -> str | None:
 
 
 def _to_numpy(tensor: torch.Tensor) -> np.ndarray:
-    # bfloat16 (and, for safety, float16) tensors have no faithful numpy dtype; torch's own
-    # .numpy() raises on bfloat16, so widen floating outputs to float32 first. Integer/bool
-    # outputs are left alone.
+    # bfloat16 tensors (and, for safety, float16 tensors) have no faithful numpy dtype. The own
+    # .numpy() of torch raises an error on bfloat16. Widen floating outputs to float32 first.
+    # Downshift does not change integer and bool outputs.
     if tensor.is_floating_point():
         return tensor.detach().float().numpy()
     return tensor.detach().numpy()
 
 
-# (output index, unravelled element index, expected, got, abs_err) for the argmax element
-# of one output; abs_err is dropped before it reaches WorstMismatch, it only ranks candidates.
+# (output index, unravelled element index, expected, got, abs_err) for the argmax element of one
+# output. Downshift drops abs_err before it reaches WorstMismatch. It only ranks the candidates.
 WorstCandidate = tuple[int, tuple[int, ...], float, float, float]
 
 
@@ -247,14 +248,16 @@ def _compare_sample(
     rtol: float,
     sample_index: int,
 ) -> tuple[float, float, bool, str | None, WorstCandidate | None]:
-    """Per-element allclose rule for one sample: (max_abs_err, max_rel_err, failed, note, worst).
+    """The allclose rule for each element of one sample: (max_abs_err, max_rel_err, failed, note,
+    worst).
 
-    A sample fails if any single element has abs_err > atol + rtol * |expected|, using
-    np.isclose(equal_nan=False) semantics: NaN vs NaN is a mismatch, same-sign inf vs inf
-    matches. Shape/count mismatches between the torch and ORT outputs also fail the sample,
-    with a human-readable note, instead of raising. `worst` is the argmax-abs-error element
-    across every output that was actually comparable (None when none were, e.g. a shape or
-    count mismatch on every output).
+    A sample fails if one element has abs_err > atol + rtol * |expected|. The rule uses the
+    semantics of np.isclose(equal_nan=False). NaN against NaN is a mismatch. An inf against an
+    inf of the same sign matches. A mismatch in shape or count between the torch outputs and
+    the ORT outputs also fails the sample. Downshift gives a note that people can read, and it
+    does not raise an error. `worst` is the element with the largest absolute error across all
+    outputs that were comparable. It is None if none were comparable, for example a mismatch in
+    shape or count on each output.
     """
     note: str | None
     if len(torch_outs) != len(ort_outs):
@@ -342,7 +345,7 @@ def verify(
     worst: WorstMismatch | None = None
     worst_abs = -1.0
 
-    # Seed inside a forked RNG so callers' global random state is untouched afterwards.
+    # Seed inside a forked RNG. The global random state of the caller then does not change.
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(seed)
         for i in range(k):
@@ -363,7 +366,7 @@ def verify(
             try:
                 with torch.inference_mode():
                     raw_output = model(*sample)
-            except Exception as exc:  # noqa: BLE001 - reported as a usage error, not a crash
+            except Exception as exc:  # noqa: BLE001 - reported as a usage error and not as a crash
                 shapes = [
                     tuple(t.shape) if isinstance(t, torch.Tensor) else type(t).__name__
                     for t in sample
@@ -371,27 +374,27 @@ def verify(
                 if i == 0:
                     raise ValueError(
                         f"model raised on sample {i} (input shapes {shapes}): "
-                        f"{first_line(exc)}. Try --dynamic or --inputs if this shape isn't "
-                        "one the model supports."
+                        f"{first_line(exc)}. Try --dynamic or --inputs if the model does not "
+                        "support this shape."
                     ) from exc
                 bounds = _bounds_text(dynamic_shapes)
                 drawn_from = f", drawn from bounds {bounds}" if bounds else ""
                 raise ValueError(
                     f"model raised on sample {i} (input shapes {shapes}{drawn_from}), "
-                    f"generated by downshift's sampler: {first_line(exc)}. If the model "
-                    "doesn't support this shape, pass --vary or a custom adapter to control "
-                    "how verification samples are generated."
+                    f"generated by the sampler of downshift: {first_line(exc)}. If the model "
+                    "does not support this shape, pass --vary or a custom adapter to control "
+                    "how downshift generates the verification samples."
                 ) from exc
             torch_outs = as_tensor_list(raw_output)
             output_shapes.append([tuple(t.shape) for t in torch_outs])
 
             try:
-                # A bfloat16 input tensor has no numpy equivalent either; letting that
-                # TypeError land here (alongside session.run failures) is fine, since
-                # onnxruntime would reject the graph for the same reason anyway.
+                # A bfloat16 input tensor also has no numpy equivalent. This TypeError can
+                # arrive here (with the session.run failures). This is acceptable, because
+                # onnxruntime would reject the graph for the same reason.
                 feeds = {name: t.numpy() for name, t in zip(input_names, sample, strict=True)}
                 ort_outs = session.run(None, feeds)
-            except Exception as exc:  # noqa: BLE001 - reported as a verdict, not a crash
+            except Exception as exc:  # noqa: BLE001 - reported as a verdict and not as a crash
                 shapes = [tuple(t.shape) for t in sample if isinstance(t, torch.Tensor)]
                 raise OnnxRuntimeError(
                     f"onnxruntime failed on sample {i} (input shapes {shapes}): {first_line(exc)}"

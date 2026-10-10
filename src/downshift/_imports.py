@@ -1,6 +1,7 @@
-"""Import-spec resolution: stdlib only, so core/adapters/serve/middleware don't have to
-import downshift.loading (the CLI-argument resolver, which imports torch) just for this.
-Same pattern as downshift.sources for source kinds; loading.py re-exports these names.
+"""Import-spec resolution. This module uses only the standard library. core, adapters, serve and
+middleware therefore do not need to import downshift.loading (the resolver for CLI arguments,
+which imports torch) for this. It is the same pattern as downshift.sources for the source kinds.
+loading.py re-exports these names.
 """
 
 import re
@@ -31,7 +32,7 @@ def import_object(spec: str) -> Any:
                 f". An import spec takes a module name, not a file name: "
                 f"{module_name.removesuffix('.py')}:{attr}"
             )
-        raise LoadError(f"can't import {module_name!r}: {exc}{hint}") from exc
+        raise LoadError(f"cannot import {module_name!r}: {exc}{hint}") from exc
     try:
         return getattr(module, attr)
     except AttributeError as exc:

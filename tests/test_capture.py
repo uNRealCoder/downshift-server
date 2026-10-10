@@ -1,4 +1,4 @@
-"""capture(): the ONNX-translation failure paths, which never happen on the happy fixtures."""
+"""capture(): the failure paths of the ONNX translation. They never happen on the fixtures that work."""
 
 from downshift.core import capture as capture_mod
 from downshift.core.capture import capture
@@ -18,7 +18,7 @@ def test_op_types_is_a_count_descending_histogram():
     result = capture(clean_mlp.make_model(), clean_mlp.make_inputs())
 
     assert result.success is True
-    # Older exporters (torch 2.5) also emit a Transpose per weight ahead of each Gemm.
+    # Older exporters (torch 2.5) also emit a Transpose for each weight before each Gemm.
     assert result.op_types["Gemm"] == 2
     assert result.op_types["Relu"] == 1
     counts = list(result.op_types.values())

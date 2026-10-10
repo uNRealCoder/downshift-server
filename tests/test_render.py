@@ -1,7 +1,9 @@
-"""Smoke tests for CLI rendering: every table/banner branch gets executed at least once.
+"""Smoke tests for the CLI rendering. Each branch of the tables and the banner runs at least
+one time.
 
-Text content is deliberately not asserted in detail (see tests/test_cli.py's docstring);
-these tests just exercise the branches with constructed verdicts and serving states.
+The tests do not assert the text content in detail, by design (see the docstring of
+tests/test_cli.py). They only run the branches with verdicts and serving states that the tests
+construct.
 """
 
 import logging
@@ -21,8 +23,8 @@ from downshift.serve.schemas import OutputEncoding
 
 @pytest.fixture(autouse=True)
 def _capture_reports(caplog):
-    """Reports go out as INFO on downshift.report and warnings/errors on downshift.cli, which
-    only reach a handler once setup_logging has run; caplog stands in for that sink."""
+    """Reports go out as INFO on downshift.report. Warnings and errors go out on downshift.cli.
+    They reach a handler only after setup_logging has run. caplog stands in for that sink."""
     caplog.set_level(logging.INFO, logger="downshift.report")
     caplog.set_level(logging.DEBUG, logger="downshift.cli")
 

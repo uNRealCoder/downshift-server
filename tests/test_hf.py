@@ -1,4 +1,4 @@
-"""HF adapter through the full verdict pipeline on a tiny random BERT."""
+"""The HF adapter in the full verdict pipeline, on a small BERT with random weights."""
 
 import pytest
 
@@ -42,8 +42,8 @@ def test_bert_without_inputs_uses_config_derived_inputs():
 
 @pytest.mark.needs_torch_26
 def test_bert_at_max_position_embeddings_is_clean():
-    """The example sits at the model's own sequence-length ceiling; the sampler must not
-    push a varied sample past it (that used to be an exit-4 crash, not a verdict)."""
+    """The example is at the own sequence-length ceiling of the model. The sampler must not push
+    a varied sample above it. (This was an exit-4 crash and not a verdict.)"""
     model = tiny_bert.make_model()  # max_position_embeddings=64
     inputs = tiny_bert.make_inputs(batch=1, seq=64)
 
@@ -167,7 +167,7 @@ def test_a_pickle_only_repo_does_not_run_its_payload(tmp_path):
 
     try:
         load_model(LoadSpec(str(repo)))
-    except Exception:  # noqa: BLE001 - refusing or failing to load are both fine
+    except Exception:  # noqa: BLE001 - a refusal and a failure to load are both acceptable
         pass
 
     assert not marker.exists()
@@ -214,7 +214,8 @@ def test_a_verify_sample_has_leading_mask_zeros_under_left_padding(tmp_path):
     _, prepared = _decoder_prepared(left)
     masks = [prepared.vary_fn(i)[1] for i in range(2, 12)]  # type: ignore[misc]
     assert any(m[:, 0].eq(0).any() for m in masks)
-    assert all(m[:, -1].eq(1).all() for m in masks)  # an attended token always ends the row
+    # An attended token is always at the end of the row.
+    assert all(m[:, -1].eq(1).all() for m in masks)
 
     _, prepared = _decoder_prepared(right)
     masks = [prepared.vary_fn(i)[1] for i in range(2, 12)]  # type: ignore[misc]
@@ -240,7 +241,7 @@ def test_the_torch_model_is_released_after_a_clean_onnx_verdict(tmp_path):
     assert ref() is None
     assert loaded.model is None
     assert state.verdict.prepared is None
-    assert state.axis_bounds  # read off the Prepared before it was dropped
+    assert state.axis_bounds  # read from the Prepared before downshift dropped it
     assert state.verdict.numerics is not None
 
 

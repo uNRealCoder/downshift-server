@@ -1,7 +1,7 @@
 """Hazard: custom autograd.Function with no symbolic override.
 
-On torch 2.14 torch.export traces straight through forward() (clamp and multiply are both
-traceable), so this comes back CLEAN.
+On torch 2.14, torch.export traces directly through forward() (clamp and multiply can both be
+traced). The verdict is therefore CLEAN.
 """
 
 import torch

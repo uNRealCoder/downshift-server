@@ -1,15 +1,16 @@
-"""What `GET /schema` answers: the exact input format a client has to send.
+"""What `GET /schema` answers: the exact input format that a client must send.
 
-`/metadata` reports how the model was *judged* -- the full export verdict, boot timings,
-warmup stats -- which is the operator's view. This module answers the one question a caller
-has before their first request: what goes in the body, with what dtypes and shapes, and a
-worked example they can paste. Everything here is derived from the backend's own declared
-IO, so it describes the graph that is actually running, not what the source model promised.
+`/metadata` reports how downshift *judged* the model. It shows the full export verdict, the boot
+timings and the warmup statistics. This is the view of the operator. This module answers the one
+question that a caller has before the first request: what goes in the body, with which dtypes
+and shapes, and a worked example that the caller can paste. All of it comes from the IO that
+the backend declares. It therefore describes the graph that is running, and not what the source
+model promised.
 
-The `source` block repeats, per server, what `downshift` accepts at all: a model already
-downloaded onto this machine -- an ONNX file, a PyTorch checkpoint, or a Hugging Face repo
-directory holding a config.json -- or a module importable in this process. Nothing is ever
-fetched, so a client reading this knows the server is pinned to that one local artifact.
+The `source` block repeats, for each server, what `downshift` accepts: a model that is already
+downloaded to this machine (an ONNX file, a PyTorch checkpoint, or a Hugging Face repo
+directory that has a config.json), or a module that this process can import. Downshift fetches
+nothing. A client that reads this knows that the server uses only that one local artifact.
 """
 
 import math
@@ -37,13 +38,15 @@ from downshift.serve.schemas import (
 )
 from downshift.sources import HF_REPO_DIR, SOURCE_KIND_HELP, UNKNOWN_SOURCE, display_source
 
-# An inlined example stays a thing you can read and paste. Past this many elements across
-# all inputs it is dropped and the per-input `example_shape` is left to speak for itself.
+# An example in the body stays short enough to read and paste. Above this number of elements
+# across all inputs, downshift drops it. The `example_shape` of each input then gives the
+# information.
 MAX_EXAMPLE_ELEMENTS = 256
 
-# torch.export names the axes it made dynamic itself "s0", "s77", "u3"; ONNX Runtime then
-# reports those verbatim. They carry no meaning outside the tracer, so this endpoint says
-# "dynamic" instead and keeps only the names an adapter actually chose ("batch", "seq").
+# torch.export gives the names "s0", "s77" and "u3" to the axes that it made dynamic itself.
+# ONNX Runtime then reports them as they are. They have no meaning outside the tracer. This
+# endpoint therefore says "dynamic" and keeps only the names that an adapter chose ("batch",
+# "seq").
 _ANONYMOUS_AXIS = re.compile(r"^[su]\d+$")
 DYNAMIC_AXIS = "dynamic"
 
@@ -63,8 +66,9 @@ INPUT_FORMATS = {
 
 
 def _axis(dim: Any) -> int | str:
-    """One axis as the client should read it: the fixed size, a meaningful dynamic-axis
-    name, or the plain word "dynamic" for an unnamed or tracer-generated one."""
+    """One axis as the client must read it: the fixed size, a dynamic-axis name that has a
+    meaning, or the plain word "dynamic" for an axis without a name or an axis that the tracer
+    named."""
     if isinstance(dim, int) and dim > 0:
         return dim
     if isinstance(dim, str) and dim and not _ANONYMOUS_AXIS.match(dim):
@@ -73,10 +77,10 @@ def _axis(dim: Any) -> int | str:
 
 
 def _fill_value(name: str, dtype: str | None) -> Any:
-    """The single value an example tensor is filled with.
+    """The one value that fills an example tensor.
 
-    Zero for everything, except an attention mask, where zero means "attend to nothing" and
-    would hand back NaNs from a request that is otherwise perfectly well-formed.
+    It is zero for everything except an attention mask. For a mask, zero means "attend to
+    nothing". It would return NaN from a request that is otherwise correct.
     """
     if name.endswith("_mask"):
         return 1
@@ -98,12 +102,13 @@ def _nested(shape: list[int], value: Any) -> Any:
 def _tensor_schema(
     spec: IOSpec, *, required: bool | None, axis_info: dict[int, DimBound] | None = None
 ) -> TensorSchema:
-    """One input or output, with the backend's dtype name normalised to the one a client
-    would put in a typed/base64 body ("tensor(float)" -> "float32").
+    """One input or output. The dtype name of the backend is normalized to the name that a
+    client puts in a typed or base64 body ("tensor(float)" -> "float32").
 
-    `axis_info` (U2), when given, is the adapter's own axis names and (min, max) bounds
-    (state.axis_bounds): the ONNX graph has lost the names (torch.export's own "s0"/"s1"),
-    so a bounded axis reports the adapter's name and its bound instead of "dynamic".
+    `axis_info` (U2), if you give it, has the own axis names and the (min, max) bounds of the
+    adapter (state.axis_bounds). The ONNX graph has lost the names (the own "s0" and "s1" of
+    torch.export). A bounded axis therefore reports the name of the adapter and its bound, and
+    not "dynamic".
     """
     raw = spec.shape
     shape: list[int | str] | None = None
@@ -126,9 +131,9 @@ def _tensor_schema(
 
 
 def _example_inputs(inputs: list[TensorSchema]) -> dict[str, Any] | None:
-    """A complete, well-formed `inputs` body, or None when it would be too big to read.
+    """A complete and correct `inputs` body. None if it would be too large to read.
 
-    The values are filler; only the names, dtypes and shapes are meant to be copied.
+    The values are filler. Copy only the names, dtypes and shapes.
     """
     sized: list[tuple[TensorSchema, list[int]]] = []
     for i in inputs:
@@ -204,8 +209,9 @@ def _embedding(state: ServingState, outputs: list[TensorSchema]) -> EmbeddingInf
 
 
 def _graph_batching(state: ServingState, outputs: list[TensorSchema]) -> dict[str, str] | None:
-    """Each output's axis-0 kind for a PyG model (what a `graphs` batch splits it by); None
-    when the verdict classified nothing (not a PyG export, or a prevalidated .onnx)."""
+    """The axis-0 kind of each output for a PyG model (a `graphs` batch splits the output by it).
+    None if the verdict classified nothing (it is not a PyG export, or it is a prevalidated
+    .onnx file)."""
     kinds = state.verdict.output_axes
     if not kinds:
         return None
@@ -229,12 +235,13 @@ def axes_info(state: ServingState) -> list[AxisInfo]:
 
 
 def describe(state: ServingState, predict_url: str) -> SchemaResponse:
-    """Build the /schema body. `predict_url` is this server's own /predict URL, taken from
-    the request, so the example curl is one the caller can actually run."""
+    """Build the /schema body. `predict_url` is the own /predict URL of this server, taken from
+    the request. The caller can therefore run the example curl."""
     meta = state.backend.metadata()
     declared = {spec.name: spec for spec in meta.inputs}
-    # Driven by state.input_names, not the backend's list: that is the forward-argument
-    # order the predict routes check against, and the torch backend may declare less.
+    # It uses state.input_names and not the list of the backend. This is the order of the
+    # forward arguments that the predict routes check against. The torch backend can declare
+    # less.
     inputs = [
         _tensor_schema(
             declared.get(name) or IOSpec(name, None, None),

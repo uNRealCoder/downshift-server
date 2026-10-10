@@ -1,12 +1,14 @@
-"""The in-process export memo: one process that exports or verifies the same model more than
-once (check() then export() in a CI script, app_for() called repeatedly in a notebook or a test
-suite) reuses the first result. Nothing here touches disk; core/export_cache.py is the opt-in
-disk tier behind it (`--export-cache-dir`) and shares its key and entry types.
+"""The in-process export memo. A process that exports or verifies the same model more than one
+time reuses the first result. Examples: check() and then export() in a CI script, or app_for()
+called many times in a notebook or a test suite. This module does not touch the disk.
+core/export_cache.py is the optional disk tier behind it (`--export-cache-dir`). It shares the
+key and entry types.
 
-A key hashes everything that decides the exported graph and its verdict: the weights, the code
-that defines the model, the trace and verify options, and the toolchain. HF repo directories are
-keyed from their files before anything is loaded, so a hit never calls `from_pretrained`; every
-other source is keyed from the loaded module.
+A key is a hash of everything that decides the exported graph and its verdict: the weights, the
+code that defines the model, the options for the trace and the verification, and the toolchain.
+Downshift makes the key for an HF repo directory from its files before it loads anything. A hit
+therefore never calls `from_pretrained`. For each other source, downshift makes the key from the
+loaded module.
 """
 
 import hashlib
@@ -41,7 +43,7 @@ MAX_ENTRIES = 2
 STORED_STATUSES = frozenset({"CLEAN", "DEGRADED"})
 
 _TOOLS = ("torch", "onnx", "onnxscript", "onnxruntime", "transformers", "torch_geometric")
-# Code that ships with these is covered by their version, so it isn't hashed per class.
+# The version of these packages covers the code that ships with them. Downshift does not hash it for each class.
 _LIBRARY_PACKAGES = ("torch", "transformers", "torch_geometric")
 _SENTENCE_TRANSFORMERS_DIR = re.compile(r"^\d+_\w+$")
 _SCALAR_TYPES = (bool, int, float, str, bytes, type(None))
@@ -49,9 +51,9 @@ _SCALAR_TYPES = (bool, int, float, str, bytes, type(None))
 
 @dataclass
 class ExportEntry:
-    """What a boot needs to skip export and verify. `onnx_bytes` is the serialized graph; for
-    an external-data graph it is empty and `onnx_path` names the .onnx beside its data file
-    (a fresh export's temp copy, or a disk-tier file)."""
+    """What a boot needs to skip the export and the verification. `onnx_bytes` is the serialized
+    graph. For a graph with external data, it is empty. `onnx_path` then names the .onnx file
+    next to its data file (the temporary copy of a new export, or a file of the disk tier)."""
 
     verdict: dict
     input_names: list[str]
@@ -75,9 +77,9 @@ class ExportEntry:
 
 
 class ExportMemo:
-    """A lock-protected LRU of exports. FAILED verdicts and graphs with external data are
-    never kept: a failure is cheap to re-diagnose, and a second multi-GB copy in RAM for a
-    rare reuse costs more than it saves."""
+    """An LRU of exports that a lock protects. Downshift never keeps FAILED verdicts and graphs
+    with external data. A failure is cheap to diagnose again. A second copy of several GB in RAM
+    for a reuse that is rare costs more than it saves."""
 
     def __init__(self, max_entries: int = MAX_ENTRIES) -> None:
         self.max_entries = max_entries
@@ -122,8 +124,8 @@ def memo_key(parts: Any) -> str:
 
 
 def guarded[T](fn: Callable[..., T], *args: Any, **kwargs: Any) -> T | None:
-    """A key that can't be computed (a file vanished, a tensor on the meta device) only costs
-    the reuse: the caller exports as if there were no cache."""
+    """A key that downshift cannot compute (a file vanished, or a tensor is on the meta device)
+    costs only the reuse. The caller exports as if there were no cache."""
     try:
         return fn(*args, **kwargs)
     except Exception:  # noqa: BLE001
@@ -159,8 +161,9 @@ def tool_versions() -> dict[str, str | None]:
 
 
 def _code_ref(spec: object) -> list | None:
-    """A `pkg.module:fn` / `path/to/file.py[:attr]` spec (or a callable) together with a digest
-    of the file that defines it, so editing the code behind --vary or --adapter misses."""
+    """A `pkg.module:fn` or `path/to/file.py[:attr]` spec (or a callable), together with a digest
+    of the file that defines it. If you edit the code behind --vary or --adapter, the key then
+    does not match."""
     if spec is None:
         return None
     if not isinstance(spec, str):
@@ -207,8 +210,9 @@ def common_parts(
     normalize: bool | None = None,
     fp16: bool = False,
 ) -> dict:
-    """Everything outside the model that decides the graph or the verdict. The opset isn't a
-    downshift setting (torch picks it); it moves with the torch and onnxscript versions."""
+    """Everything outside the model that decides the graph or the verdict. The opset is not a
+    setting of downshift. Torch selects it. It changes with the versions of torch and
+    onnxscript."""
     return {
         "adapter": _code_ref(adapter),
         "dynamic": dynamic,
@@ -243,9 +247,9 @@ def run_options(opts: Any, adapter: object) -> dict:
 
 
 def repo_files(root: str | Path) -> list[Path]:
-    """The files of an HF repo directory that can shape the export: its top level (config,
-    weights, tokenizer) and the sentence-transformers module directories (1_Pooling, ...).
-    Subdirectories holding other copies of the model (onnx/, openvino/) are left out."""
+    """The files of an HF repo directory that can change the export: its top level (config,
+    weights and tokenizer) and the sentence-transformers module directories (1_Pooling, ...).
+    Downshift leaves out subdirectories that hold other copies of the model (onnx/, openvino/)."""
     base = Path(root)
     entries = sorted(base.iterdir())
     files = [p for p in entries if p.is_file() and not p.name.startswith(".")]
@@ -301,8 +305,9 @@ def _library_roots() -> list[Path]:
 
 
 def code_parts(model: torch.nn.Module) -> list:
-    """A digest of the source file of every distinct nn.Module subclass in the model that
-    doesn't come from torch, transformers or torch_geometric: editing a `forward` misses."""
+    """A digest of the source file of each different nn.Module subclass in the model that does
+    not come from torch, transformers or torch_geometric. If you edit a `forward`, the key
+    then does not match."""
     roots = _library_roots()
     parts = []
     classes = {type(m) for m in model.modules()}
@@ -310,7 +315,7 @@ def code_parts(model: torch.nn.Module) -> list:
         try:
             file = Path(inspect.getfile(cls)).resolve()
         except (TypeError, OSError):
-            continue  # a builtin or dynamically built class: nothing to read
+            continue  # a builtin class or a class that was built dynamically: nothing to read
         if any(file.is_relative_to(root) for root in roots):
             continue
         parts.append([f"{cls.__module__}.{cls.__qualname__}", _defining_file_digest(cls)])
@@ -327,8 +332,8 @@ def _simple(value: object) -> object | None:
 
 
 def _attribute_parts(model: torch.nn.Module) -> list:
-    """Plain attributes (sizes, flags, scales) of every submodule: a constructor argument can
-    change the graph with no change to the weights or the source."""
+    """The plain attributes (sizes, flags, scales) of each submodule. An argument of the
+    constructor can change the graph with no change to the weights or the source."""
     parts = []
     for name, module in model.named_modules():
         attrs = {
@@ -371,7 +376,7 @@ def repo_key(
     fingerprint: Callable[[Path], object],
     **run: Any,
 ) -> str:
-    """The key of a Hugging Face repo directory, from its files and before it is loaded.
+    """The key of a Hugging Face repo directory, made from its files before the repo is loaded.
     `fingerprint` is file_identity for the memo and a content digest for the disk tier."""
     inputs = None
     if inputs_spec:

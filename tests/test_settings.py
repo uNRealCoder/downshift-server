@@ -1,5 +1,5 @@
-"""settings.py reads DOWNSHIFT_* env vars at import time, so these tests reload the module
-around each case rather than importing the constants once at collection time.
+"""settings.py reads the DOWNSHIFT_* environment variables at import. These tests therefore
+reload the module around each case. They do not import the constants one time at collection.
 """
 
 import importlib
@@ -84,7 +84,7 @@ def test_per_dtype_tolerance_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DOWNSHIFT_TOL_FLOAT16_ATOL", "0.05")
     mod = importlib.reload(settings)
     assert mod.TOLERANCES["float16"] == (0.05, 1e-2)
-    # Untouched dtypes keep their defaults.
+    # Dtypes that nobody changed keep their defaults.
     assert mod.TOLERANCES["float32"] == (1e-4, 1e-3)
 
 

@@ -1,4 +1,4 @@
-"""Dynamic-shape helpers and the --dynamic override."""
+"""The helpers for dynamic shapes, and the --dynamic override."""
 
 import pytest
 import torch
@@ -84,8 +84,8 @@ def test_safe_capture_inputs_doubles_only_size_one_dynamic_axes():
 
     assert tuple(safe[0].shape) == (2, 16)
     assert torch.equal(safe[0][0], x[0]) and torch.equal(safe[0][1], x[0])
-    assert safe[1] is mask  # not dynamic, untouched
-    assert safe[2] is idx  # dynamic but already > 1, untouched
+    assert safe[1] is mask  # not dynamic, unchanged
+    assert safe[2] is idx  # dynamic, but already > 1, unchanged
 
 
 def test_check_with_dynamic_override_is_still_clean():

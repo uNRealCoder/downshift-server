@@ -1,8 +1,9 @@
-"""AxisFact: per dynamic axis, what the server accepts next to what verification exercised.
+"""AxisFact: for each dynamic axis, what the server accepts, next to what the verification
+tested.
 
-`served_*` is the export `Dim`'s bounds (what the request check enforces); `sampled_*` is the
-range of sizes verify() actually ran through both backends, None when verify never ran.
-Torch-free so the CLI and the schemas can import it.
+`served_*` are the bounds of the export `Dim` (the request check enforces them). `sampled_*` is
+the range of sizes that verify() ran through both backends. It is None if verify did not run.
+This module has no torch import, so the CLI and the schemas can import it.
 """
 
 from collections.abc import Sequence
@@ -23,8 +24,9 @@ AxisBounds = dict[str, dict[int, DimBound]]
 
 
 def axis_bounds_to_json(bounds: AxisBounds) -> dict[str, list[list]]:
-    """[[axis, name, min, max], ...] per input: the form the export cache's serving.json and
-    the `serve --workers N` handoff carry, for a process that has no Prepared to derive them."""
+    """[[axis, name, min, max], ...] for each input. This is the form in the serving.json of the
+    export cache and in the `serve --workers N` handoff. A process that has no Prepared to
+    derive them uses it."""
     return {
         name: [[axis, b.name, b.min, b.max] for axis, b in axes.items()]
         for name, axes in bounds.items()
@@ -71,9 +73,10 @@ def classify_outputs(
     x_index: int,
     edge_index_index: int,
 ) -> list[str]:
-    """Per output: "node" (axis 0 follows x's node count across samples), "edge" (follows
-    edge_index's edge count), "fixed" (axis 0 never changes) or "unknown". Telling node from
-    edge needs at least two samples where N != E; with fewer, everything is "unknown"."""
+    """The class of each output: "node" (axis 0 follows the node count of x across samples),
+    "edge" (follows the edge count of edge_index), "fixed" (axis 0 never changes) or "unknown".
+    To tell node from edge, downshift needs at least two samples where N != E. With fewer
+    samples, all classes are "unknown"."""
     if not output_shapes or len(sample_shapes) != len(output_shapes):
         return []
     n_outputs = len(output_shapes[0])
@@ -102,9 +105,9 @@ def axis_facts(
     input_names: Sequence[str],
     sample_shapes: Sequence[Sequence[Sequence[int]]] | None,
 ) -> list[AxisFact]:
-    """One fact per dynamic axis, in input order. `sample_shapes` is
-    NumericsReport.sample_shapes ([sample][input] -> shape); None or empty means verify
-    didn't run, so every sampled_* is None."""
+    """One fact for each dynamic axis, in the order of the inputs. `sample_shapes` is
+    NumericsReport.sample_shapes ([sample][input] -> shape). None or empty means that verify
+    did not run, so each sampled_* is None."""
     facts: list[AxisFact] = []
     for index, name in enumerate(input_names):
         for axis, (dim_name, served_min, served_max) in sorted(bounds.get(name, {}).items()):

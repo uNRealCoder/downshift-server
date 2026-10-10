@@ -1,4 +1,4 @@
-"""CLEAN: two linear layers and a ReLU, no export hazards."""
+"""CLEAN: two linear layers and a ReLU. There are no export hazards."""
 
 import torch
 from torch import Tensor, nn

@@ -1,6 +1,6 @@
-"""The /predict and /predict/graph internals: request conversion, admission bookkeeping and
-the inference call itself. Kept apart from serve/app.py's routing so a body-handling change
-(P1 to P3) touches one file (M8).
+"""The internals of /predict and /predict/graph: the request conversion, the admission
+bookkeeping and the inference call itself. This code is separate from the routing in
+serve/app.py. A change in the handling of the body (P1 to P3) then touches one file (M8).
 """
 
 import asyncio
@@ -45,29 +45,30 @@ from downshift.serve.schemas import (
 
 logger = logging.getLogger("downshift.serve")
 
-# Per-graph (node_counts, edge_counts) of a graph batch, what the response is split by.
+# The (node_counts, edge_counts) of each graph in a graph batch. The response is split by them.
 GraphLayout = tuple[list[int], list[int]]
 
-# What a safetensors body on /predict/graph may name.
+# The names that a safetensors body on /predict/graph can use.
 _GRAPH_TENSOR_NAMES = frozenset((*GRAPH_TENSORS, *GRAPH_COUNTS))
 
 SAFETENSORS_MEDIA_TYPE = "application/vnd.safetensors"
-# What a binary request may be labelled; octet-stream is an alias for safetensors.
+# The labels that a binary request can have. octet-stream is an alias for safetensors.
 BINARY_REQUEST_TYPES = frozenset({SAFETENSORS_MEDIA_TYPE, "application/octet-stream"})
-# The Server-Timing stages, in request order.
+# The Server-Timing stages, in the order of the request.
 STAGES = ("parse", "prep_wait", "prep", "infer_wait", "infer", "encode")
 
-# dtypes orjson's OPT_SERIALIZE_NUMPY writes straight from the array buffer (orjson >= 3.9).
+# The dtypes that OPT_SERIALIZE_NUMPY of orjson writes directly from the array buffer (orjson >= 3.9).
 _ORJSON_DTYPES = frozenset(
     "float16 float32 float64 int8 int16 int32 int64 uint8 uint16 uint32 uint64 bool".split()
 )
 
 
 class NumpyJSONResponse(JSONResponse):
-    """orjson with OPT_SERIALIZE_NUMPY: arrays are written from their buffers; NaN/Inf become null.
+    """orjson with OPT_SERIALIZE_NUMPY. It writes arrays from their buffers. NaN and Inf become
+    null.
 
-    Not built on fastapi's ORJSONResponse: older versions lack the numpy flag, newer ones
-    deprecate the class and warn at import.
+    It is not built on ORJSONResponse of fastapi. Older versions do not have the numpy flag.
+    Newer versions deprecate the class and give a warning at import.
     """
 
     def render(self, content: Any) -> bytes:
@@ -78,7 +79,7 @@ def _json_ready(arr: np.ndarray) -> np.ndarray | list:
     """The contiguous array itself when orjson can write it in one pass, else a list."""
     return (
         arr if arr.dtype.name in _ORJSON_DTYPES and arr.ndim else arr.tolist()
-    )  # 0-d: orjson rejects
+    )  # 0-d: orjson rejects it
 
 
 def _base64_ready(arr: np.ndarray) -> dict[str, Any]:
@@ -91,27 +92,28 @@ def _base64_ready(arr: np.ndarray) -> dict[str, Any]:
 
 
 def as_batch(value: str | list[str]) -> list[str]:
-    """A single string is a batch of one, so the response shape never depends on which
-    form the client used."""
+    """A single string is a batch of one. The response shape therefore never depends on the
+    form that the client used."""
     return [value] if isinstance(value, str) else list(value)
 
 
 def resolve_prompt(state: ServingState, prompt_name: str | None, has_text: bool) -> str:
-    """The prompt text to put before every row: the named one, else the repo's default, else
-    none. A name the repo does not define (or one sent without `text`) is a 400 that lists the
-    names there are; the client's own value is echoed only as a truncated repr."""
+    """The prompt text to put at the start of each row: the named one, otherwise the default of
+    the repo, otherwise none. A name that the repo does not define (or a name that is sent
+    without `text`) gives a 400 that lists the names that exist. Downshift returns the value of
+    the client only as a truncated repr."""
     recipe = state.embedding
     prompts = recipe.prompts if recipe is not None else {}
     if prompt_name is None:
         default = recipe.default_prompt if recipe is not None else None
         return prompts[default] if has_text and default is not None else ""
     if not has_text:
-        raise HTTPException(400, "'prompt_name' applies to a 'text' request; none was sent")
+        raise HTTPException(400, "'prompt_name' applies to a 'text' request. None was sent")
     if prompt_name not in prompts:
         available = sorted(prompts)
         raise HTTPException(
             400,
-            f"unknown prompt_name {prompt_name!r:.64}; "
+            f"unknown prompt_name {prompt_name!r:.64}. "
             + (f"this model has: {available}" if available else "this model has no named prompts"),
         )
     return prompts[prompt_name]
@@ -120,9 +122,9 @@ def resolve_prompt(state: ServingState, prompt_name: str | None, has_text: bool)
 def _text_feeds(
     state: ServingState, text: list[str], declared: dict[str, str | None], prompt: str = ""
 ) -> dict[str, np.ndarray]:
-    """Tokenize a `text` request into the graph's own inputs, each row after `prompt`.
-    ValueError means the client's text was unusable."""
-    assert state.text is not None  # run_predict refuses a text request without one
+    """Tokenize a `text` request into the own inputs of the graph, with `prompt` at the start of
+    each row. ValueError means that the text of the client was not usable."""
+    assert state.text is not None  # run_predict refuses a text request without it
     encoded = state.text.encode([prompt + row for row in text] if prompt else text)
     missing = [n for n in state.input_names if n not in encoded]
     if missing:
@@ -131,8 +133,8 @@ def _text_feeds(
 
 
 def _vocab_violation(state: ServingState, feeds: dict[str, np.ndarray]) -> str | None:
-    """B3: ORT wraps a negative input_ids index instead of refusing it, so garbage in would
-    become a confident 200 out."""
+    """B3: ORT wraps a negative input_ids index and does not refuse it. Wrong input would then
+    become a confident 200 response."""
     if state.vocab_size is None:
         return None
     return index_range_violation(
@@ -145,8 +147,9 @@ def _bound_message(name: str, axis: int, size: int, bound: DimBound) -> str:
 
 
 def _shape_violation(state: ServingState, feeds: dict[str, np.ndarray]) -> str | None:
-    """The first input whose rank, or one of whose fixed axes, differs from what the backend
-    declares. Checked before infer so a model's own shape error is never the client's 400."""
+    """The first input whose rank, or one of whose fixed axes, is different from what the
+    backend declares. Downshift checks this before infer. A shape error of the model itself is
+    then never a 400 for the client."""
     for name, arr in feeds.items():
         spec = state.input_specs.get(name)
         if spec is None or spec.shape is None:
@@ -160,8 +163,8 @@ def _shape_violation(state: ServingState, feeds: dict[str, np.ndarray]) -> str |
 
 
 def _bound_violation(state: ServingState, feeds: dict[str, np.ndarray]) -> str | None:
-    """U2: the first input whose shape falls outside an axis downshift's own export traced,
-    or None when every known bound is satisfied (including when none are known at all)."""
+    """U2: the first input whose shape is outside an axis that the own export of downshift
+    traced. None if each known bound is satisfied (also if no bound is known)."""
     for name, arr in feeds.items():
         bounds = state.axis_bounds.get(name)
         if not bounds:
@@ -180,7 +183,7 @@ def _check_timeout(state: ServingState, admitted_at: float) -> None:
     if request_timeout > 0:
         waited = time.monotonic() - admitted_at
         if waited > request_timeout:
-            # Only ever raised before infer() has begun: a request that sat in a queue.
+            # Raised only before infer() has started: a request that waited in a queue.
             raise HTTPException(
                 503,
                 f"request waited {waited:.1f}s in queue, past the {request_timeout:.1f}s "
@@ -191,13 +194,13 @@ def _check_timeout(state: ServingState, admitted_at: float) -> None:
 def _binary_feeds(
     state: ServingState, tensors: dict[str, np.ndarray], declared: dict[str, str | None]
 ) -> dict[str, np.ndarray]:
-    """A safetensors request's arrays are already NumPy and never cast: a dtype other than the
-    graph's own is a 400 rather than a silent copy."""
+    """The arrays of a safetensors request are already NumPy, and downshift never casts them. A
+    dtype that is not the own dtype of the graph gives a 400 and not a silent copy."""
     feeds = {n: tensors[n] for n in state.input_names}
     for name, arr in feeds.items():
         expected = normalize_dtype(declared.get(name))
         if expected is not None and arr.dtype.name != expected:
-            raise ValueError(f"input {name!r} is {arr.dtype.name}; this model takes {expected}")
+            raise ValueError(f"input {name!r} is {arr.dtype.name}. This model takes {expected}")
     return feeds
 
 
@@ -222,8 +225,9 @@ def _batch_feeds(
     tensors: dict[str, np.ndarray] | None,
     max_bytes: int,
 ) -> tuple[dict[str, np.ndarray], GraphLayout]:
-    """A `graphs` list, or a binary body with num_nodes/num_edges, to one batched feed set and
-    the per-graph counts the response is split by. ValueError for anything the client got wrong."""
+    """Turn a `graphs` list, or a binary body with num_nodes and num_edges, into one batched feed
+    set and the counts for each graph that split the response. ValueError for each client
+    error."""
     names = [spec.name for spec in state.backend.metadata().outputs]
     if tensors is not None:
         _binary_feeds(state, tensors, state.declared_dtypes)
@@ -256,14 +260,14 @@ class _Request:
 def _prepare_feeds(
     state: ServingState, request: _Request
 ) -> tuple[dict[str, np.ndarray], float, GraphLayout | None]:
-    """A validated request to the graph's own input arrays (base64 decode, to_numpy,
-    tokenize) and the checks that need them: vocab, edge index, axis bounds. Runs in
-    state.prep_executor. Returns the feeds, the milliseconds spent and, for a graph batch,
-    its per-graph counts. `request.tensors` (a safetensors body, already decoded) takes the
-    place of `inputs`; `request.graphs` (or a `tensors` body carrying num_nodes) is a batch of
-    graphs, concatenated here into one feed set.
+    """Turn a validated request into the own input arrays of the graph (base64 decode,
+    to_numpy, tokenize), and do the checks that need them: vocabulary, edge index and axis
+    bounds. It runs in state.prep_executor. It returns the feeds, the milliseconds that it used
+    and, for a graph batch, the counts for each graph. `request.tensors` (a safetensors body
+    that is already decoded) takes the place of `inputs`. `request.graphs` (or a `tensors` body
+    with num_nodes) is a batch of graphs. Downshift joins them here into one feed set.
 
-    Raises HTTPException(400) for anything the client got wrong (bad shape/dtype/JSON).
+    It raises HTTPException(400) for each client error (a bad shape, dtype or JSON).
     """
     declared = state.declared_dtypes
     max_bytes = state.options.max_input_bytes
@@ -290,7 +294,7 @@ def _prepare_feeds(
     vocab_violation = _vocab_violation(state, feeds)
     if vocab_violation is not None:
         raise HTTPException(400, vocab_violation)
-    # A batch was checked graph by graph against each graph's own node count.
+    # Downshift checked a batch graph by graph, against the own node count of each graph.
     edge_violation = None if layout is not None else edge_index_violation(feeds)
     if edge_violation is not None:
         raise HTTPException(400, edge_violation)
@@ -303,18 +307,19 @@ def _prepare_feeds(
 def _infer(
     state: ServingState, feeds: dict[str, np.ndarray]
 ) -> tuple[dict[str, np.ndarray], float]:
-    """Only the backend call; _encode_response follows it on the same inference thread.
-    Runs in state.executor. Returns the outputs and the milliseconds spent.
+    """Only the backend call. _encode_response follows it on the same inference thread. It runs
+    in state.executor. It returns the outputs and the milliseconds that it used.
 
-    Anything but a client error (a backend bug, OOM, ...) propagates so the app-level handler
-    turns it into a 500 without leaking the exception text to the client.
+    Each error that is not a client error (a bug of the backend, OOM, ...) propagates. The
+    handler of the app then turns it into a 500. The text of the exception does not go to the
+    client.
     """
     start = time.perf_counter()
     try:
         outputs = state.backend.infer(feeds)
     except InferenceInputError as exc:
-        # The bound pre-check already answers the common case; this is the backend
-        # rejecting something we had no bound for.
+        # The check of the bounds before this already answers the common case. This is the
+        # backend that rejects something for which we had no bound.
         raise HTTPException(400, str(exc)) from exc
     return outputs, (time.perf_counter() - start) * 1000
 
@@ -327,21 +332,22 @@ def _encode_response(
     accept_safetensors: bool = False,
     layout: GraphLayout | None = None,
 ) -> Response:
-    """Outputs to the response body, right after _infer on the same thread. `timings_ms` already holds the
-    earlier stages; the encode stage and the Server-Timing header are added here.
+    """Turn the outputs into the response body, directly after _infer on the same thread.
+    `timings_ms` already has the earlier stages. This function adds the encode stage and the
+    Server-Timing header.
 
-    A safetensors body (an `Accept` naming it, or output_encoding "safetensors") carries each
-    output under its own name, with `predictions` and the embedding recipe as JSON strings in
+    A safetensors body (an `Accept` that names it, or output_encoding "safetensors") has each
+    output under its own name. `predictions` and the embedding recipe are JSON strings in
     `__metadata__`.
 
-    `layout` (a graph batch) splits the outputs per graph first: the body is
-    {"graphs": [{outputs, shapes, dtypes}, ...]} in request order, or in safetensors each
-    output named `graphs.<i>.<output>` with the graph count in `downshift.graphs`."""
+    `layout` (a graph batch) first splits the outputs for each graph. The body is {"graphs":
+    [{outputs, shapes, dtypes}, ...]} in the order of the request. In safetensors, each output
+    has the name `graphs.<i>.<output>`, and the number of graphs is in `downshift.graphs`."""
     encoding = encoding or state.options.output_encoding
     encode = _base64_ready if encoding == OutputEncoding.base64 else _json_ready
     safetensors = accept_safetensors or encoding == RequestOutputEncoding.safetensors
     start = time.perf_counter()
-    # C-contiguous once, up front (np.require keeps 0-d arrays 0-d; ascontiguousarray does not).
+    # C-contiguous one time, at the start (np.require keeps 0-d arrays 0-d. ascontiguousarray does not).
     arrays = {name: np.require(arr, requirements="C") for name, arr in outputs.items()}
     response: Response
     if layout is not None:
@@ -366,7 +372,7 @@ def _encode_response(
     elif safetensors:
         response = _safetensors_response(state, arrays)
     else:
-        # Same keys as PredictResponse; built by hand so orjson serializes the buffers directly.
+        # The same keys as PredictResponse. Built by hand, so orjson serializes the buffers directly.
         body = _tensor_body(arrays, encode)
         predictions = _predictions(state, arrays)
         if predictions is not None:
@@ -412,10 +418,11 @@ def _json_str(value: Any) -> str:
 
 
 def _validate_json[ModelT: BaseModel](model: type[ModelT], body: bytes) -> ModelT:
-    """orjson, then the route's pydantic model, with FastAPI's own 422s for both: an empty
-    body is the missing body, malformed JSON is json_invalid, the model's errors sit under
-    "body". The error dicts copy what FastAPI's request handler builds (fastapi/routing.py,
-    get_request_handler), which has no public helper for them; tests pin all three."""
+    """orjson, then the pydantic model of the route. Both give the own 422 errors of FastAPI. An
+    empty body is the missing body. Malformed JSON is json_invalid. The errors of the model are
+    under "body". The error dicts copy what the request handler of FastAPI builds
+    (fastapi/routing.py, get_request_handler). It has no public helper for them. Tests pin all
+    three."""
     if not body:
         raise RequestValidationError(
             [{"type": "missing", "loc": ("body",), "msg": "Field required", "input": None}]
@@ -447,8 +454,8 @@ def _json_request(state: ServingState, graph: bool, body: bytes) -> _Request:
     if graph:
         graph_req = _validate_json(GraphPredictRequest, body)
         if graph_req.graphs is not None:
-            # No dtype hints needed: to_numpy takes the backend's declared dtype (int64 for
-            # edge_index on both backends), and integer lists default to int64 anyway.
+            # Downshift needs no dtype hints. to_numpy takes the dtype that the backend declares
+            # (int64 for edge_index on both backends). Integer lists default to int64 in any case.
             graphs = [
                 {"x": g.x, "edge_index": g.edge_index, "edge_attr": g.edge_attr}
                 for g in graph_req.graphs
@@ -463,7 +470,7 @@ def _json_request(state: ServingState, graph: bool, body: bytes) -> _Request:
     if req.text is not None and state.text is None:
         raise HTTPException(
             400,
-            "this model takes tensors only: it was not loaded from a Hugging Face repo "
+            "this model takes tensors only. It was not loaded from a Hugging Face repo "
             "directory with tokenizer files. Send 'inputs' (see GET /schema).",
         )
     return _Request(
@@ -475,19 +482,19 @@ def _json_request(state: ServingState, graph: bool, body: bytes) -> _Request:
 
 
 def _binary_request(state: ServingState, graph: bool, body: bytes) -> _Request:
-    """A safetensors body: its arrays (only names this route takes), and the __metadata__
-    output_encoding."""
+    """A safetensors body: its arrays (only names that this route takes), and the
+    output_encoding of __metadata__."""
     try:
         arrays, metadata = decode_safetensors(body, max_input_bytes=state.options.max_input_bytes)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     if "text" in metadata:
-        raise HTTPException(400, "text is JSON only; a safetensors body carries tensors")
+        raise HTTPException(400, "text is JSON only. A safetensors body carries tensors")
     allowed = _GRAPH_TENSOR_NAMES if graph else frozenset(state.input_names)
     unknown = [name for name in arrays if name not in allowed]
     if unknown:
         raise HTTPException(
-            400, f"unknown tensor name {unknown[0]!r:.64}; this route takes {sorted(allowed)}"
+            400, f"unknown tensor name {unknown[0]!r:.64}. This route takes {sorted(allowed)}"
         )
     encoding = metadata.get("output_encoding")
     try:
@@ -497,7 +504,7 @@ def _binary_request(state: ServingState, graph: bool, body: bytes) -> _Request:
     except ValueError:
         raise HTTPException(
             400,
-            f"unknown output_encoding {encoding!r:.64} in __metadata__; this route takes "
+            f"unknown output_encoding {encoding!r:.64} in __metadata__. This route takes "
             f"{[e.value for e in RequestOutputEncoding]}",
         ) from None
 
@@ -505,8 +512,8 @@ def _binary_request(state: ServingState, graph: bool, body: bytes) -> _Request:
 def _parse(
     state: ServingState, body: bytes, graph: bool, binary: bool, timings_ms: dict[str, float]
 ) -> _Request:
-    """The request body (JSON or safetensors) to a validated _Request, its time recorded as
-    timings_ms["parse"]. Raises the client's 422 or 400."""
+    """The request body (JSON or safetensors) as a validated _Request. Downshift records its time
+    as timings_ms["parse"]. It raises the 422 or 400 for the client."""
     start = time.perf_counter()
     if graph and not GRAPH_INPUTS.issubset(state.input_names):
         raise HTTPException(
@@ -530,10 +537,10 @@ async def _run_in(
     fn: Callable[..., Any],
     *args: Any,
 ) -> Any:
-    """fn(*args) in `executor`, carrying contextvars (run_in_executor does not; without this,
-    log lines from the executor thread would lose the request id). The time from submit to
-    start is timings_ms[wait_key]. `executor` None (--execution inline) calls fn right here on
-    the event loop, with no wait."""
+    """Run fn(*args) in `executor`, and carry the contextvars. (run_in_executor does not. Without
+    this, the log lines from the executor thread would lose the request ID.) The time from the
+    submit to the start is timings_ms[wait_key]. If `executor` is None (--execution inline), it
+    calls fn here on the event loop, with no wait."""
     if executor is None:
         timings_ms[wait_key] = 0.0
         return fn(*args)
@@ -558,30 +565,30 @@ async def run_predict(
     timings_ms: dict[str, float],
     accept_safetensors: bool,
 ) -> Response:
-    """One /predict (or, with `graph`, /predict/graph) request, from its raw body, in two
-    hops: _parse + _prepare_feeds in the prep pool, then _infer + _encode_response on an
-    inference thread, so encoding holds the inference slot. The event loop does neither, so a
-    large body never blocks /health or /ready (they share this process's single event loop).
-    Admission already happened in PredictRoute, before the body was even read (P1);
-    `admitted_at` is when that happened, and the request keeps its slot until the response
-    is built.
+    """One /predict request (or /predict/graph, with `graph`), from its raw body, in two hops.
+    First, _parse and _prepare_feeds run in the prep pool. Then _infer and _encode_response run
+    on an inference thread. The encoding therefore holds the inference slot. The event loop
+    does neither of them. A large body therefore never blocks /health or /ready (they share the
+    one event loop of this process). PredictRoute already did the admission before it read the
+    body (P1). `admitted_at` is the time of that event. The request keeps its slot until the
+    response is built.
 
     `binary` means a safetensors body. `inline` (--execution inline, a small JSON body) runs
-    everything on the event loop instead, with zero waits; a `text` request still tokenizes in
-    the prep pool.
+    everything on the event loop, with no waits. A `text` request still tokenizes in the prep
+    pool.
 
-    `timings_ms` collects the per-stage milliseconds (parse, prep_wait, prep, infer_wait,
-    infer, encode) for Server-Timing and the request log line (U1). With
-    `accept_safetensors` the response is safetensors.
+    `timings_ms` collects the milliseconds of each stage (parse, prep_wait, prep, infer_wait,
+    infer, encode) for Server-Timing and the request log line (U1). With `accept_safetensors`,
+    the response is safetensors.
 
-    A graph batch (a `graphs` list, or a safetensors body with num_nodes/num_edges) is
-    batched in prep, run as one inference and split in encode.
+    A graph batch (a `graphs` list, or a safetensors body with num_nodes and num_edges) is
+    batched in prep, runs as one inference, and is split in encode.
     """
     parsed = _parse(state, body, graph, binary, timings_ms) if inline else None
     run_here = parsed is not None and parsed.text is None
 
     def prepare() -> tuple[Any, dict[str, np.ndarray], GraphLayout | None]:
-        # Only the encoding outlives this: the parsed body is freed before inference.
+        # Only the encoding stays after this. Downshift frees the parsed body before the inference.
         request = parsed or _parse(state, body, graph, binary, timings_ms)
         feeds, prep_ms, layout = _prepare_feeds(state, request)
         timings_ms["prep"] = round(prep_ms, 2)
@@ -594,7 +601,7 @@ async def run_predict(
     _check_timeout(state, admitted_at)
 
     def infer_and_encode() -> Response:
-        # Re-checked at start: the request may have queued behind a running inference.
+        # Checked again at the start. The request can have waited behind an inference that was running.
         _check_timeout(state, admitted_at)
         outputs, infer_ms = _infer(state, feeds)
         timings_ms["infer"] = round(infer_ms, 2)

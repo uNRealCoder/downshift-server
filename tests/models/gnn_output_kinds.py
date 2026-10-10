@@ -1,4 +1,4 @@
-"""GNN fixtures whose outputs are edge-level and fixed-size, next to gnn_gcn's node-level one."""
+"""GNN fixtures whose outputs are at edge level and have a fixed size. gnn_gcn has an output at node level."""
 
 import torch
 from torch import nn

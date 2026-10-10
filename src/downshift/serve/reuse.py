@@ -1,12 +1,13 @@
-"""Boot a ServingState from an earlier export when there is one: the in-process memo
-(core/memo.py), then the `--export-cache-dir` disk tier (core/export_cache.py). A miss is the
-usual prepare_serving, whose verified export is then stored in both.
+"""Boot a ServingState from an earlier export, if there is one. The sources are the in-process
+memo (core/memo.py) and then the `--export-cache-dir` disk tier (core/export_cache.py). A miss is
+the usual prepare_serving. Downshift then stores its verified export in both.
 
-A Hugging Face repo directory is looked up before anything is loaded, so a hit never calls
-`from_pretrained` (when the cached graph serves it: a torch-served hit still loads the model,
-which torch needs to run, and only skips export and verify). Every other source is keyed from
-the loaded module, so a hit there skips export and verify but not the load. A `.onnx` source
-exports nothing, so it is never cached.
+Downshift looks up a Hugging Face repo directory before it loads anything. A hit therefore never
+calls `from_pretrained`, if the cached graph serves it. A hit that torch serves still loads the
+model, because torch needs it to run. It skips only the export and the verification. For each
+other source, downshift makes the key from the loaded module. A hit there skips the export and
+the verification, but not the load. A `.onnx` source exports nothing, so downshift never caches
+it.
 """
 
 import copy
@@ -40,9 +41,10 @@ def prepare_serving_reusing(
     inputs_spec: str | None = None,
     cache: bool = True,
 ) -> ServingState:
-    """`load()` returns the loaded MODEL and its --reference model, if any; it is only called
-    when something has to be loaded. `repo` is MODEL when it is a Hugging Face repo directory
-    (and `inputs_spec` its --inputs). `cache=False` skips both tiers, in both directions."""
+    """`load()` returns the loaded MODEL and its --reference model, if there is one. Downshift
+    calls it only when it must load something. `repo` is MODEL if it is a Hugging Face repo
+    directory (and `inputs_spec` is its --inputs). `cache=False` skips both tiers, for reads and
+    for writes."""
     if not cache:
         model, model_ref = load()
         return prepare_serving(model, opts, model_ref, tokenizer_from)
@@ -55,7 +57,7 @@ def prepare_serving_reusing(
     if repo is not None:
         run = memo.run_options(opts, opts.adapter or Family.hf)
         mem_key = memo.guarded(memo.repo_key, repo, inputs_spec, memo.file_identity, **run)
-        # A repo's disk key hashes file contents, so it is only computed on a memo miss.
+        # The disk key of a repo hashes the file contents. Downshift therefore computes it only on a memo miss.
         if disk is not None and (mem_key is None or mem_key not in memo.MEMO):
             disk_key = memo.guarded(memo.repo_key, repo, inputs_spec, disk.fingerprint, **run)
     else:
@@ -99,10 +101,10 @@ def state_from_entry(
     loaded: LoadedModel | None = None,
     reference: LoadedModel | None = None,
 ) -> ServingState:
-    """A ServingState from an export that already ran: a cache hit (`reused` names the tier)
-    or a `serve --workers N` worker taking its parent's. The backend is chosen again from the
-    verdict, exactly as the export's own boot chose it. `load()` is called only when the
-    torch backend needs the model and `loaded` doesn't have it."""
+    """A ServingState from an export that already ran: a cache hit (`reused` names the tier), or
+    a `serve --workers N` worker that takes the export of its parent. Downshift selects the
+    backend again from the verdict, in the same way as the boot of the export itself. It calls
+    `load()` only when the torch backend needs the model and `loaded` does not have it."""
     verdict = ExportVerdict.from_dict(copy.deepcopy(entry.verdict))
     verdict.onnx_bytes = entry.onnx_bytes
     verdict.onnx_path = entry.onnx_path
@@ -110,7 +112,7 @@ def state_from_entry(
     hf_source = source if kind == HF_REPO_DIR else tokenizer_from
 
     if name == BackendName.torch:
-        # Eager serving needs the model itself: the export only saves the export and verify.
+        # Eager serving needs the model itself. The export saves only the export and the verification.
         if loaded is None:
             loaded, reference = load()
         return serving_state_from_torch_artifact(
@@ -140,7 +142,7 @@ def _store(
 ) -> None:
     verdict = state.verdict
     if verdict.status not in memo.STORED_STATUSES:
-        return  # checked here as well as by each tier, to skip building the entry
+        return  # checked here and also by each tier, to skip the building of the entry
     if mem_key is None and (disk is None or disk_key is None):
         return
     entry = memo.build_entry(

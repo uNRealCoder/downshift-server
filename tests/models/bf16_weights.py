@@ -1,8 +1,8 @@
 """Hazard: bfloat16 weights: ONNX Runtime CPU has no bf16 Gemm kernel.
 
-torch.export/torch.onnx.export trace and translate a bfloat16 nn.Linear without complaint;
-onnxruntime's CPU execution provider is the one that gives up, raising NOT_IMPLEMENTED for
-Gemm(13) in bfloat16. verify() sees a real ONNX Runtime failure, not a numeric divergence.
+torch.export and torch.onnx.export trace and translate a bfloat16 nn.Linear without an error.
+The CPU execution provider of onnxruntime fails. It raises NOT_IMPLEMENTED for Gemm(13) in
+bfloat16. verify() sees a real ONNX Runtime failure and not a numeric difference.
 """
 
 import torch

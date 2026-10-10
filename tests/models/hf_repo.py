@@ -1,7 +1,7 @@
-"""Fixtures for a downloaded Hugging Face repo directory: a tiny random-weight BERT with a
-hand-built tokenizer, and the sentence-transformers files (modules.json, 1_Pooling/config.json,
-sentence_bert_config.json) that make it an embedding model. Written to a tmp path; nothing is
-downloaded."""
+"""Fixtures for a downloaded Hugging Face repo directory: a small BERT with random weights and a
+tokenizer that we built by hand, and the sentence-transformers files (modules.json,
+1_Pooling/config.json, sentence_bert_config.json) that make it an embedding model. The fixtures
+write to a tmp path. Nothing is downloaded."""
 
 import json
 from pathlib import Path
@@ -76,8 +76,8 @@ def write_encoder_repo(
     pooling: dict | None = MEAN_POOLING,
     max_seq_length: int | None = 16,
 ) -> str:
-    """An encoder-only repo. Each keyword drops or changes one sentence-transformers file:
-    modules=None writes no modules.json, pooling=None writes no 1_Pooling/config.json."""
+    """An encoder-only repo. Each keyword removes or changes one sentence-transformers file.
+    modules=None writes no modules.json. pooling=None writes no 1_Pooling/config.json."""
     torch.manual_seed(0)
     BertModel(config()).eval().save_pretrained(path)
     tokenizer().save_pretrained(path)
@@ -103,13 +103,13 @@ LASTTOKEN_POOLING = {
 }
 
 
-DECODER_VOCAB = 300  # the 256 byte tokens, then the pad token
+DECODER_VOCAB = 300  # the 256 byte tokens, and then the pad token
 
 
 def decoder_tokenizer():
-    """A byte-level BPE with no merges: every character is one token, so texts of different
-    lengths pad. AutoTokenizer builds a Qwen2Tokenizer for this repo whatever tokenizer_class
-    says, so the fixture ships what that class reads."""
+    """A byte-level BPE with no merges. Each character is one token, so texts of different
+    lengths need padding. AutoTokenizer builds a Qwen2Tokenizer for this repo, for all values of
+    tokenizer_class. The fixture therefore has the files that this class reads."""
     from transformers import Qwen2Tokenizer
 
     vocab = {c: i for i, c in enumerate(sorted(pre_tokenizers.ByteLevel.alphabet()))}
@@ -124,10 +124,10 @@ def write_decoder_repo(
     prompts: dict[str, str] | None = None,
     auto_map: bool = False,
 ) -> str:
-    """A tiny random Qwen2ForCausalLM repo (safetensors, lm_head.weight included). recipe is
-    a sentence-transformers pooling file set: "lasttoken" writes modules.json with a
-    lasttoken Pooling and a Normalize module; None writes none. prompts goes into
-    config_sentence_transformers.json; auto_map adds an auto_map to config.json."""
+    """A small Qwen2ForCausalLM repo with random weights (safetensors, with lm_head.weight).
+    recipe is a set of sentence-transformers pooling files. "lasttoken" writes modules.json with
+    a lasttoken Pooling and a Normalize module. None writes none. prompts goes into
+    config_sentence_transformers.json. auto_map adds an auto_map to config.json."""
     torch.manual_seed(0)
     cfg = Qwen2Config(
         vocab_size=DECODER_VOCAB,

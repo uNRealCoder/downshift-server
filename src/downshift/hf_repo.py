@@ -1,9 +1,9 @@
-"""Reading a Hugging Face repo directory already downloaded onto this machine: the model
-(with its task head, if it ships one), its pooling recipe, and the tokenizer/label metadata
-that lets /predict take text. Nothing here talks to the hub.
+"""This module reads a Hugging Face repo directory that is already downloaded to this machine.
+It reads the model (with its task head, if the repo has one), the pooling recipe, and the
+tokenizer and label metadata that let /predict take text. It never talks to the hub.
 
-Exporting the loaded model is the hf adapter's job (adapters/hf.py); this module only reads
-the repo. Only imported when transformers is installed.
+The hf adapter exports the loaded model (adapters/hf.py). This module only reads the repo.
+Downshift imports it only if transformers is installed.
 """
 
 import json
@@ -31,17 +31,17 @@ from downshift.adapters.text import SIGMOID, SOFTMAX, TextIO
 
 logger = logging.getLogger("downshift.hf_repo")
 
-# Task heads whose first output is the logits: a repo that ships one is loaded with it, not
-# as the bare encoder (AutoModel silently drops the head's weights). Keyed by the suffix of
-# the class name in config.architectures.
+# Task heads whose first output is the logits. A repo that has one loads with it and not as the
+# bare encoder. (AutoModel drops the weights of the head without a message.) The key is the
+# suffix of the class name in config.architectures.
 _TASK_HEADS = {
     "ForSequenceClassification": AutoModelForSequenceClassification,
     "ForTokenClassification": AutoModelForTokenClassification,
 }
-# Class-name suffixes of models that generate text; without an embedding recipe they are refused.
+# Class-name suffixes of models that generate text. Downshift refuses them if they have no embedding recipe.
 _TEXT_GENERATING_SUFFIXES = ("ForCausalLM", "ForConditionalGeneration", "LMHeadModel")
-_UNBOUNDED_LENGTH = 1 << 20  # tokenizers report "no limit" as a huge sentinel
-# A tokenizer is only real if one of these is next to config.json.
+_UNBOUNDED_LENGTH = 1 << 20  # tokenizers report "no limit" as a very large value
+# A tokenizer is real only if one of these files is next to config.json.
 _VOCAB_FILES = (
     "tokenizer.json",
     "vocab.txt",
@@ -51,17 +51,17 @@ _VOCAB_FILES = (
     "tokenizer.model",
 )
 
-# Families whose position ids start at pad_token_id + 1 (padding_idx offset), so the position
-# table holds that many fewer usable positions than max_position_embeddings says.
+# Families whose position ids start at pad_token_id + 1 (the padding_idx offset). The position
+# table therefore has that many fewer usable positions than max_position_embeddings says.
 _PADDING_OFFSET_TYPES = frozenset({"roberta", "xlm-roberta", "xlm-roberta-xl", "camembert"})
-_DEFAULT_PAD_TOKEN_ID = 1  # RobertaConfig's own default, for a config that leaves it unset
+_DEFAULT_PAD_TOKEN_ID = 1  # the own default of RobertaConfig, for a config that does not set it
 _MIN_USABLE_POSITIONS = 2  # torch.export.Dim needs max > min (min is 1)
 
 
 def position_limit(config: PretrainedConfig) -> int | None:
-    """The longest sequence the position embeddings can address, or None when the config
+    """The longest sequence that the position embeddings can address. None if the config
     declares no max_position_embeddings. The RoBERTa family reserves the first
-    pad_token_id + 1 slots, so 514 positions serve 512 tokens."""
+    pad_token_id + 1 slots. For example, 514 positions serve 512 tokens."""
     declared = getattr(config, "max_position_embeddings", None)
     if declared is None:
         return None
@@ -81,8 +81,8 @@ class TextGenerationModelError(ValueError):
 
 
 def _json_dict(path: Path) -> dict:
-    """A repo JSON file's top-level object; {} when it is missing, unreadable or not an object
-    (the loaders report a broken file themselves)."""
+    """The top-level object of a JSON file in the repo. {} if the file is missing, cannot be
+    read, or is not an object. (The loaders report a broken file themselves.)"""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -95,12 +95,12 @@ def _refuse_remote_code(root: Path) -> None:
         if _json_dict(root / name).get("auto_map"):
             raise RemoteCodeError(
                 f"{name} has an auto_map, so loading it would run Python code from the repo. "
-                "downshift never runs a repo's own code (no trust_remote_code)"
+                "Downshift never runs the own code of a repo (no trust_remote_code)"
             )
 
 
 def load_config(path: str) -> PretrainedConfig:
-    """The repo's config.json, read from this machine only (local_files_only). Raises
+    """The config.json of the repo, read from this machine only (local_files_only). It raises
     RemoteCodeError for a repo that names its own code."""
     _refuse_remote_code(Path(path))
     config: PretrainedConfig = AutoConfig.from_pretrained(path, local_files_only=True)
@@ -128,10 +128,11 @@ def embedding_recipe(
     pooling: str | None = None,
     normalize: bool | None = None,
 ) -> EmbeddingRecipe | None:
-    """How this repo turns token vectors into an embedding, or None to serve them as they
-    are: the sentence-transformers recipe in the repo, changed by --pooling/--normalize.
-    Raises RecipeError (a ValueError) for a recipe that cannot be applied faithfully.
-    `config` is the repo's already-loaded AutoConfig, so a boot reads config.json once.
+    """How this repo turns token vectors into an embedding. None means that downshift serves
+    the token vectors as they are. The recipe is the sentence-transformers recipe in the repo,
+    changed by --pooling and --normalize. It raises RecipeError (a ValueError) for a recipe
+    that downshift cannot apply faithfully. `config` is the AutoConfig of the repo that is
+    already loaded, so a boot reads config.json one time.
     """
     return resolve_recipe(path, pooling, normalize, has_head=_task_head(config) is not None)
 
@@ -139,19 +140,21 @@ def embedding_recipe(
 def load_pretrained(
     path: str, pooling: str | None = None, normalize: bool | None = None
 ) -> PreTrainedModel:
-    """path is an already-downloaded repo directory on this machine (config.json, weights).
+    """path is a repo directory that is already downloaded to this machine (config.json and the
+    weights).
 
-    local_files_only pins from_pretrained to that directory: no hub id is resolved and no
-    request leaves the process, so a missing or half-downloaded file fails loudly here
-    instead of being silently fetched.
+    local_files_only limits from_pretrained to that directory. Downshift resolves no hub id,
+    and no request leaves the process. A missing or half-downloaded file therefore fails here
+    with a clear error. Downshift does not fetch it without a message.
 
-    A repo whose config.json declares a sequence- or token-classification architecture is
-    loaded with that head, so the served output is its logits; anything else loads as the
-    bare encoder. An encoder-only repo that declares a pooling recipe is served pooled: the
-    recipe is left on the model for the hf adapter to put into the exported graph.
+    If config.json of the repo declares a sequence-classification or token-classification
+    architecture, downshift loads the repo with that head. The served output is then its logits.
+    Any other repo loads as the bare encoder. If an encoder-only repo declares a pooling recipe,
+    downshift serves it pooled. The recipe stays on the model, and the hf adapter puts it into
+    the exported graph.
     """
     config = load_config(path)
-    recipe = embedding_recipe(path, config, pooling, normalize)  # before the weights: fail fast
+    recipe = embedding_recipe(path, config, pooling, normalize)  # before the weights, to fail fast
     generator = _text_generator(config)
     if generator is not None and (recipe is None or pooling == PoolingChoice.none):
         raise TextGenerationModelError(
@@ -160,8 +163,8 @@ def load_pretrained(
         )
     head = _task_head(config)
     auto_class = _TASK_HEADS[head] if head is not None else AutoModel
-    # A safetensors file is plain tensors; without this, transformers may fall back to a
-    # pickled pytorch_model.bin next to it.
+    # A safetensors file has plain tensors. Without this, transformers can use a pickled
+    # pytorch_model.bin file next to it.
     safetensors = any(Path(path).glob("*.safetensors"))
     kwargs = {"use_safetensors": True} if safetensors else {}
     model: PreTrainedModel
@@ -175,9 +178,10 @@ def load_pretrained(
 
 
 def _load_backbone(path: str, **kwargs: bool) -> PreTrainedModel:
-    """The backbone of a text-generating repo, loaded to embed. Its lm_head weight is left
-    unread on purpose, so transformers' own load report (which lists it as UNEXPECTED) is
-    silenced for this call and anything else it says is re-logged at warning."""
+    """The backbone of a text-generating repo, loaded to embed. Downshift does not read its
+    lm_head weight, by design. The own load report of transformers lists it as UNEXPECTED, so
+    downshift silences the report for this call. It logs anything else that the report says
+    again at warning."""
     hf_logger = logging.getLogger("transformers")
     previous = hf_logger.level
     hf_logger.setLevel(logging.ERROR)
@@ -205,16 +209,18 @@ def _padding_side(root: Path) -> str:
 def load_text_io(
     path: str, config: PretrainedConfig, recipe: EmbeddingRecipe | None = None
 ) -> TextIO | None:
-    """The tokenizer and label metadata that let /predict take text, or None when the repo
-    has no tokenizer files. Same local-only rule and `config` as embedding_recipe.
+    """The tokenizer and label metadata that let /predict take text. None if the repo has no
+    tokenizer files. The local-only rule and `config` are the same as for embedding_recipe.
 
-    The longest text accepted is the smallest of the limits the model's own files declare:
-    the tokenizer's, the position embeddings', and the length the author trained at
-    (`recipe.max_seq_length`). None of them is downshift's to pick.
+    The longest text that downshift accepts is the smallest of the limits that the own files of
+    the model declare: the limit of the tokenizer, the limit of the position embeddings, and the
+    length that the author used for training (`recipe.max_seq_length`). Downshift does not
+    choose any of them.
     """
     if not any((Path(path) / name).is_file() for name in _VOCAB_FILES):
-        # AutoTokenizer does not raise here: it builds an empty tokenizer that maps every
-        # word to [UNK], and a classifier fed that answers confidently about nothing.
+        # AutoTokenizer does not raise an error here. It builds an empty tokenizer that maps
+        # each word to [UNK]. A classifier that receives this gives a confident answer about
+        # nothing.
         return None
     try:
         tokenizer = AutoTokenizer.from_pretrained(path, local_files_only=True)

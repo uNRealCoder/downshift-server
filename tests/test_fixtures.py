@@ -1,7 +1,7 @@
-"""Every fixture in tests/models/ must construct and run a forward pass.
+"""Each fixture in tests/models/ must construct and run a forward pass.
 
-No export here. This only guarantees the fixtures are valid PyTorch models, so a failure
-in test_export is about the exporter and not the fixture.
+There is no export here. This test only makes sure that the fixtures are valid PyTorch models.
+A failure in test_export is then about the exporter and not about the fixture.
 """
 
 import pytest

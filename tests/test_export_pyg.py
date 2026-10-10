@@ -1,11 +1,11 @@
-"""PyG adapter integration tests: GCN/SAGE/GAT through the same verdict pipeline as the
-generic fixtures, covering the N/E-independent dynamic shapes and the PyG-aware vary_fn
-(edge_index redrawn against the resampled node count).
+"""Integration tests for the PyG adapter. GCN, SAGE and GAT go through the same verdict pipeline
+as the generic fixtures. The tests cover the dynamic shapes where N and E are independent, and
+the vary_fn that knows PyG (edge_index is drawn again for the resampled node count).
 
-All three come back CLEAN on torch 2.14 / torch_geometric 2.8. GATConv's attention
-aggregation doesn't hit the scatter_reduce(include_self=False) translation problem, so
-the scatter_include_self_false fixture in tests/test_export.py, not GAT, is where the
-silent-wrong-answer case is demonstrated.
+All three are CLEAN on torch 2.14 and torch_geometric 2.8. The attention aggregation of
+GATConv does not cause the translation problem of scatter_reduce(include_self=False). The
+fixture scatter_include_self_false in tests/test_export.py shows the case of the silent wrong
+answer. GAT does not.
 """
 
 import pytest
@@ -33,8 +33,8 @@ def test_gnn_fixture_is_clean(module) -> None:
 
 @pytest.mark.needs_torch_26
 def test_gnn_verdict_survives_node_edge_count_mismatch() -> None:
-    """If N and E were tied to one Dim, varying the edge count while the node count stays
-    put would blow up during verification."""
+    """If N and E were tied to one Dim, a change of the edge count with the same node count
+    would fail during verification."""
     model = gnn_gcn.make_model()
     inputs = gnn_gcn.make_inputs(num_nodes=6, num_edges=10)
 

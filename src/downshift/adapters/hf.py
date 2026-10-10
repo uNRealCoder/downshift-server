@@ -1,11 +1,12 @@
-"""Hugging Face adapter, encoder-only models.
+"""The Hugging Face adapter, for encoder-only models.
 
-Builds input_ids / attention_mask straight from the model config rather than pulling in
-optimum. The export shim unwraps the ModelOutput so torch.export sees a plain tensor
-(last_hidden_state for base models, logits for a sequence- or token-classification head,
-which hf_repo.load_pretrained picks from config.architectures).
+It builds input_ids and attention_mask directly from the model config. It does not import
+optimum. The export shim unwraps the ModelOutput, so torch.export sees a plain tensor. The
+tensor is last_hidden_state for base models. For a sequence-classification or
+token-classification head, it is the logits. hf_repo.load_pretrained selects this from
+config.architectures.
 
-Only imported when transformers is installed.
+Downshift imports it only if transformers is installed.
 """
 
 import torch
@@ -28,8 +29,9 @@ _GUESS_SEQ = 8
 
 
 class _FirstOutputShim(nn.Module):
-    """First output of the model, pooled into one embedding per text when the repo has a
-    recipe (see adapters/embedding.py); the pooling is part of the graph that gets exported."""
+    """The first output of the model. If the repo has a recipe, it is pooled into one embedding
+    for each text (see adapters/embedding.py). The pooling is part of the graph that downshift
+    exports."""
 
     def __init__(self, model: nn.Module, recipe: EmbeddingRecipe | None = None) -> None:
         super().__init__()
@@ -60,10 +62,11 @@ class HFAdapter:
         self, model: nn.Module, example_inputs: tuple, axis_max: dict[str, int] | None = None
     ) -> Prepared:
         input_ids, attention_mask = example_inputs
-        # getattr, not model.config: nn.Module's typeshed makes attribute access resolve to
-        # Tensor | Module, losing the actual PretrainedConfig type getattr(..., str) keeps as Any.
+        # Use getattr and not model.config. The typeshed of nn.Module makes attribute access
+        # resolve to Tensor | Module. That loses the real PretrainedConfig type. getattr(..., str)
+        # keeps it as Any.
         config = getattr(model, "config")  # noqa: B009
-        # Position embeddings cap the sequence length; a looser bound trips export's guards.
+        # The position embeddings limit the sequence length. A looser bound trips the guards of the export.
         longest = position_limit(config)
         max_seq = longest or 1 << 12
         batch = torch.export.Dim("batch", min=1, max=1 << 12)
@@ -97,19 +100,19 @@ def make_vary_fn(
     axis_max: dict[str, int] | None = None,
     padding_side: str = "right",
 ) -> VaryFn:
-    """Verification samples after the first vary batch and sequence length, and pad: each
-    row gets its own random length in [1, s] with the mask zeroed beyond it (and at least
-    one attended position), so padding is actually exercised rather than always-full masks.
-    With `padding_side` "left" the zeros sit at the start of each row instead, as the
-    tokenizer of a decoder embedder will pad at serve time.
+    """The verification samples after the first one. They vary the batch size and the sequence
+    length, and they pad. Each row gets its own random length in [1, s]. The mask is zero
+    beyond that length (and at least one position is attended). Padding is then tested for real
+    and not only with masks that are always full. With `padding_side` "left", the zeros are at
+    the start of each row. The tokenizer of a decoder embedder pads in this way at serve time.
 
-    `longest` is the longest sequence the model itself declares (its position embeddings).
-    When set, sample 1 is one full-length row at exactly that length, so a graph that only
-    diverges at long sequences cannot pass on short samples alone. The other sizes stay near
-    the example and cannot guarantee that.
+    `longest` is the longest sequence that the model itself declares (its position
+    embeddings). If it is set, sample 1 is one row of full length, at exactly that length. A
+    graph that diverges only at long sequences then cannot pass with short samples alone. The
+    other sizes stay near the example and cannot guarantee that.
 
-    `axis_max` is --axis-max: it caps the sampled sizes, and a pinned `seq` (or `batch`) makes
-    sample 1 sit exactly at that size instead, taking over the full-length sample's slot.
+    `axis_max` is --axis-max. It limits the sampled sizes. A pinned `seq` (or `batch`) puts
+    sample 1 exactly at that size instead. It then takes the slot of the full-length sample.
     """
     input_ids, _ = base_inputs
     base_batch, base_seq = input_ids.shape

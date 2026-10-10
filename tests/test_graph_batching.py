@@ -55,7 +55,7 @@ def torch_gcn_client(serve_fixture) -> TestClient:
 def test_a_failed_export_still_classifies_outputs_for_the_torch_fallback(
     serve_fixture, monkeypatch
 ):
-    # torch 2.5 can't export this GCN; the fallback must batch like --backend torch does.
+    # torch 2.5 cannot export this GCN. The fallback must batch in the same way as --backend torch.
     from downshift.core import verdict as verdict_mod
     from downshift.core.capture import CaptureResult
 
@@ -221,7 +221,7 @@ def test_binary_batch_mismatches_are_400(gcn_client, override, message):
 
 def test_binary_batch_names_the_graph_with_a_bad_local_node_id(gcn_client):
     graphs = _graphs()
-    graphs[1]["edge_index"][1][0] = len(graphs[1]["x"])  # one past graph 1's own nodes
+    graphs[1]["edge_index"][1][0] = len(graphs[1]["x"])  # one beyond the own nodes of graph 1
     resp = _post_binary(gcn_client, _binary(graphs))
     assert resp.status_code == 400
     assert resp.json()["detail"].startswith("graphs[1]: edge_index contains")

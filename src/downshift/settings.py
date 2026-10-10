@@ -1,22 +1,23 @@
-"""Defaults for the CLI and for library serving (ServeOptions, app_for()), overridable via
-DOWNSHIFT_* environment variables.
+"""Defaults for the CLI and for library serving (ServeOptions and app_for()). The DOWNSHIFT_*
+environment variables override them.
 
-Everything here is just a fallback: a CLI flag or a function kwarg always wins over the
-environment, and the environment always wins over the default below. Read once at import
-time, so setting an env var means restarting the process (or CLI invocation) that reads it.
+Each value here is only a fallback. A CLI flag or a function keyword argument has priority over
+the environment. The environment has priority over the default below. Downshift reads the
+variables one time, at import. To change a variable, restart the process (or the CLI call)
+that reads it.
 """
 
 import math
 import os
 from collections.abc import Callable, Iterable
 
-# Decoded size a single base64 tensor input may reach; the server passes its own limit.
+# The decoded size that one base64 tensor input can reach. The server passes its own limit.
 DEFAULT_MAX_INPUT_BYTES = 256 * 1024 * 1024
 
-# Total request body size the server will read before parsing it as JSON.
+# The total size of a request body that the server reads before it parses the JSON.
 DEFAULT_MAX_BODY_BYTES = 32 * 1024 * 1024
 
-# Verification samples for check()/export()/intake()/build_verdict() and ServeOptions.k.
+# The verification samples for check(), export(), intake(), build_verdict() and ServeOptions.k.
 DEFAULT_SAMPLES = 8
 
 
@@ -24,8 +25,8 @@ _CGROUP_CPU_MAX = "/sys/fs/cgroup/cpu.max"
 
 
 def usable_cpus() -> int:
-    """CPUs this process may actually use: a cgroup v2 quota (a container's --cpus) first,
-    then the scheduler affinity mask, then the machine's logical count."""
+    """The CPUs that this process can use. The order is: a cgroup v2 quota (the --cpus of a
+    container), then the scheduler affinity mask, then the logical count of the machine."""
     try:
         with open(_CGROUP_CPU_MAX) as f:
             quota, period = f.read().split()[:2]
@@ -73,8 +74,8 @@ def _env_choice(name: str, default: str, choices: tuple[str, ...], type_name: st
 
 
 def parse_axis_max(items: Iterable[str]) -> dict[str, int]:
-    """ "seq=4096,num_nodes=500" (or one NAME=N per item, as --axis-max repeats) into
-    {name: N}. ValueError on anything else, so the CLI reports it as a usage error."""
+    """Turn "seq=4096,num_nodes=500" (or one NAME=N for each item, as --axis-max repeats) into
+    {name: N}. Any other input raises ValueError, so the CLI reports a usage error."""
     result: dict[str, int] = {}
     for item in items:
         for entry in filter(None, (e.strip() for e in item.split(","))):
@@ -98,67 +99,72 @@ BACKEND = _env_choice("DOWNSHIFT_BACKEND", "auto", ("auto", "onnxruntime", "torc
 WARMUP = _env_int("DOWNSHIFT_WARMUP", 3)
 SAMPLES = _env_int("DOWNSHIFT_SAMPLES", DEFAULT_SAMPLES)
 
-# 0 means "the backend's default" (ONNX Runtime: physical cores for intra-op, 1 for inter-op;
-# torch: its own thread count). Intra-op applies to both backends, inter-op to ONNX Runtime only.
+# 0 means "the default of the backend". For ONNX Runtime, this is the physical cores for
+# intra-op and 1 for inter-op. For torch, it is the own thread count of torch. Intra-op applies
+# to both backends. Inter-op applies to ONNX Runtime only.
 INTRA_OP_THREADS = _env_int("DOWNSHIFT_INTRA_OP_THREADS", 0)
 INTER_OP_THREADS = _env_int("DOWNSHIFT_INTER_OP_THREADS", 0)
 
-# Default encoding of response tensors ("json" lists or "base64" buffers); a request's
-# output_encoding field overrides it.
+# The default encoding of response tensors ("json" lists or "base64" buffers). The
+# output_encoding field of a request overrides it.
 OUTPUT_ENCODING = _env_choice(
     "DOWNSHIFT_OUTPUT_ENCODING", "json", ("json", "base64"), "output encoding"
 )
 
-# Largest decoded size accepted for one base64 tensor input; bigger ones get a 400.
+# The largest decoded size that downshift accepts for one base64 tensor input. A larger one gets a 400.
 MAX_INPUT_BYTES = _env_int("DOWNSHIFT_MAX_INPUT_BYTES", DEFAULT_MAX_INPUT_BYTES)
 
-# Largest request body the server will read before parsing it as JSON; bigger ones get a 413.
+# The largest request body that the server reads before it parses the JSON. A larger one gets a 413.
 MAX_BODY_BYTES = _env_int("DOWNSHIFT_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES)
 
-# Inferences allowed to run at once per worker process. Measured with 4-8 concurrent clients:
-# all-MiniLM-L6-v2 (batch 8) 52 req/s at 1, 134 at 4; Qwen3-Embedding-0.6B (one query) 7.2
-# at 1, 14.6 at 4, with no slower single request. One inference rarely fills every core. Each
-# extra concurrent inference holds its own activation memory; set 1 to cap it.
+# The number of inferences that can run at the same time in each worker process. Measured with
+# 4 to 8 concurrent clients: all-MiniLM-L6-v2 (batch 8) 52 req/s at 1 and 134 at 4.
+# Qwen3-Embedding-0.6B (one query) 7.2 at 1 and 14.6 at 4. A single request is not slower.
+# One inference does not usually fill all cores. Each extra concurrent inference holds its own
+# activation memory. Set 1 to limit it.
 MAX_CONCURRENCY = _env_int("DOWNSHIFT_MAX_CONCURRENCY", 4)
 
-# "threadpool" runs every request's parse, inference and encode on worker threads; "inline"
-# runs small JSON bodies on the event loop itself, which only pays off for very fast models.
+# "threadpool" runs the parse, the inference and the encoding of each request on worker
+# threads. "inline" runs small JSON bodies on the event loop. This helps only very fast models.
 EXECUTION = _env_choice(
     "DOWNSHIFT_EXECUTION", "threadpool", ("threadpool", "inline"), "execution mode"
 )
 
-# Largest size to serve per named axis ("seq=4096,num_nodes=500"); the names are the ones the
-# boot banner and /schema list. Empty means each axis keeps the bound the adapter exported.
+# The largest size to serve for each named axis ("seq=4096,num_nodes=500"). The names are the
+# names that the boot banner and /schema list. If it is empty, each axis keeps the bound that
+# the adapter exported.
 AXIS_MAX = _env_axis_max("DOWNSHIFT_AXIS_MAX", {})
 
-# A directory verified exports are saved in and reused from on the next boot (`serve` and
-# `export`). Unset means nothing is ever written to disk: the in-process memo is the whole cache.
+# A directory where downshift saves verified exports and reuses them at the next boot (`serve`
+# and `export`). If it is unset, downshift never writes to disk. The in-process memo is then the
+# whole cache.
 EXPORT_CACHE_DIR = os.environ.get("DOWNSHIFT_EXPORT_CACHE_DIR") or None
 
-# Threads converting request bodies to arrays and responses to bytes, apart from the
-# inference threads, so a slow encode never holds an inference slot.
+# The threads that convert request bodies to arrays. They are separate from the inference
+# threads, so a slow conversion never holds an inference slot.
 PREP_THREADS = _env_int("DOWNSHIFT_PREP_THREADS", min(4, usable_cpus()))
 
-# Predicts allowed to wait past max_concurrency before a new one gets a fast 503 instead of
-# joining the queue.
+# The number of predicts that can wait beyond max_concurrency. After that, a new predict gets a
+# fast 503 and does not join the queue.
 DEFAULT_MAX_QUEUE = 64
 MAX_QUEUE = _env_int("DOWNSHIFT_MAX_QUEUE", DEFAULT_MAX_QUEUE)
 
-# Seconds a predict may wait admitted-but-not-running before it gets a 503 instead of an
-# inference; 0 means no limit.
+# The number of seconds that an admitted predict can wait without a start. After this time, it
+# gets a 503 and no inference. 0 means no limit.
 DEFAULT_REQUEST_TIMEOUT = 30.0
 REQUEST_TIMEOUT = _env_float("DOWNSHIFT_REQUEST_TIMEOUT", DEFAULT_REQUEST_TIMEOUT)
 
-# >1 spawns that many uvicorn worker processes, each independently loading/exporting/warming
-# the model, so memory and startup time scale with this number.
+# A value of more than 1 starts that number of uvicorn worker processes. Each one loads,
+# exports and warms up the model on its own. Memory and startup time increase with this number.
 WORKERS = _env_int("DOWNSHIFT_WORKERS", 1)
 
-# When set, every route but /health and /ready requires "Authorization: Bearer <this value>"
-# (U7). None (unset) means unauthenticated, with a startup warning saying so.
+# If it is set, every route except /health and /ready needs "Authorization: Bearer <this value>".
+# None (unset) means no authentication, with a startup warning that says so.
 API_KEY = os.environ.get("DOWNSHIFT_SERVER_API_KEY")
 
-# (atol, rtol) by the widest float dtype involved in numerics verification. Loosen one
-# without touching the rest, e.g. DOWNSHIFT_TOL_FLOAT16_ATOL=0.05 for a noisier fp16 model.
+# (atol, rtol) for the narrowest float dtype in the numerics verification. You can loosen one
+# value and not change the others. Example: DOWNSHIFT_TOL_FLOAT16_ATOL=0.05 for an fp16 model
+# with more noise.
 _TOLERANCE_DEFAULTS = {
     "float32": (1e-4, 1e-3),
     "float64": (1e-6, 1e-5),

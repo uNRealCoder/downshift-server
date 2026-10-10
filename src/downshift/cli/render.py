@@ -1,10 +1,11 @@
-"""Everything the CLI reports, as plain text through `logging`. Commands hand over objects; this
-module builds the text and logs it, so reports, warnings and errors share the one sink
-`downshift.logs.setup_logging` installs (plain text on stdout, no colours).
+"""Everything that the CLI reports, as plain text through `logging`. The commands give objects
+to this module. It builds the text and logs it. Reports, warnings and errors therefore share the
+one sink that `downshift.logs.setup_logging` installs (plain text on stdout, no colours).
 
-A report (verdict, banner, artifacts) is one INFO record on `downshift.report`: a multi-line
-`Label   value` block. One record, not one per row, so a log collector keeps a report
-together. That logger is forced to INFO, so reports print at any `--log-level`.
+A report (verdict, banner or artifacts) is one INFO record on `downshift.report`. It is a
+block of lines in the form `Label   value`. It is one record and not one record for each row.
+A log collector therefore keeps a report together. That logger is forced to INFO, so reports
+print at all values of `--log-level`.
 """
 
 from __future__ import annotations
@@ -41,8 +42,8 @@ _SUB = "->"
 
 
 class _Rows:
-    """`Label   value` lines, values aligned in one column. A row with an empty label carries
-    on from the row above it; a value with newlines keeps its continuation lines in the column."""
+    """Lines in the form `Label   value`, with the values in one column. A row with an empty
+    label continues the row above it. A value with newlines keeps its next lines in the column."""
 
     def __init__(self) -> None:
         self._rows: list[tuple[str, str]] = []
@@ -102,7 +103,7 @@ def _shape_tuple_text(shape: tuple[int, ...]) -> str:
 
 
 def _input_names(verdict: ExportVerdict, count: int) -> tuple[str, ...]:
-    """The model's input names, or input_0, input_1, ... when the verdict carries none."""
+    """The input names of the model, or input_0, input_1, ... if the verdict has none."""
     return verdict.input_names or tuple(f"input_{i}" for i in range(count))
 
 
@@ -135,8 +136,9 @@ def _samples_text(verdict: ExportVerdict) -> str | None:
 
 
 def _axes_text(verdict: ExportVerdict) -> str:
-    """One line per dynamic axis: its Dim name (what --axis-max takes), the sizes verify ran,
-    and the sizes the server accepts. The batch axis never warns: rows are independent."""
+    """One line for each dynamic axis: its Dim name (the name that --axis-max takes), the sizes
+    that verification ran, and the sizes that the server accepts. The batch axis never gives a
+    warning, because the rows are independent."""
     if not verdict.axes:
         if not verdict.dynamic_dims:
             return "-"
@@ -213,10 +215,10 @@ def _shape_text(verdict: ExportVerdict) -> str:
 
 
 def _add_numerics_rows(rows: _Rows, verdict: ExportVerdict) -> None:
-    """Tolerance/Worst/Samples, the three rows that explain a verdict's numbers.
+    """Tolerance, Worst and Samples: the three rows that explain the numbers of a verdict.
 
-    `check`'s report and `serve`'s banner show them identically, so they are built once here
-    rather than kept in step by hand in two places.
+    The report of `check` and the banner of `serve` show them in the same way. Downshift
+    therefore builds them one time here. Nobody must keep two places in step by hand.
     """
     tolerance = _tolerance_text(verdict)
     if tolerance is not None:
@@ -262,9 +264,9 @@ def print_artifacts(onnx_path: Path | None, manifest_path: Path | None) -> None:
     _log_report(rows)
 
 
-# What the banner calls each artifact on disk downshift accepts, so it is obvious nothing
-# was fetched to start this server. An import spec is left unlabelled: it says what it is,
-# and the label would only push a long spec onto a second line.
+# The banner uses these names for each artifact on disk that downshift accepts. They show that
+# downshift fetched nothing to start this server. An import spec has no label. It already shows
+# what it is, and a label would only push a long spec onto a second line.
 _SOURCE_LABEL = {
     ONNX_FILE: "local .onnx file",
     TORCH_CHECKPOINT: "local PyTorch checkpoint",
@@ -291,8 +293,9 @@ def _backend_text(state: ServingState) -> str:
 
 
 def _verified_on_text(state: ServingState) -> str | None:
-    """The execution provider the numerics check ran on, or None when it never ran. Numerics
-    are CPU-only today, so a CUDA server says its verdict does not cover the device it serves on."""
+    """The execution provider that the numerics check ran on, or None if it did not run. The
+    numerics run only on the CPU. A CUDA server therefore says that its verdict does not cover
+    the device that it serves on."""
     provider = state.backend.verified_provider
     if provider is None:
         return None
@@ -306,7 +309,7 @@ _ANY_HOSTS = ("", "0.0.0.0", "::")
 
 
 def _client_url(host: str, port: int) -> str:
-    """The address a client would use: a wildcard bind is reached as localhost."""
+    """The address that a client uses. A client reaches a wildcard bind as localhost."""
     shown = "localhost" if host in _ANY_HOSTS else host
     if ":" in shown and not shown.startswith("["):
         shown = f"[{shown}]"
@@ -321,7 +324,7 @@ def _endpoint_text(host: str, port: int) -> str:
 
 
 def print_banner(state: ServingState, host: str, port: int, workers: int = 1) -> None:
-    """Boot banner for `serve`. Says what is served, how it was judged, and where it listens."""
+    """The boot banner of `serve`. It says what is served, how downshift judged it, and where it listens."""
     verdict = state.verdict
     rows = _Rows()
 
@@ -372,7 +375,7 @@ def print_banner(state: ServingState, host: str, port: int, workers: int = 1) ->
     verified_on = _verified_on_text(state)
     if verified_on is not None:
         rows.add("Verified on", verified_on)
-    for note in state.notes:  # backend-selection notes from the engine
+    for note in state.notes:  # notes about the backend selection, from the engine
         rows.note(f"{_WARN} {note}")
     if state.embedding is not None:
         rows.add("Embedding", f"{state.embedding.describe()}  (from {state.embedding.origin})")
@@ -413,10 +416,11 @@ def print_config(
     middleware: Sequence[str] = (),
     api_key_set: bool,
 ) -> None:
-    """Every setting the server runs with, one `name = value` line each, at INFO (so only
-    `--log-level info` or lower shows it), right before `ready`. The whole of ServeOptions
-    goes out as it is, so a new option shows up here without touching this function. Names
-    only: the model is its file name, and the API key is `set` or `unset`, never its value."""
+    """Every setting that the server runs with, as one `name = value` line for each setting. It
+    logs at INFO (only `--log-level info` or lower shows it), directly before `ready`. The
+    whole of ServeOptions goes out as it is. A new option therefore shows here without a
+    change to this function. It shows names only. The model is its file name. The API key is
+    `set` or `unset` and never its value."""
     values = {
         "model": display_source(state.source, state.source_kind),
         "host": host,
@@ -436,14 +440,14 @@ def print_config(
 
 
 def print_booting(model: str, host: str, port: int) -> None:
-    """Logged once, before uvicorn binds; the full banner (print_banner) follows once the
-    loader thread lands a verdict."""
+    """Logged one time, before uvicorn binds. The full banner (print_banner) follows when the
+    loader thread has a verdict."""
     report_logger.info("loading %s", path_basename(model))
     report_logger.info("will listen on %s (not ready yet)", _client_url(host, port))
 
 
 def print_ready(state: ServingState) -> None:
-    """Logged by the loader as it hands the state over, which is when /ready flips."""
+    """Logged by the loader when it gives the state over. This is when /ready changes."""
     if not state.timings:
         report_logger.info("ready")
         return
@@ -459,6 +463,6 @@ def error(msg: str) -> None:
 
 
 def print_traceback() -> None:
-    """The active exception's traceback, at debug: what `--log-level debug` adds to the one-line
-    error `_exit_on_error` logs, whichever kind of error it was."""
+    """The traceback of the active exception, at debug. It is what `--log-level debug` adds to
+    the one-line error that `_exit_on_error` logs, for all kinds of error."""
     logger.debug("traceback", exc_info=True)

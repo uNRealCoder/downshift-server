@@ -1,4 +1,4 @@
-"""HTTP contract tests. Each state is exported once per module; export is the slow part."""
+"""HTTP contract tests. Downshift exports each state one time for each module, because the export is the slow part."""
 
 import asyncio
 import dataclasses
@@ -35,9 +35,10 @@ def _client_emitting(state, monkeypatch, outputs: dict) -> TestClient:
 
 
 def _assert_same_outputs(client: TestClient, path: str, reference_body: dict, body: dict) -> dict:
-    """POST both bodies; `reference_body` must answer with JSON lists, `body` may answer base64.
+    """POST both bodies. `reference_body` must answer with JSON lists. `body` can answer base64.
 
-    Asserts both succeed with the same output_0 and returns `body`'s response JSON.
+    It asserts that both succeed with the same output_0, and it returns the response JSON of
+    `body`.
     """
     reference = client.post(path, json=reference_body)
     resp = client.post(path, json=body)
@@ -161,7 +162,7 @@ def test_predict_missing_input(mlp_client):
 
 
 def test_predict_malformed_json_body_is_422(mlp_client):
-    # Bodies are parsed by orjson (run_predict); its decode error must still be FastAPI's 422.
+    # orjson parses the bodies (run_predict). Its decode error must still be the 422 of FastAPI.
     resp = mlp_client.post(
         "/predict", content=b'{"inputs": ', headers={"content-type": "application/json"}
     )
@@ -194,8 +195,9 @@ def test_predict_base64_input_matches_json_input(mlp_client):
 
 
 def test_predict_base64_input_on_torch_backend_does_not_warn(serve_fixture):
-    # np.frombuffer views are read-only; torch.from_numpy warns on those unless the backend
-    # copies. Warnings are errors here so a regression fails instead of logging.
+    # np.frombuffer views are read-only. torch.from_numpy gives a warning for them, unless the
+    # backend makes a copy. Warnings are errors here, so a regression fails and does not only
+    # log.
     client = TestClient(build_app(serve_fixture("clean_mlp", backend="torch")))
     x = np.random.randn(2, 16).astype(np.float32)
 
@@ -237,7 +239,7 @@ def test_predict_base64_input_over_size_cap(mlp_state):
     assert "'x'" in detail
     assert "192 bytes exceeds the server limit of 64 bytes" in detail
 
-    # Just under the cap is fine.
+    # A size just below the limit is acceptable.
     small = np.zeros((1, 16), dtype=np.float32)  # 64 bytes
     resp = client.post("/predict", json={"inputs": {"x": b64_input(small)}})
     assert resp.status_code == 200, resp.text
@@ -288,8 +290,8 @@ def test_predict_graph_base64_inputs(gcn_client):
 def test_predict_server_default_base64_and_per_request_json_override(mlp_state):
     client = TestClient(build_app(_with_options(mlp_state, output_encoding=OutputEncoding.base64)))
     request = {"inputs": {"x": np.random.randn(2, 16).tolist()}}
-    # The per-request "json" override is the reference (the helper asserts it answers lists);
-    # the plain request must fall back to the server default and answer base64.
+    # The "json" override for one request is the reference (the helper asserts that it answers
+    # lists). The plain request must use the default of the server and answer base64.
     body = _assert_same_outputs(client, "/predict", request | {"output_encoding": "json"}, request)
     entry = body["outputs"]["output_0"]
     assert isinstance(entry, dict) and entry["shape"] == [2, 4]
@@ -376,7 +378,7 @@ def test_predict_reraises_http_exception_raised_by_the_backend(mlp_state, monkey
 
 
 def test_predict_nan_and_inf_become_null(mlp_state, monkeypatch):
-    # Deliberate wire behaviour: valid JSON (null), not stdlib's NaN/Infinity extension.
+    # This is wire behaviour by design: valid JSON (null), and not the NaN and Infinity extension of the standard library.
     output = np.array([[np.nan, np.inf, 1.0]], dtype=np.float32)
     client = _client_emitting(mlp_state, monkeypatch, {"output_0": output})
     resp = client.post("/predict", json=MLP_INPUT)
@@ -390,8 +392,8 @@ def test_predict_nan_and_inf_become_null(mlp_state, monkeypatch):
     "output",
     [
         np.array([[0.1, 1.5, -2.25], [65504.0, 3.14159, 0.0]], dtype=np.float16),
-        np.arange(16, dtype=np.float32).reshape(4, 4)[:, ::2],  # strided view: contiguity copy
-        np.asarray(2.5, dtype=np.float32),  # 0-d: orjson rejects it, so the tolist() fallback
+        np.arange(16, dtype=np.float32).reshape(4, 4)[:, ::2],  # strided view: copy for contiguity
+        np.asarray(2.5, dtype=np.float32),  # 0-d: orjson rejects it, so the tolist() fallback runs
     ],
     ids=["float16", "non_contiguous", "scalar"],
 )
@@ -406,8 +408,9 @@ def test_predict_output_serializes(mlp_state, monkeypatch, output):
 
 
 def test_predict_unsupported_dtype_falls_back_per_array(mlp_state, monkeypatch):
-    # Simulate a dtype this orjson cannot write natively (e.g. float128 on Linux) without
-    # depending on the platform: drop float32 from the supported set for this test only.
+    # Simulate a dtype that this orjson cannot write natively (for example float128 on Linux)
+    # without a dependency on the platform. Drop float32 from the supported set for this test
+    # only.
     monkeypatch.setattr(serve_predict, "_ORJSON_DTYPES", serve_predict._ORJSON_DTYPES - {"float32"})
     fallback = np.array([[1.0, 2.0]], dtype=np.float32)
     native = np.array([[3, 4]], dtype=np.int64)
@@ -513,8 +516,8 @@ def test_middleware_specs(mlp_state):
 
 
 def test_ready_and_predict_503_until_the_loader_lands(mlp_state):
-    """Plan 3.3 U3: bind first, load on a background thread, 503 until the verdict is in,
-    200 after, no restart in between."""
+    """Plan 3.3 U3: bind first, load on a background thread, 503 until the verdict is ready,
+    200 after that, and no restart between them."""
     release = threading.Event()
 
     def loader():
@@ -558,7 +561,8 @@ def test_predict_torch_backend_shape_error_is_400(serve_fixture):
     client = TestClient(build_app(serve_fixture("clean_mlp", backend="torch")))
     resp = client.post("/predict", json={"inputs": {"x": [[0.0] * 5]}})
     assert resp.status_code == 400, resp.text
-    assert "'x'" not in resp.json()["detail"]  # torch's own message, not to_numpy's
+    # The message is the own message of torch and not the message of to_numpy.
+    assert "'x'" not in resp.json()["detail"]
 
 
 def test_predict_backend_bug_maps_to_500_without_leaking_details(mlp_state, monkeypatch, caplog):
@@ -717,7 +721,7 @@ def test_predict_past_capacity_is_a_fast_503(mlp_state, monkeypatch):
     assert "server is at capacity" in over.json()["detail"]
     assert "1 running" in over.json()["detail"]
     assert "1 queued" in over.json()["detail"]
-    assert elapsed < 0.5  # never touches the executor
+    assert elapsed < 0.5  # never uses the executor
     assert all(r.status_code == 200 for r in results)
 
 
@@ -744,7 +748,7 @@ def test_predict_queued_past_request_timeout_is_503_and_never_infers(mlp_state, 
     assert first_result.status_code == 200
     assert second_result.status_code == 503
     assert "--request-timeout" in second_result.json()["detail"]
-    assert len(calls) == 1  # the queued predict never reached infer()
+    assert len(calls) == 1  # the predict in the queue never reached infer()
 
 
 def test_health_stays_fast_while_predicts_are_queued(mlp_state, monkeypatch):
@@ -774,8 +778,9 @@ def test_health_stays_fast_while_predicts_are_queued(mlp_state, monkeypatch):
         release.set()
 
     assert health.status_code == 200
-    # Generously below the 5+ second stalls a shared sync threadpool used to cause; the
-    # point is "never blocks behind the predict queue", not a tight latency bound.
+    # This is far below the stalls of more than 5 seconds that a shared sync threadpool caused
+    # in the past. The point is "never blocks behind the predict queue". It is not a tight
+    # latency bound.
     assert elapsed < 1.0
 
 
@@ -893,8 +898,8 @@ def test_inline_sends_a_non_json_content_type_to_the_pools(mlp_state, monkeypatc
 
 
 def test_inline_sends_a_text_request_to_the_pools(mlp_state, monkeypatch):
-    """The fixture model has no tokenizer, so the request is a 400 from run_predict; what
-    matters is that no stage ran on the loop and the body was not marked inline."""
+    """The fixture model has no tokenizer, so the request gets a 400 from run_predict. What
+    matters is that no stage ran on the loop and that nobody marked the body as inline."""
     seen = _loop_probe(mlp_state, monkeypatch)
     client = _inline_client(mlp_state, ExecutionChoice.inline)
     resp = client.post("/predict", json={"text": "hello"})

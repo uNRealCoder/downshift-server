@@ -1,4 +1,4 @@
-"""intake(): a .onnx someone else produced, with and without a reference model."""
+"""intake(): a .onnx file that someone else made, with and without a reference model."""
 
 import downshift
 from downshift.core import verify as verify_mod
@@ -54,7 +54,7 @@ def test_intake_with_reference_fails_via_onnx_runtime_not_a_crash(exported_mlp, 
 
 def test_intake_with_different_reference_is_degraded(exported_mlp):
     path, _, _ = exported_mlp
-    other = clean_mlp.make_model()  # fresh random weights: the graph no longer matches
+    other = clean_mlp.make_model()  # new random weights: the graph no longer matches
 
     verdict = intake(path, reference=other, example_inputs=clean_mlp.make_inputs())
 

@@ -1,9 +1,9 @@
-"""Generic adapter: any nn.Module.
+"""The generic adapter: any nn.Module.
 
-Handles two things. A single dataclass positional argument gets flattened into plain
-tensors (torch.export rejects unregistered dataclasses outright). And when no example
-inputs are given, it guesses a shape from the first Linear/Conv layer, which is enough
-for the torchvision-style single-tensor case.
+It does two jobs. It flattens a single positional dataclass argument into plain tensors.
+(torch.export rejects dataclasses that are not registered.) If you give no example inputs, it
+guesses a shape from the first Linear or Conv layer. This is enough for the single-tensor case
+of the torchvision style.
 """
 
 import dataclasses
@@ -90,7 +90,7 @@ def _flatten_dataclass(
     names = tuple(f.name for f in dataclasses.fields(arg))
     tensors = tuple(getattr(arg, n) for n in names)
     if not all(isinstance(t, torch.Tensor) for t in tensors):
-        return None  # can't flatten a non-tensor field; let export produce the real error
+        return None  # cannot flatten a field that is not a tensor. The export gives the real error
 
     dataclass_type = type(arg)
     shim = build_shim_class(names)(model, lambda fields: dataclass_type(**fields), names)

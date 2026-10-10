@@ -1,8 +1,8 @@
 """Hazard: scatter_reduce(include_self=False) has no faithful ONNX translation.
 
-This is the aggregation pattern PyG message passing is built on. On torch 2.14 it exports
-without error under strict=False and returns wrong numbers, so the verdict is DEGRADED
-rather than FAILED. Numerical verification is the only thing that catches it.
+PyG message passing uses this aggregation pattern. On torch 2.14, it exports without an error
+under strict=False and returns wrong numbers. The verdict is therefore DEGRADED and not FAILED.
+Only the numerical verification finds the fault.
 """
 
 import torch

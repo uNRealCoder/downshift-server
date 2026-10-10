@@ -1,8 +1,10 @@
-"""Client-supplied graph batching for /predict/graph: many graphs in one request become one
-disjoint-union graph (one inference), and the outputs are cut back into one slice per graph.
+"""The batching of graphs that the client supplies, for /predict/graph. Many graphs in one
+request become one disjoint-union graph (one inference). The outputs are then cut again into one
+slice for each graph.
 
-Splitting needs to know what each output's axis 0 follows: nodes, edges, or neither. That is
-decided once at verify time (ExportVerdict.output_axes); see core/verdict.py.
+To split, downshift must know what axis 0 of each output follows: nodes, edges, or neither.
+Downshift decides this one time, at verification (ExportVerdict.output_axes). See
+core/verdict.py.
 """
 
 import logging
@@ -16,10 +18,10 @@ logger = logging.getLogger("downshift.serve")
 NODE, EDGE, FIXED, UNKNOWN = "node", "edge", "fixed", "unknown"
 
 GRAPH_TENSORS = ("x", "edge_index", "edge_attr")
-# The inputs that make a model "graph-shaped": what /predict/graph accepts, and what /schema
-# checks before advertising that route.
+# The inputs that make a model "graph-shaped". /predict/graph accepts them, and /schema checks
+# them before it advertises that route.
 GRAPH_INPUTS = frozenset(GRAPH_TENSORS[:2])
-# The per-graph count vectors a batched safetensors body adds.
+# The count vectors for each graph that a batched safetensors body adds.
 GRAPH_COUNTS = ("num_nodes", "num_edges")
 
 _FIXED_HELP = (
@@ -34,9 +36,10 @@ _UNKNOWN_HELP = (
 
 
 def eager_output_axes(prepared: Any, samples: int = 4) -> list[str]:
-    """Output kinds for a PyG model whose export (and so verify) was skipped, `--backend
-    torch`: the same classification verify would make, from a few eager forwards over the
-    adapter's own varied samples. [] (every output unknown) when it can't be worked out."""
+    """The output kinds for a PyG model whose export (and so verification) was skipped with
+    `--backend torch`. It is the same classification that verify makes. It uses a few eager
+    forward passes over the own varied samples of the adapter. It returns [] (each output
+    unknown) if it cannot find the kinds."""
     from downshift.adapters.base import Family
     from downshift.core.axes import classify_outputs
 
@@ -61,15 +64,15 @@ def eager_output_axes(prepared: Any, samples: int = 4) -> list[str]:
         return classify_outputs(
             sample_shapes, output_shapes, names.index("x"), names.index("edge_index")
         )
-    except Exception:  # noqa: BLE001 - an unclassifiable model is served, it just can't batch
+    except Exception:  # noqa: BLE001 - downshift serves a model that it cannot classify. It cannot batch it
         logger.debug("could not classify the model's outputs", exc_info=True)
         return []
 
 
 def index_range_violation(name: str, arr: np.ndarray | None, upper: int, what: str) -> str | None:
-    """Why `arr` (an index tensor) holds a value outside [0, upper), or None. One vectorised
-    min/max, since a backend that trusts the indices wraps a negative one or reads out of
-    bounds instead of refusing the request."""
+    """The reason why `arr` (an index tensor) has a value outside [0, upper). None if it has
+    none. It uses one vectorized min and max. A backend that trusts the indices wraps a negative
+    index or reads out of bounds, and does not refuse the request."""
     if arr is None or arr.size == 0:
         return None
     lo, hi = int(arr.min()), int(arr.max())
@@ -89,11 +92,11 @@ def edge_index_violation(feeds: dict[str, np.ndarray]) -> str | None:
 def batch_graphs(
     items: Sequence[dict[str, np.ndarray]],
 ) -> tuple[dict[str, np.ndarray], list[int], list[int]]:
-    """Concatenate graphs into one feed dict, offsetting each edge_index by the nodes before it.
+    """Join graphs into one feed dict. Each edge_index gets an offset of the nodes before it.
 
-    Each item holds `x` [n, ...], `edge_index` [2, e] in that graph's own node ids and
-    optionally `edge_attr` [e, ...]. Returns (feeds, node_counts, edge_counts). Raises
-    ValueError naming the offending graph, e.g. "graphs[2]: ...".
+    Each item has `x` [n, ...], `edge_index` [2, e] in the own node IDs of that graph, and
+    optionally `edge_attr` [e, ...]. It returns (feeds, node_counts, edge_counts). It raises
+    ValueError that names the graph with the fault, for example "graphs[2]: ...".
     """
     node_counts: list[int] = []
     edge_counts: list[int] = []
@@ -134,7 +137,7 @@ def batch_graphs(
 
     offsets = np.concatenate(([0], np.cumsum(node_counts[:-1]))).astype(np.int64)
     edge_index = np.concatenate([item["edge_index"] for item in items], axis=1)
-    edge_index += np.repeat(offsets, edge_counts).astype(edge_index.dtype)  # a fresh array
+    edge_index += np.repeat(offsets, edge_counts).astype(edge_index.dtype)  # a new array
     feeds = {"x": np.concatenate([item["x"] for item in items]), "edge_index": edge_index}
     if with_attr:
         feeds["edge_attr"] = np.concatenate([item["edge_attr"] for item in items])
@@ -144,9 +147,9 @@ def batch_graphs(
 def binary_batch(
     tensors: dict[str, np.ndarray],
 ) -> tuple[dict[str, np.ndarray], list[int], list[int]]:
-    """A safetensors batch (concatenated local-id x/edge_index/edge_attr plus int64 `num_nodes`
-    and `num_edges` vectors) as batch_graphs returns it: (feeds, node_counts, edge_counts).
-    ValueError for a body that does not add up."""
+    """A safetensors batch (x, edge_index and edge_attr with local IDs, joined, plus the int64
+    vectors `num_nodes` and `num_edges`) in the form that batch_graphs returns: (feeds,
+    node_counts, edge_counts). ValueError for a body whose counts do not agree."""
     if "num_nodes" not in tensors or "num_edges" not in tensors:
         raise ValueError("a batched body needs both 'num_nodes' and 'num_edges'")
     num_nodes, num_edges = tensors["num_nodes"], tensors["num_edges"]
@@ -154,14 +157,14 @@ def binary_batch(
         if counts.ndim != 1:
             raise ValueError(f"{name} must be a 1-D vector, got shape {list(counts.shape)}")
         if counts.dtype != np.int64:
-            raise ValueError(f"{name} is {counts.dtype.name}; it must be int64")
+            raise ValueError(f"{name} is {counts.dtype.name}. It must be int64")
     if num_nodes.shape != num_edges.shape:
         raise ValueError(
-            f"num_nodes has {num_nodes.shape[0]} entries and num_edges {num_edges.shape[0]}; "
-            "they must match"
+            f"num_nodes has {num_nodes.shape[0]} entries and num_edges {num_edges.shape[0]}. "
+            "They must match"
         )
     if num_nodes.shape[0] == 0:
-        raise ValueError("num_nodes is empty; a batch needs at least one graph")
+        raise ValueError("num_nodes is empty. A batch needs at least one graph")
     if int(num_nodes.min()) < 1:
         raise ValueError("num_nodes must be at least 1 for every graph")
     if int(num_edges.min()) < 0:
@@ -170,23 +173,24 @@ def binary_batch(
     total_nodes, total_edges = int(num_nodes.sum()), int(num_edges.sum())
     if x.ndim < 1 or total_nodes != x.shape[0]:
         raise ValueError(
-            f"sum(num_nodes) is {total_nodes}; x has {x.shape[0] if x.ndim else 0} rows"
+            f"sum(num_nodes) is {total_nodes}. x has {x.shape[0] if x.ndim else 0} rows"
         )
     if edge_index.ndim != 2 or edge_index.shape[0] != 2:
         raise ValueError(f"edge_index must have shape [2, E], got {list(edge_index.shape)}")
     if total_edges != edge_index.shape[1]:
         raise ValueError(
-            f"sum(num_edges) is {total_edges}; edge_index has {edge_index.shape[1]} columns"
+            f"sum(num_edges) is {total_edges}. edge_index has {edge_index.shape[1]} columns"
         )
     attr = tensors.get("edge_attr")
     if attr is not None and (attr.ndim < 1 or attr.shape[0] != total_edges):
         raise ValueError(
-            f"sum(num_edges) is {total_edges}; edge_attr has "
+            f"sum(num_edges) is {total_edges}. edge_attr has "
             f"{attr.shape[0] if attr.ndim else 0} rows"
         )
 
-    # Each edge's own graph's node count, and the nodes of every graph before it: the local ids
-    # are range-checked and shifted to batch ids in one pass, with x and edge_attr left as sent.
+    # The node count of the own graph of each edge, and the nodes of each graph before it.
+    # Downshift checks the range of the local IDs and moves them to batch IDs in one pass. x and
+    # edge_attr stay as they were sent.
     edge_nodes = np.repeat(num_nodes, num_edges)
     bad = (edge_index < 0) | (edge_index >= edge_nodes)
     if bad.any():
@@ -205,8 +209,9 @@ def binary_batch(
 
 
 def split_refusal(kinds: Sequence[str], names: Sequence[str], graph_count: int) -> str | None:
-    """Why a batch of `graph_count` graphs can't be split, or None. One graph always can: its
-    outputs are the answer as they are. Cheap, so run_predict asks before inferring."""
+    """The reason why a batch of `graph_count` graphs cannot be split. None if it can be split.
+    One graph can always be split. Its outputs are the answer as they are. The check is cheap,
+    so run_predict asks before it infers."""
     if graph_count <= 1:
         return None
     for i in range(max(len(kinds), len(names))):
@@ -224,9 +229,9 @@ def split_outputs(
     node_counts: Sequence[int],
     edge_counts: Sequence[int],
 ) -> list[dict[str, np.ndarray]]:
-    """One outputs dict per graph, in request order: `node` outputs cut by node counts, `edge`
-    outputs by edge counts. With a single graph the outputs are returned as they are, whatever
-    their kind. ValueError for an output that can't be split."""
+    """One outputs dict for each graph, in the order of the request. `node` outputs are cut by
+    the node counts. `edge` outputs are cut by the edge counts. For a single graph, the outputs
+    are returned as they are, for all kinds. ValueError for an output that cannot be split."""
     if len(node_counts) == 1:
         return [outputs]
     refusal = split_refusal(kinds, list(outputs), len(node_counts))

@@ -1,12 +1,13 @@
-"""Round-tripping a `serve` invocation through `--workers N`, and the logging setup every
-command uses. ServeArgs/ArtifactHandoff are the JSON envelope a parent process ships to its
-uvicorn worker processes; the builders below turn that envelope (or a fresh MODEL argument)
-into a ServingState + FastAPI app.
+"""The code that sends a `serve` call through `--workers N`, and the logging setup that every
+command uses. ServeArgs and ArtifactHandoff are the JSON envelope that a parent process sends
+to its uvicorn worker processes. The builders below turn that envelope (or a new MODEL
+argument) into a ServingState and a FastAPI app.
 
-Heavy imports (torch, onnxruntime, downshift.core, downshift.serve.engine/app,
-downshift.loading) are deferred into the function bodies that need them, same discipline as
-`downshift.cli.main`: this module is imported by main.py at load time to re-export these names,
-so keeping it torch-free at module scope is what keeps `--help`/`--version` fast.
+The function bodies do the heavy imports (torch, onnxruntime, downshift.core,
+downshift.serve.engine and app, and downshift.loading) when they need them. This is the same
+rule as in `downshift.cli.main`. main.py imports this module at load time to re-export these
+names. This module must stay free of torch at module scope, so that `--help` and `--version`
+stay fast.
 """
 
 from __future__ import annotations
@@ -37,8 +38,8 @@ _SERVE_ARGS_ENV = "_DOWNSHIFT_SERVE_ARGS"
 
 
 def _setup_logging(level: LogLevel, *, stderr: bool = False) -> None:
-    """The one logging sink, on stdout. `stderr=True` is for `--json`, which keeps stdout a
-    single parseable JSON document."""
+    """The one logging sink, on stdout. `stderr=True` is for `--json`. It keeps stdout as one
+    JSON document that a program can parse."""
     setup_logging(level.value, stream=sys.stderr if stderr else None)
 
 
@@ -47,25 +48,25 @@ def _load(spec: LoadSpec) -> LoadedModel:
 
     if spec.unsafe_load:
         render.warn(
-            f"--unsafe-load: torch.load(weights_only=False) on {spec.model}; arbitrary code may run"
+            f"--unsafe-load: torch.load(weights_only=False) on {spec.model}. Arbitrary code can run"
         )
     return load_model(spec)
 
 
 @dataclass
 class ArtifactHandoff:
-    """Set only for `--workers N`: the parent's export, so workers don't capture or verify
-    again. A worker boots from it exactly as from an export-cache hit (serve.reuse): the
-    backend is chosen from the verdict as the parent chose it, and a torch worker loads the
-    model itself (torch weights aren't shipped between processes)."""
+    """Set only for `--workers N`: the export of the parent. Workers do not capture or verify
+    again. A worker boots from it in the same way as from an export-cache hit (serve.reuse).
+    The worker selects the backend from the verdict, as the parent did. A torch worker loads
+    the model itself, because downshift does not send torch weights between processes."""
 
     verdict: dict
     input_names: list[str]
-    kind: str  # the parent's ServingState.source_kind; an ONNX worker loads nothing to tell
-    # [[axis, name, min, max], ...] per input (core.axes): an ONNX worker has no Prepared.
+    kind: str  # ServingState.source_kind of the parent. An ONNX worker loads nothing to find it
+    # [[axis, name, min, max], ...] for each input (core.axes). An ONNX worker has no Prepared.
     axis_bounds: dict[str, list[list]] = field(default_factory=dict)
-    onnx_path: str | None = None  # the graph, when the parent serves it on onnxruntime
-    feeds_path: str | None = None  # real example inputs for warmup, if there were any
+    onnx_path: str | None = None  # the graph, if the parent serves it on onnxruntime
+    feeds_path: str | None = None  # real example inputs for the warmup, if there are any
 
     def entry(self) -> ExportEntry:
         import numpy as np
@@ -87,10 +88,11 @@ class ArtifactHandoff:
 
 @dataclass
 class ServeArgs:
-    """Everything needed to rebuild a ServingState + FastAPI app from scratch. Round-tripped
-    through JSON (dataclasses.asdict + json.dumps/loads) for a `--workers N` run, which ships
-    this to each worker process via an env var; from_json/to_json do the enum coercion that
-    needs (json has no enum type, so BackendChoice/OutputEncoding come back as plain str)."""
+    """Everything that downshift needs to build a ServingState and a FastAPI app again. For a
+    `--workers N` run, it goes through JSON (dataclasses.asdict, json.dumps and json.loads) and
+    back. The parent sends it to each worker process in an environment variable. from_json and
+    to_json do the enum conversion that this needs. JSON has no enum type, so BackendChoice
+    and OutputEncoding come back as plain str."""
 
     load: LoadSpec
     options: ServeOptions
@@ -99,8 +101,8 @@ class ServeArgs:
     log_level: str
     artifact: ArtifactHandoff | None = None
     access_log: bool = True
-    # A Hugging Face repo directory validated by loading.resolve_tokenizer_source, or None.
-    # Independent of `reference`: this is the whole of --tokenizer-from's job.
+    # A Hugging Face repo directory that loading.resolve_tokenizer_source validated, or None.
+    # It does not depend on `reference`. This is the whole job of --tokenizer-from.
     tokenizer_from: str | None = None
 
     def to_json(self) -> str:
@@ -133,7 +135,7 @@ def _build_serving_state(args: ServeArgs) -> ServingState:
         nonlocal load_s
         load_start = time.perf_counter()
         loaded = _load(args.load)
-        # --reference shares --pooling/--normalize with MODEL: see check_cmd's comment.
+        # --reference shares --pooling and --normalize with MODEL. See the comment in check_cmd.
         ref = _load(replace(args.load, model=args.reference)) if args.reference else None
         load_s += time.perf_counter() - load_start
         return loaded, ref
@@ -154,8 +156,8 @@ def _build_serving_state(args: ServeArgs) -> ServingState:
             args.tokenizer_from,
             repo=hf_repo_dir(args.load.model),
             inputs_spec=args.load.inputs,
-            # One export per process: without the disk tier, a key (a hash of every weight)
-            # could never be read back.
+            # One export for each process. Without the disk tier, nothing could read a key
+            # (a hash of every weight) again.
             cache=bool(opts.export_cache_dir),
         )
     state.timings[Phase.load] = load_s
@@ -163,22 +165,26 @@ def _build_serving_state(args: ServeArgs) -> ServingState:
 
 
 def _serve_app_factory() -> FastAPI:
-    """Import-string target for uvicorn's multi-worker mode
-    (`downshift.cli.runtime:_serve_app_factory`). Each worker process calls this on its own,
-    synchronously, *before* uvicorn's per-worker Server starts accepting on the socket the
-    parent already bound (see uvicorn._subprocess.subprocess_started) - so, like the
-    single-worker path, this builds the app with a loader rather than a ready-made state:
-    without that, a worker would accept no connections at all, not even /health, for the
-    whole load/export/verify/warmup instead of answering a fast /ready 503 in the meantime.
-    With no artifact set, a worker independently reloads/re-exports/re-warms the model,
-    exactly like the single-worker path; with one set, it loads the parent's already-verified
-    export instead (see ServeArgs). Unlike the single-worker path, a failed load here has no
-    uvicorn.Server to set should_exit on (that Server is built by uvicorn itself, after this
-    function returns), so the loader below exits the process directly instead: a worker that
-    can't load must not stay up quietly serving 503s forever with nothing to say why. It exits
-    with uvicorn's STARTUP_FAILURE code, which tells uvicorn's worker supervisor to stop the
-    whole server rather than respawn the worker into the same failure (and the same reload)
-    forever.
+    """The import-string target for the multi-worker mode of uvicorn
+    (`downshift.cli.runtime:_serve_app_factory`). Each worker process calls it on its own,
+    synchronously. The call happens before the Server of uvicorn for that worker starts to
+    accept connections on the socket that the parent already bound (see
+    uvicorn._subprocess.subprocess_started).
+
+    As in the single-worker path, this function builds the app with a loader and not with a
+    ready-made state. Otherwise, a worker would accept no connections, not even /health, for
+    the whole load, export, verification and warmup. It would not answer a fast /ready 503.
+
+    If no artifact is set, a worker reloads, exports and warms up the model on its own, as in
+    the single-worker path. If an artifact is set, the worker loads the export that the parent
+    already verified (see ServeArgs).
+
+    A failed load here is different from the single-worker path. There is no uvicorn.Server on
+    which to set should_exit. Uvicorn builds that Server itself, after this function returns.
+    The loader below therefore exits the process directly. A worker that cannot load must not
+    stay up and serve 503 forever without a reason. It exits with the STARTUP_FAILURE code of
+    uvicorn. This code tells the worker supervisor of uvicorn to stop the whole server. The
+    supervisor does not start the worker again into the same failure and the same reload.
     """
     from uvicorn.config import STARTUP_FAILURE
 
@@ -207,9 +213,10 @@ _HANDOFF_KEEPALIVE: list[object] = []
 
 
 def _write_onnx_artifact(state: ServingState) -> tuple[Path, Path | None, Path | None]:
-    """(onnx_path, feeds_path, temp_dir) for a `--workers N` parent to hand its already-
-    verified export to the workers. temp_dir is what to clean up afterwards, or None when
-    nothing was written (an already-on-disk .onnx with no example inputs to save)."""
+    """Return (onnx_path, feeds_path, temp_dir). A `--workers N` parent uses them to give its
+    verified export to the workers. temp_dir is the directory to clean up afterward. It is None
+    if nothing was written (a .onnx file that is already on disk, with no example inputs to
+    save)."""
     import tempfile
 
     import numpy as np
@@ -218,9 +225,10 @@ def _write_onnx_artifact(state: ServingState) -> tuple[Path, Path | None, Path |
 
     verdict = state.verdict
     if verdict._tmpdir is not None:
-        # An external-data export lives in the verdict's own temp dir, data file beside the
-        # .onnx. The parent drops its state before the workers load, which would delete that
-        # dir, so it has to outlive the verdict (its finalizer then runs at exit).
+        # An export with external data is in the own temporary directory of the verdict. The
+        # data file is next to the .onnx file. The parent drops its state before the workers
+        # load. That would delete the directory. It must therefore outlive the verdict (its
+        # finalizer then runs at exit).
         _HANDOFF_KEEPALIVE.append(verdict._tmpdir)
     needs_copy = verdict.onnx_path is None
     needs_feeds = state.example_inputs is not None
@@ -237,5 +245,5 @@ def _write_onnx_artifact(state: ServingState) -> tuple[Path, Path | None, Path |
         assert state.example_inputs is not None
         feeds_path = temp_dir / "feeds.npz"
         feeds = example_feeds(state.input_names, state.example_inputs)
-        np.savez(feeds_path, **feeds)  # type: ignore[arg-type]  # numpy's stub misreads **kwds
+        np.savez(feeds_path, **feeds)  # type: ignore[arg-type]  # the numpy stub misreads **kwds
     return onnx_path, feeds_path, temp_dir

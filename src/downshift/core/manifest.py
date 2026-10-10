@@ -1,4 +1,4 @@
-"""Provenance sidecar written next to every exported .onnx."""
+"""The provenance file that downshift writes next to each exported .onnx file."""
 
 import json
 from datetime import UTC, datetime
@@ -24,8 +24,8 @@ class _DTYPE_NAMES(IntEnum):
     bf16 = onnx.TensorProto.BFLOAT16
 
 
-# A plain value->name dict, so a miss is a dict lookup rather than an IntEnum ValueError;
-# most initializers (int64 indices, bools, ...) are misses, and this runs in a loop.
+# A plain value->name dict. A miss is then a dict lookup and not a ValueError of an IntEnum.
+# Most initializers (int64 indices, bools, ...) are misses, and this code runs in a loop.
 _DTYPE_LOOKUP: dict[int, str] = {member.value: member.name for member in _DTYPE_NAMES}
 
 
@@ -60,9 +60,9 @@ def external_data_files(onnx_path: Path) -> list[str]:
 def build_manifest(
     onnx_path: Path, verdict: ExportVerdict, source_path: Path | None, package_version: str
 ) -> dict:
-    # The manifest travels with the exported file, so it names files and never records where
-    # they sat on this machine (which would carry the exporter's directory layout, and their
-    # username, to whoever receives the artifact). The hashes identify the files.
+    # The manifest goes with the exported file. It names files and never records where they
+    # were on this machine. A path would give the directory layout and the user name of the
+    # exporter to each person who receives the artifact. The hashes identify the files.
     verdict_dict = verdict.redacted_dict((onnx_path, source_path))
     verdict_dict["onnx_path"] = onnx_path.name if verdict_dict["onnx_path"] else None
     return {

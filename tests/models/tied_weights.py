@@ -1,5 +1,5 @@
-"""Hazard: tied embedding/output weight (GPT-2/OPT-style). Exports CLEAN on torch 2.14;
-the shared storage shows up as a verdict warning."""
+"""Hazard: tied embedding/output weight (GPT-2/OPT-style). It exports as CLEAN on torch 2.14. The
+shared storage shows as a warning of the verdict."""
 
 import torch
 from torch import nn

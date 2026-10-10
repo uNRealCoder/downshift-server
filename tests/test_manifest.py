@@ -1,4 +1,4 @@
-"""The provenance manifest written next to every exported .onnx."""
+"""The provenance manifest that downshift writes next to each exported .onnx file."""
 
 import hashlib
 import json

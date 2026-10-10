@@ -1,11 +1,11 @@
-"""The wire codecs behind binary tensor I/O: base64 and safetensors.
+"""The wire codecs for binary tensor I/O: base64 and safetensors.
 
-Base64 uses pybase64 (SIMD) when installed, stdlib otherwise.
+Base64 uses pybase64 (SIMD) if it is installed. Otherwise, it uses the standard library.
 
-CPython's binascii runs at roughly 230 MB/s and is most of the cost of a base64 request once
-the JSON codec is out of the way; pybase64 is about 12x faster on both directions. Same call
-signatures either way, so callers never know which one they got. Decoding yields a writable
-buffer where the codec allows it, so torch can wrap it without copying.
+The binascii of CPython runs at about 230 MB/s. It is most of the cost of a base64 request
+after the JSON codec is out of the way. pybase64 is about 12x faster in both directions. The
+call signatures are the same in both cases, so callers never know which one they got. If the
+codec allows it, decoding gives a writable buffer. Torch can then wrap it without a copy.
 """
 
 import json
@@ -25,7 +25,7 @@ try:
         out: bytearray = pybase64.b64decode_as_bytearray(data, validate=True)
         return out
 
-except ImportError:  # pragma: no cover - exercised only where pybase64 is absent
+except ImportError:  # pragma: no cover - runs only where pybase64 is absent
     import base64
 
     BASE64_CODEC = "stdlib"
@@ -70,10 +70,10 @@ def _is_int(value: object) -> bool:
 def decode_safetensors(
     body: bytes, *, max_input_bytes: int
 ) -> tuple[dict[str, np.ndarray], dict[str, str]]:
-    """Parse a safetensors body into zero-copy numpy views plus its `__metadata__`.
+    """Parse a safetensors body into numpy views without a copy, plus its `__metadata__`.
 
-    Hand-rolled on purpose: the header is JSON and the payload raw bytes, so nothing here can
-    execute code. Raises ValueError for anything malformed.
+    We wrote this reader by hand, by design. The header is JSON and the payload is raw bytes.
+    Nothing here can execute code. It raises ValueError for all malformed input.
     """
     if len(body) < 8:
         raise ValueError("safetensors body is shorter than its 8-byte header length")
@@ -158,10 +158,10 @@ def encode_safetensors(
     header: dict[str, Any] = {}
     if metadata:
         header["__metadata__"] = metadata
-    # Byte views of each (contiguous, little-endian) array, so the join below is the only copy.
+    # Byte views of each array (contiguous, little-endian). The join below is then the only copy.
     chunks: list[np.ndarray] = []
     offset = 0
-    # The reference writer orders by descending itemsize then name, which keeps tensors aligned.
+    # The reference writer sorts by descending itemsize and then by name. This keeps the tensors aligned.
     for name, array in sorted(arrays.items(), key=lambda kv: (-kv[1].dtype.itemsize, kv[0])):
         dtype = array.dtype.newbyteorder("<") if array.dtype.itemsize > 1 else array.dtype
         wire = _SAFETENSORS_NAMES.get(dtype)

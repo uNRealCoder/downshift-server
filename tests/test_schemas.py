@@ -1,4 +1,4 @@
-"""normalize_dtype() and to_numpy() edge cases not reached through the HTTP layer."""
+"""The edge cases of normalize_dtype() and to_numpy() that the HTTP layer does not reach."""
 
 import numpy as np
 import pytest
@@ -46,14 +46,14 @@ def test_to_numpy_base64_is_a_zero_copy_view():
     out = to_numpy("x", b64_input(arr))
     np.testing.assert_array_equal(out, arr)
     assert out.dtype == np.int16
-    assert not out.flags.owndata  # frombuffer view over the decoded buffer, nothing copied
+    assert not out.flags.owndata  # a frombuffer view over the decoded buffer. Nothing is copied
     assert out.flags.c_contiguous
-    # pybase64 decodes into a bytearray, so torch can wrap the view without copying it.
+    # pybase64 decodes into a bytearray, so torch can wrap the view without a copy.
     assert out.flags.writeable == (BASE64_CODEC == "pybase64")
 
 
 def test_to_numpy_base64_explicit_dtype_wins_over_declared():
-    # The backend declared float, the client sent int64; no silent cast either way.
+    # The backend declared float and the client sent int64. There is no silent cast in either case.
     out = to_numpy("x", b64_input(np.arange(4, dtype=np.int64)), "tensor(float)")
     assert out.dtype == np.int64
 

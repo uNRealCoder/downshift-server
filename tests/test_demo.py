@@ -1,4 +1,4 @@
-"""examples/: the models behind the README's own commands."""
+"""examples/: the models for the commands in the README."""
 
 import torch
 from typer.testing import CliRunner

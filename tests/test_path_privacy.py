@@ -1,4 +1,4 @@
-"""Nothing a client or a manifest reader receives names a directory on the server's disk."""
+"""Nothing that a client or a manifest reader receives names a directory on the disk of the server."""
 
 import dataclasses
 import json
@@ -128,7 +128,7 @@ def test_manifest_records_names_not_locations(tmp_path):
         clean_mlp.make_model(), out, clean_mlp.make_inputs(), source_path=source
     )
     assert verdict.status == "CLEAN", verdict.reason
-    assert verdict.onnx_path == out  # the in-process verdict keeps the real location
+    assert verdict.onnx_path == out  # the verdict in the process keeps the real location
 
     text = manifest_path_for(out).read_text()
     manifest = json.loads(text)

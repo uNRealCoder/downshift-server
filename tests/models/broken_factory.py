@@ -1,5 +1,5 @@
-"""Not an export hazard fixture: raises as soon as it's instantiated. Used by CLI tests that
-need a genuine, unexpected crash (exit code 5) rather than a usage error (exit code 4).
+"""Not an export hazard fixture: raises as soon as it is instantiated. CLI tests use it when they
+need a real, unexpected crash (exit code 5) and not a usage error (exit code 4).
 """
 
 

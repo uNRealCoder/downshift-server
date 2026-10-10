@@ -1,10 +1,11 @@
-"""PyG adapter: flattens torch_geometric.data.Data into (x, edge_index[, edge_attr]).
+"""The PyG adapter. It flattens torch_geometric.data.Data into (x, edge_index[, edge_attr]).
 
-Node count N and edge count E are independent dynamic dims. Tying them to one Dim is the
-classic way to get a GNN export that works on the example graph and throws
-INVALID_ARGUMENT on the next one.
+The node count N and the edge count E are independent dynamic dimensions. If you tie them to
+one Dim, the GNN export works on the example graph and raises INVALID_ARGUMENT on the next
+graph. This is the typical fault.
 
-Only imported when a PyG Data input actually shows up, so torch_geometric stays optional.
+Downshift imports it only when a PyG Data input appears. torch_geometric therefore stays
+optional.
 """
 
 import torch
@@ -16,7 +17,7 @@ from downshift.adapters._flatten import build_shim_class
 from downshift.adapters.base import Family, Prepared, VaryFn
 from downshift.core.shapes import alternative_sizes, dim_bounds, lower_axis_max, pick_size
 
-BASE_FIELD_NAMES = ("x", "edge_index")  # edge_attr appended when present on the input Data
+BASE_FIELD_NAMES = ("x", "edge_index")  # edge_attr is added if the input Data has it
 _GUESS_NODES = 8
 _GUESS_EDGES = 16
 
@@ -88,12 +89,12 @@ def make_vary_fn(
     dynamic_shapes: tuple | None = None,
     axis_max: dict[str, int] | None = None,
 ) -> VaryFn:
-    """Regenerate (x, edge_index[, edge_attr]) with independently varied N and E.
+    """Generate (x, edge_index[, edge_attr]) again, with N and E varied independently.
 
-    edge_index is redrawn against the sample's own node count, not the original tensor's
-    value range, so a shrunken graph never references nodes it doesn't have. With --axis-max,
-    sample 1 sits exactly at the pinned `num_nodes` / `num_edges` (the other keeps the
-    example's size).
+    Downshift draws edge_index again for the own node count of the sample. It does not use the
+    value range of the original tensor. A graph that is smaller then never references nodes
+    that it does not have. With --axis-max, sample 1 is exactly at the pinned `num_nodes` and
+    `num_edges` (the other one keeps the size of the example).
     """
     x_idx = field_names.index("x")
     ei_idx = field_names.index("edge_index")
@@ -122,7 +123,7 @@ def make_vary_fn(
         else:
             n = pick_size(n_candidates) if n_candidates else base_n
             e = pick_size(e_candidates) if e_candidates else base_e
-            # N != E lets verify() tell node-level outputs from edge-level ones.
+            # With N != E, verify() can tell outputs for nodes from outputs for edges.
             for _ in range(8):
                 if e != n or not e_candidates:
                     break

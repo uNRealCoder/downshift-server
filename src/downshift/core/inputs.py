@@ -1,9 +1,9 @@
-"""Example-input synthesis ladder.
+"""The ladder for the synthesis of example inputs.
 
-1. user-supplied      always wins
+1. user-supplied      always has priority
 2. adapter-derived    the adapter knows its family (HF config, PyG in_channels, ...)
-3. signature guess    the generic adapter's first-Linear/Conv heuristic
-4. fail loudly        say exactly what to pass
+3. signature guess    the first-Linear or first-Conv rule of the generic adapter
+4. fail with an error    the error says exactly what to pass
 """
 
 from torch import nn
@@ -18,8 +18,8 @@ def synthesize(model: nn.Module, adapter: Adapter, user_inputs: tuple | None) ->
     if guessed is not None:
         return guessed
     raise ValueError(
-        f"Couldn't work out example inputs for {type(model).__name__} with the "
-        f"{adapter.name!r} adapter. Pass them explicitly: from Python, "
-        "check(model, example_inputs=(tensor, ...)); from the CLI, --inputs module:function "
-        "where the function returns a tuple of forward() arguments."
+        f"Cannot find example inputs for {type(model).__name__} with the "
+        f"{adapter.name!r} adapter. Pass them explicitly. From Python, use "
+        "check(model, example_inputs=(tensor, ...)). From the CLI, use --inputs "
+        "module:function. The function returns a tuple of forward() arguments."
     )

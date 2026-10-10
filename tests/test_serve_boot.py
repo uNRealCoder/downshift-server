@@ -1,7 +1,7 @@
-"""U3: `serve` binds a real socket before the model is ready. A real subprocess and a real
-uvicorn server on an ephemeral port; this is what actually exercises uvicorn.Server's
-lifespan/signal handling on Windows (see PLAN_0.4.0.md's risk table), which the in-process
-TestClient tests in tests/test_serve.py cannot.
+"""U3: `serve` binds a real socket before the model is ready. The test uses a real subprocess and
+a real uvicorn server on an ephemeral port. This exercises the lifespan and signal handling of
+uvicorn.Server on Windows (see the risk table of PLAN_0.4.0.md). The TestClient tests in
+tests/test_serve.py run in the same process and cannot do this.
 """
 
 import socket
@@ -57,8 +57,8 @@ def test_ready_is_503_then_200_with_no_restart() -> None:
         text=True,
         env=subprocess_env(),
     )
-    # Drained continuously: left unread, a few hundred polls' worth of uvicorn log lines
-    # would fill the pipe buffer and block the child on its next write, hanging this test.
+    # Drained all the time. If nobody reads it, the uvicorn log lines of a few hundred polls
+    # fill the pipe buffer. The child then blocks on its next write, and this test hangs.
     output: list[str] = []
     reader = threading.Thread(target=lambda: output.extend(iter(proc.stdout.readline, "")))
     reader.daemon = True

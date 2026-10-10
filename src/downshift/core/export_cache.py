@@ -1,18 +1,21 @@
-"""The opt-in disk tier behind the export memo (`--export-cache-dir DIR`).
+"""The optional disk tier behind the export memo (`--export-cache-dir DIR`).
 
-Each entry is `DIR/<key>/`: what `downshift export` writes (model.onnx, its external data file
-if any, model.manifest.json) plus verdict.json, feeds.npz and serving.json. The directory is the
-operator's: downshift never evicts from it, polices its permissions or offers commands for it.
-Deleting it clears the cache.
+Each entry is `DIR/<key>/`. It has what `downshift export` writes (model.onnx, its external data
+file if there is one, and model.manifest.json). It also has verdict.json, feeds.npz and
+serving.json. The directory belongs to the operator. Downshift never removes entries from it,
+never checks its permissions, and has no commands for it. To clear the cache, delete the
+directory.
 
-The key is core/memo.py's, except that an HF repo's files are identified by content (sha256),
-because inodes and ctimes differ between pods sharing a volume. Digests are remembered in
-`DIR/index.json` by file identity, so an unchanged file is hashed once per machine.
+The key is the key of core/memo.py. One exception: downshift identifies the files of an HF repo
+by content (sha256), because inodes and ctimes are different between pods that share a volume.
+Downshift keeps the digests in `DIR/index.json` by file identity. A file that did not change is
+therefore hashed one time for each machine.
 
-Writes build the entry in `DIR/<key>.tmp-<pid>-<rand>/` and rename it into place, so a reader
-never sees half an entry and a crash leaves only a temp directory nobody reads. A read re-hashes
-the graph and its data file against the manifest; an entry that fails any check is one warning
-and a miss, and the re-export overwrites it.
+A write builds the entry in `DIR/<key>.tmp-<pid>-<rand>/` and renames it into place. A reader
+therefore never sees half an entry. After a crash, only a temporary directory stays, and nobody
+reads it. A read hashes the graph and its data file again and compares them with the manifest. If
+an entry fails a check, downshift logs one warning and treats it as a miss. The new export
+overwrites it.
 """
 
 import json
@@ -37,8 +40,8 @@ INDEX = "index.json"
 
 
 def check_dir(path: str | Path) -> Path:
-    """The cache directory, or a ValueError (a usage error) when it can't hold entries: the
-    operator asked for persistence, so serving without it would hide the problem."""
+    """The cache directory. If it cannot hold entries, this raises a ValueError (a usage error).
+    The operator asked for persistence. Serving without it would hide the problem."""
     root = Path(path)
     if not root.is_dir():
         raise ValueError(f"--export-cache-dir {str(root)!r} is not an existing directory")
@@ -65,8 +68,8 @@ def lookup(
 def store(
     entry: ExportEntry, mem_key: str | None, disk: "ExportCache | None", disk_key: str | None
 ) -> None:
-    """Keep `entry` in whichever tiers have a key; each tier refuses what it doesn't keep
-    (FAILED, UNVERIFIED). A disk write that fails costs one warning, never the boot."""
+    """Keep `entry` in each tier that has a key. Each tier refuses what it does not keep
+    (FAILED, UNVERIFIED). A disk write that fails gives one warning. It never stops the boot."""
     if mem_key is not None:
         MEMO.put(mem_key, entry)
     if disk is not None and disk_key is not None:
@@ -116,9 +119,9 @@ class ExportCache:
             return None
         try:
             return self._read(entry_dir)
-        except Exception as exc:  # noqa: BLE001 - whatever is wrong with it, it is a miss
+        except Exception as exc:  # noqa: BLE001 - for each fault in the entry, it is a miss
             logger.warning(
-                "export cache entry %s is unusable (%s: %s); exporting again",
+                "export cache entry %s is unusable (%s: %s). Exporting again",
                 key[:12],
                 type(exc).__name__,
                 exc,
@@ -151,8 +154,9 @@ class ExportCache:
         )
 
     def put(self, key: str, entry: ExportEntry) -> None:
-        """Save a CLEAN or DEGRADED entry (external-data ones too); anything else is ignored.
-        Raises OSError when the directory can't be written; the caller warns and serves on."""
+        """Save a CLEAN or DEGRADED entry (also entries with external data). It ignores all
+        other entries. It raises OSError if the directory cannot be written. The caller logs a
+        warning and continues to serve."""
         from downshift._version import __version__
         from downshift.core.manifest import external_data_files, write_manifest
         from downshift.core.verdict import ExportVerdict
@@ -179,7 +183,7 @@ class ExportCache:
             )
             feeds = entry.feeds
             if feeds and all(array.dtype.kind != "O" for array in feeds.values()):
-                np.savez(tmp / FEEDS, **feeds)  # type: ignore[arg-type]  # numpy's stub misreads **kwds
+                np.savez(tmp / FEEDS, **feeds)  # type: ignore[arg-type]  # the numpy stub misreads **kwds
             self._install(tmp, self.root / key)
         except BaseException:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -187,8 +191,8 @@ class ExportCache:
 
     @staticmethod
     def _install(tmp: Path, final: Path) -> None:
-        """Rename `tmp` to `final`, moving an existing (stale or corrupt) entry aside first.
-        A writer that loses a race to another process just drops its own copy."""
+        """Rename `tmp` to `final`. If an entry exists (old or corrupt), move it aside first. A
+        writer that loses a race to another process drops its own copy."""
         stale = None
         if final.exists():
             stale = final.with_name(f"{final.name}.old-{os.getpid()}-{uuid.uuid4().hex[:8]}")
