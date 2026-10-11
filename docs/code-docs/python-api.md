@@ -207,8 +207,9 @@ import uvicorn
 from downshift import app_for
 
 app = app_for("model.onnx")
-uvicorn.run(app, host="0.0.0.0", port=8443,
-            ssl_certfile="cert.pem", ssl_keyfile="key.pem", ssl_ciphers=None)
+uvicorn.run(
+    app, host="0.0.0.0", port=8443, ssl_certfile="cert.pem", ssl_keyfile="key.pem", ssl_ciphers=None
+)
 ```
 
 Use `ssl_ciphers=None`. With `None`, uvicorn keeps the cipher list of the Python standard library. The default of uvicorn (`"TLSv1"`) also enables NULL ciphers and anonymous ciphers. `downshift serve --ssl-certfile` uses the same settings. Refer to [HTTPS in production.md](../production.md#https).
