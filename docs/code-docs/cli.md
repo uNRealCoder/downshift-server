@@ -137,6 +137,8 @@ The adapter and verification flags of `check` also apply to `serve`, with the sa
 | `--workers INT` | `DOWNSHIFT_WORKERS` | `1` | The number of uvicorn worker processes. The parent exports and verifies once. Each worker builds its own session over that graph (or reloads the model for torch) and warms up. The parent frees its copy of the model before the workers start. If a worker fails to load, the whole server stops with the startup-failure exit code of uvicorn. Downshift does not start the worker again. |
 | `--log-level debug\|info\|warning\|error` | - | `warning` | Refer to "Logging" below. |
 | `--access-log` / `--no-access-log` | - | on | The log line for each request (`downshift.access`). The access log of uvicorn is always off. |
+| `--ssl-certfile PATH` | `DOWNSHIFT_SSL_CERTFILE` | none | A PEM certificate or certificate chain. If you give it, the server uses HTTPS. If you do not give it, the server uses plain HTTP. |
+| `--ssl-keyfile PATH` | `DOWNSHIFT_SSL_KEYFILE` | none | The PEM private key of the certificate. If the certificate file contains the key, you do not need this flag. For an encrypted key, set `DOWNSHIFT_SSL_KEYFILE_PASSWORD`. |
 
 ```bash
 downshift serve my_pkg.models:build --port 8000 --output-encoding base64
@@ -147,6 +149,8 @@ downshift serve my_pkg.models:build --port 8000 --output-encoding base64
 - A usage error (`4`).
 - A crash during the boot (`5`).
 - A normal shutdown of the process.
+
+Downshift loads the TLS files before it loads the model. If a TLS file is bad, `serve` stops with a usage error (`4`). Examples are a missing file, a wrong key and a wrong password. The error message gives the cause and the next step.
 
 ## Logging
 
@@ -187,6 +191,8 @@ Each line has the form `time LEVEL logger: message`. If the line belongs to a re
 | `DOWNSHIFT_EXECUTION`, `DOWNSHIFT_PREP_THREADS` | `threadpool`, `min(4, usable CPUs)` | `--execution`, `--prep-threads` |
 | `DOWNSHIFT_WORKERS` | `1` | `--workers` (CLI only) |
 | `DOWNSHIFT_SERVER_API_KEY` | unset | Requires `Authorization: Bearer <key>` on every route except `/health` and `/ready`. If it is unset or empty, downshift logs one startup warning that the endpoints are unauthenticated. There is no flag, because the key is a secret. `build_app(api_key=...)` and `app_for(api_key=...)` read it by default. |
+| `DOWNSHIFT_SSL_CERTFILE`, `DOWNSHIFT_SSL_KEYFILE` | unset | `--ssl-certfile`, `--ssl-keyfile` (CLI only) |
+| `DOWNSHIFT_SSL_KEYFILE_PASSWORD` | unset | The password of an encrypted key. There is no flag, because the password is a secret. |
 | `DOWNSHIFT_TOL_{FLOAT32,FLOAT64,FLOAT16,BFLOAT16}_{ATOL,RTOL}` | see `check` above | The default tolerances. |
 
 The library functions `check()`, `export()` and `intake()` use the constant `8` as the default for `k`. They do not use `DOWNSHIFT_SAMPLES`. Only `ServeOptions.k` (and so `app_for()`) and the CLI flag read that variable.

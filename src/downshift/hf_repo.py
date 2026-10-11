@@ -95,7 +95,8 @@ def _refuse_remote_code(root: Path) -> None:
         if _json_dict(root / name).get("auto_map"):
             raise RemoteCodeError(
                 f"{name} has an auto_map, so loading it would run Python code from the repo. "
-                "Downshift never runs the code of a repo (no trust_remote_code)"
+                "Downshift never runs the code of a repo (no trust_remote_code). Export the model "
+                "to ONNX yourself and serve the .onnx file, or use a repo with no auto_map"
             )
 
 

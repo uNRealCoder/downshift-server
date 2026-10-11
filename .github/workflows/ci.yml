@@ -20,6 +20,10 @@ jobs:
           cache: pip
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: pip install -e ".[dev,gnn,hf,fast]"
+      # The HTTPS tests make a throwaway certificate with the openssl command (tests/conftest.py).
+      # The runner images have it. The install is only a fallback.
+      - name: openssl
+        run: command -v openssl || (sudo apt-get update && sudo apt-get install -y openssl); openssl version
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy src
@@ -45,6 +49,10 @@ jobs:
       # last release with which this job passed.
       - run: pip install "onnx==1.16.0" "onnxruntime==1.17.0" "onnxscript==0.5.0" "numpy<2" "transformers==5.17.0"
       - run: pip install -e ".[dev,gnn,hf,fast]"
+      # The HTTPS tests make a throwaway certificate with the openssl command (tests/conftest.py).
+      # The runner images have it. The install is only a fallback.
+      - name: openssl
+        run: command -v openssl || (sudo apt-get update && sudo apt-get install -y openssl); openssl version
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy src
@@ -70,6 +78,11 @@ jobs:
           cache: pip
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: pip install -e ".[dev,gnn,hf,fast]"
+      # The HTTPS tests make a throwaway certificate with the openssl command (tests/conftest.py).
+      # The runner image has it. The install is only a fallback.
+      - name: openssl
+        shell: bash
+        run: command -v openssl || choco install openssl -y --no-progress; openssl version
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy src

@@ -6,7 +6,10 @@ that more than one module needs one time for each session.
 
 import base64
 import os
+import shutil
+import subprocess
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -22,6 +25,42 @@ from downshift.serve.engine import ServeOptions, ServingState, prepare_serving
 from tests.models import clean_mlp
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+TLS_KEY_PASSWORD = "downshift-test"
+
+
+@dataclass(frozen=True)
+class TlsFiles:
+    cert: str
+    key: str
+    key_encrypted: str  # the same key, encrypted with TLS_KEY_PASSWORD
+
+
+def _openssl(*args: str) -> None:
+    subprocess.run(["openssl", *args], check=True, capture_output=True)
+
+
+@pytest.fixture(scope="session")
+def tls_files(tmp_path_factory) -> TlsFiles:
+    """A self-signed certificate for localhost and 127.0.0.1, made one time for each session
+    with the openssl command. The repo keeps no key files (.gitignore has *.pem). Without
+    openssl, the HTTPS tests skip. In CI (CI is set), they fail, so they never skip there."""
+    if shutil.which("openssl") is None:
+        if os.environ.get("CI"):
+            pytest.fail("the HTTPS tests need the openssl command on PATH")
+        pytest.skip("the HTTPS tests need the openssl command on PATH")
+    root = tmp_path_factory.mktemp("tls")
+    files = TlsFiles(*(str(root / n) for n in ("cert.pem", "key.pem", "key-encrypted.pem")))
+    _openssl(
+        "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1",
+        "-nodes", "-keyout", files.key, "-out", files.cert, "-days", "1",
+        "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1",
+    )  # fmt: skip
+    _openssl(
+        "pkey", "-in", files.key, "-aes256", "-passout", f"pass:{TLS_KEY_PASSWORD}",
+        "-out", files.key_encrypted,
+    )  # fmt: skip
+    return files
+
 
 _TORCH_VERSION = tuple(int(p) for p in torch.__version__.split("+")[0].split(".")[:2])
 

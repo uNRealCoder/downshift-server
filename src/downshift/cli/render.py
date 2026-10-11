@@ -308,22 +308,24 @@ def _verified_on_text(state: ServingState) -> str | None:
 _ANY_HOSTS = ("", "0.0.0.0", "::")
 
 
-def _client_url(host: str, port: int) -> str:
+def _client_url(host: str, port: int, https: bool = False) -> str:
     """The address that a client uses. A client reaches a wildcard bind as localhost."""
     shown = "localhost" if host in _ANY_HOSTS else host
     if ":" in shown and not shown.startswith("["):
         shown = f"[{shown}]"
-    return f"http://{shown}:{port}"
+    return f"{'https' if https else 'http'}://{shown}:{port}"
 
 
-def _endpoint_text(host: str, port: int) -> str:
-    url = _client_url(host, port)
+def _endpoint_text(host: str, port: int, https: bool) -> str:
+    url = _client_url(host, port, https)
     if host in _ANY_HOSTS:
         return f"{url}  (bound to {host or 'all interfaces'}; GET /schema for the input format)"
     return f"{url}  (GET /schema for the input format)"
 
 
-def print_banner(state: ServingState, host: str, port: int, workers: int = 1) -> None:
+def print_banner(
+    state: ServingState, host: str, port: int, workers: int = 1, https: bool = False
+) -> None:
     """The boot banner of `serve`. It says what is served, how downshift judged it, and where it listens."""
     verdict = state.verdict
     rows = _Rows()
@@ -400,7 +402,7 @@ def print_banner(state: ServingState, host: str, port: int, workers: int = 1) ->
         )
     if BASE64_CODEC == "stdlib":
         rows.add("Tip", "pip install 'downshift-server[fast]' for ~10x faster base64 tensor I/O")
-    rows.add("Endpoint", _endpoint_text(host, port))
+    rows.add("Endpoint", _endpoint_text(host, port, https))
 
     _log_report(rows, f"downshift v{__version__}")
 
@@ -410,6 +412,7 @@ def print_config(
     host: str,
     port: int,
     *,
+    https: bool = False,
     workers: int = 1,
     log_level: str,
     access_log: bool,
@@ -425,6 +428,7 @@ def print_config(
         "model": display_source(state.source, state.source_kind),
         "host": host,
         "port": port,
+        "tls": "on" if https else "off",
         "workers": workers,
         "log_level": log_level,
         "access_log": access_log,
@@ -439,11 +443,11 @@ def print_config(
     logger.info("serving with:\n%s", "\n".join(lines))
 
 
-def print_booting(model: str, host: str, port: int) -> None:
+def print_booting(model: str, host: str, port: int, https: bool = False) -> None:
     """Logged one time, before uvicorn binds. The full banner (print_banner) follows when the
     loader thread has a verdict."""
     report_logger.info("loading %s", path_basename(model))
-    report_logger.info("will listen on %s (not ready yet)", _client_url(host, port))
+    report_logger.info("will listen on %s (not ready yet)", _client_url(host, port, https))
 
 
 def print_ready(state: ServingState) -> None:

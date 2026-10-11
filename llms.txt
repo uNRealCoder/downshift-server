@@ -1,0 +1,60 @@
+# downshift
+
+> Serve a model that is already on this machine over HTTP, with one command. Before the first request, downshift exports the model to ONNX and compares the ONNX graph with PyTorch. If the numbers are wrong, downshift serves eager PyTorch. Package: `pip install downshift-server`. Command: `downshift` (or `python -m downshift`).
+
+This file is for LLM agents. It gives the shortest correct path. The full documentation is in the links below.
+
+## Call a running server
+
+Do these steps in this sequence:
+
+1. `GET /`. It gives the version, the model, `ready`, and the routes.
+2. Poll `GET /ready` until it gives `200`. A `503` with `{"ready": false, "phase": ...}` means that the model loads. Do not restart the server.
+3. `GET /schema`. Read `inputs` (name, dtype, shape, bounds) and `example_request`.
+4. `POST /predict` with `example_request`. The server gives `200`. Then change the values. Keep the names, the dtypes and the shapes.
+
+Rules for request bodies:
+
+- A list of integers becomes `int64`. All other lists become `float32`.
+- To set the dtype, send `{"data": [...], "dtype": "float16", "shape": [1, 16]}` in place of a list.
+- If an axis is outside `bounds`, the server gives a `400` that names the axis and the range.
+- If the server gives `503` with `Retry-After`, wait for that number of seconds and send again.
+- If `DOWNSHIFT_SERVER_API_KEY` is set on the server, send `Authorization: Bearer <key>`. `/health` and `/ready` do not need the key.
+- For a text model, `/schema` has `text_input`. Send `{"text": ["..."]}`. The server rejects text that is longer than the model accepts. It does not cut the text.
+
+## Host a model
+
+Do these steps in this sequence:
+
+1. Download the model first. Downshift fetches nothing. It rejects a Hugging Face hub id. Use `huggingface-cli download <id> --local-dir ./<name>`, then give the directory.
+2. Run `downshift check MODEL --json`. Read `status`. The exit code is the verdict.
+3. Run `downshift serve MODEL`. The port opens immediately. Poll `/ready`.
+4. Read the boot banner. The `Endpoint` row gives the URL. The `ready in N s` line shows when `/ready` gives `200`.
+
+MODEL is one of these:
+
+- A `.onnx` file.
+- A PyTorch checkpoint: `.pt`, `.pth`, `.bin` or `.ckpt`.
+- A downloaded Hugging Face repo directory with a `config.json`.
+- `package.module:attr`: an `nn.Module`, or a function that returns one.
+
+Exit codes of `check` and `export`: `0` CLEAN, `1` FAILED, `2` DEGRADED, `3` UNVERIFIED, `4` usage error, `5` crash. `serve` exits with `4` or `5` only before the server is ready. `serve` serves all four verdicts.
+
+Known problems and their fixes:
+
+- A model with only bfloat16 weights: ONNX Runtime has no bf16 kernels on the CPU. `--backend auto` serves torch. Do not give `--backend onnxruntime`.
+- A `DEGRADED` verdict with `--backend onnxruntime`: this is a usage error. Remove `--backend onnxruntime`, or add `--force-onnx` if you accept wrong numbers.
+- A `.pt` file that is a state dict: give `--model-class package.module:Class`.
+- A `.pt` file with a pickled module: give `--unsafe-load` only if you trust the file.
+- A `.onnx` file with `--backend torch`: give `--reference` with the PyTorch model.
+- HTTPS: give `--ssl-certfile cert.pem --ssl-keyfile key.pem`. For an encrypted key, set `DOWNSHIFT_SSL_KEYFILE_PASSWORD`.
+
+## Docs
+
+- [README](README.md): install, serve, the gate, and examples.
+- [HTTP API](docs/code-docs/http-api.md): all routes, bodies, status codes and wire formats.
+- [CLI](docs/code-docs/cli.md): all commands, flags, environment variables and exit codes.
+- [Python API](docs/code-docs/python-api.md): `check()`, `export()`, `app_for()` and `build_app()`.
+- [Production](docs/production.md): HTTPS, the API key, probes, sizing and Kubernetes.
+- [Adapters](docs/code-docs/adapters.md): add a model family.
+- OpenAPI: `GET /openapi.json` on a running server.

@@ -162,6 +162,13 @@ WORKERS = _env_int("DOWNSHIFT_WORKERS", 1)
 # None (unset) means no authentication, with a startup warning that says so.
 API_KEY = os.environ.get("DOWNSHIFT_SERVER_API_KEY")
 
+# HTTPS. If SSL_CERTFILE is set, `serve` uses TLS. The key can be in the cert file, or in its
+# own file. The password of an encrypted key is an environment variable only, so that it does
+# not show in the process list.
+SSL_CERTFILE = os.environ.get("DOWNSHIFT_SSL_CERTFILE") or None
+SSL_KEYFILE = os.environ.get("DOWNSHIFT_SSL_KEYFILE") or None
+SSL_KEYFILE_PASSWORD = os.environ.get("DOWNSHIFT_SSL_KEYFILE_PASSWORD") or None
+
 # (atol, rtol) for the narrowest float dtype in the numerics verification. You can loosen one
 # value and not change the others. Example: DOWNSHIFT_TOL_FLOAT16_ATOL=0.05 for an fp16 model
 # with more noise.

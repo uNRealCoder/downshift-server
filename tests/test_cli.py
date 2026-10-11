@@ -17,6 +17,7 @@ from downshift.cli.main import app
 from downshift.loading import LoadSpec
 from downshift.serve.options import ServeOptions
 from downshift.serve.schemas import OutputEncoding
+from tests.conftest import TLS_KEY_PASSWORD
 from tests.models import clean_mlp
 
 CLEAN = "tests.models.clean_mlp:make_model"
@@ -245,6 +246,9 @@ def _fake_uvicorn_server(monkeypatch, captured: dict) -> None:
             port=config.port,
             log_level=config.log_level,
             access_log=config.access_log,
+            ssl_certfile=config.ssl_certfile,
+            ssl_keyfile=config.ssl_keyfile,
+            ssl_ciphers=config.ssl_ciphers,
         )
 
     def fake_run(self) -> None:
@@ -281,6 +285,57 @@ def test_serve_builds_app(monkeypatch):
     # Tensor-IO options that the command line does not give come from settings.
     assert serving.options.output_encoding == main.settings.OUTPUT_ENCODING == "json"
     assert serving.options.max_input_bytes == main.settings.MAX_INPUT_BYTES
+
+
+@pytest.mark.parametrize("workers", ["1", "2"])  # uvicorn.Server, then uvicorn.run
+def test_serve_with_a_certificate_serves_https(monkeypatch, workers, tls_files):
+    cert, key = tls_files.cert, tls_files.key
+    result, captured = _serve_captured(
+        monkeypatch, "--workers", workers, "--ssl-certfile", cert, "--ssl-keyfile", key
+    )
+    assert (captured["ssl_certfile"], captured["ssl_keyfile"]) == (cert, key)
+    # None keeps the cipher list of ssl.create_default_context. The "TLSv1" default of uvicorn
+    # also enables NULL and anonymous ciphers.
+    assert captured["ssl_ciphers"] is None
+    assert "https://127.0.0.1:" in result.output
+
+
+def test_serve_without_a_certificate_serves_http(monkeypatch):
+    result, captured = _serve_captured(monkeypatch)
+    assert captured["ssl_certfile"] is None
+    assert "http://127.0.0.1:" in result.output
+
+
+def test_tls_config_reads_an_encrypted_key_with_its_password(tls_files):
+    tls = runtime._tls_config(tls_files.cert, tls_files.key_encrypted, TLS_KEY_PASSWORD)
+    assert tls["ssl_keyfile_password"] == TLS_KEY_PASSWORD
+
+
+# The names are fields of TlsFiles. Any other string is a path as it is.
+@pytest.mark.parametrize(
+    ("certfile", "keyfile", "password", "message"),
+    [
+        (None, "key", None, "--ssl-keyfile needs --ssl-certfile"),
+        ("cert", None, None, "cannot load the TLS certificate"),  # the cert file has no key
+        ("cert", "key_encrypted", None, "DOWNSHIFT_SSL_KEYFILE_PASSWORD"),
+        ("cert", "key_encrypted", "wrong", "DOWNSHIFT_SSL_KEYFILE_PASSWORD"),
+        ("missing.pem", "key", None, "cannot read missing.pem"),
+    ],
+)
+def test_tls_config_rejects_bad_files_with_a_next_step(
+    tls_files, certfile, keyfile, password, message
+):
+    def path(name: str | None) -> str | None:
+        return getattr(tls_files, name, name) if name else None
+
+    with pytest.raises(ValueError, match=message):
+        runtime._tls_config(path(certfile), path(keyfile), password)
+
+
+def test_serve_with_a_bad_certificate_is_a_usage_error_before_the_load(monkeypatch):
+    monkeypatch.setattr(runtime, "_load", lambda spec: pytest.fail("loaded the model"))
+    result = run("serve", CLEAN, "--ssl-certfile", "missing.pem")
+    assert result.exit_code == main.EXIT_USAGE, result.output
 
 
 def test_serve_passes_thread_options_to_the_ort_session(monkeypatch):

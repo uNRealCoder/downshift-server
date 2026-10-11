@@ -251,6 +251,8 @@ You must give exactly one of `state` and `loader`. Otherwise, `build_app` raises
 - **`state=`** is for library use, `app_for` and tests. The app serves `state` immediately. There is no `503` window on `/ready`. The gate and the warmup already ran, synchronously, before the call to `build_app`.
 - **`loader=`** is for `downshift serve` with one worker. The app binds with no `ServingState`. `/health` returns `200` immediately. `/ready`, `/metadata`, `/schema` and both predict routes return `503` until `loader` returns a `ServingState`. The lifespan of the app starts `loader` on a background thread when uvicorn starts to serve. It does not start when `build_app` is called. The returned `ServingState` goes to `app.state.serving`. During this time, `phase` on `/ready` says which `Phase` the loader is in. If `loader` raises an error, `app.state.serving` stays `None` for this function. `serve_cmd` holds the `uvicorn.Server` and sets `should_exit` itself when the loader fails. The process then exits and does not serve `503` forever.
 
+In both modes, `GET /` returns `200`. The response gives `ready`, the model (when the model is ready) and the routes. `_routes` in `serve/app.py` reads the routes from `app.routes` for each request. The list therefore always agrees with the app. Each path includes the mount prefix (`root_path`).
+
 `middleware` is a sequence of `pkg.module:Attr` specs (`--middleware`, repeatable). `load_middleware` (`serve/middleware.py`) attaches them in order. Each spec must resolve to one of these:
 
 - A middleware class that is built as `cls(app)`: pure ASGI, or a subclass of `starlette.middleware.base.BaseHTTPMiddleware`.

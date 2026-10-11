@@ -37,6 +37,7 @@ Thumbs.db
 *.onnx.data
 artifacts/
 tmp/
+*.pem
 
 # Local tooling config
 .claude/

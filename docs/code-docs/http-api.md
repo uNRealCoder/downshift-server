@@ -6,6 +6,7 @@ This page describes every route that `build_app` registers: the request and resp
 
 | Method | Path | Purpose |
 |---|---|---|
+| `GET` | `/` | The index: the service, the version, the model, and the routes. Start here if you know only the base URL. |
 | `GET` | `/health` | Liveness. |
 | `GET` | `/ready` | Readiness. |
 | `GET` | `/metadata` | Model, backend, verdict, limits, boot timings and warmup statistics. |
@@ -21,6 +22,10 @@ Each served model comes from this machine. It is one of these:
 - A module that the server process can import.
 
 The `source` block of `/schema` shows which one applies to each server. Downshift fetches nothing to answer a request.
+
+## HTTPS
+
+If `serve` starts with `--ssl-certfile`, all routes use HTTPS on the same port. The routes, the bodies and the status codes do not change. A plain HTTP request to that port gets no HTTP response. Refer to [HTTPS in production.md](../production.md#https).
 
 ## Authentication
 
@@ -40,6 +45,25 @@ The rest of this page does not repeat the `401` for each route.
 
 ```bash
 curl -s localhost:8000/schema -H "Authorization: Bearer $DOWNSHIFT_SERVER_API_KEY"
+```
+
+### `GET /`
+
+This route always returns `200`, also while the model loads. It tells a client where to start. The response model is `IndexResponse`:
+
+```json
+{"service": "downshift", "version": "0.5.1", "ready": true, "model": "clean_mlp",
+ "routes": {"index": "GET /", "health": "GET /health", "ready": "GET /ready",
+            "metadata": "GET /metadata", "schema": "GET /schema",
+            "predict": "POST /predict", "predict_graph": "POST /predict/graph",
+            "openapi": "GET /openapi.json", "docs": "GET /docs"},
+ "next_step": "Send GET /schema. The response gives the inputs and an example_request body. POST that body to /predict without a change"}
+```
+
+`model` is `null` until the model is ready. Downshift reads `routes` from the app, so the list is always correct. If the app is mounted under a prefix, each path includes the prefix. `routes` includes `/predict/graph` also for a model that is not a graph model. To find the predict route for this model, read `endpoint` and `graph_endpoint` in `/schema`. If the API key is active, this route needs the key.
+
+```bash
+curl -s localhost:8000/
 ```
 
 ### `GET /health`

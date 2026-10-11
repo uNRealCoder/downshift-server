@@ -33,6 +33,7 @@ from downshift.serve.schemas import (
     BackendInfo,
     GraphPredictRequest,
     HealthResponse,
+    IndexResponse,
     MetadataResponse,
     PredictRequest,
     PredictResponse,
@@ -223,6 +224,24 @@ _PREDICT_ROUTE: dict[str, Any] = {
         }
     },
 }
+
+
+def _routes(request: Request) -> dict[str, str]:
+    """{name: "METHOD /path"} for each route of the app, plus the OpenAPI pages. It reads the
+    app, so the index never lists a route that is not there. The paths include the mount
+    prefix (root_path)."""
+    app = request.app
+    prefix = request.scope.get("root_path", "")
+    routes = {
+        route.name: f"{min(route.methods)} {prefix}{route.path}"
+        for route in app.routes
+        if isinstance(route, APIRoute) and route.methods
+    }
+    if app.openapi_url:
+        routes["openapi"] = f"GET {prefix}{app.openapi_url}"
+    if app.docs_url:
+        routes["docs"] = f"GET {prefix}{app.docs_url}"
+    return routes
 
 
 def require_serving(request: Request) -> ServingState:
@@ -464,6 +483,19 @@ def build_app(
             },
             status_code=500,
             headers={"X-Request-Id": request_id} if request_id else None,
+        )
+
+    @app.get("/", response_model=IndexResponse)
+    async def index(request: Request) -> IndexResponse:
+        current: ServingState | None = request.app.state.serving
+        model = None
+        if current is not None and current.ready:
+            model = display_source(current.source, current.source_kind)
+        return IndexResponse(
+            version=downshift.__version__,
+            ready=model is not None,
+            model=model,
+            routes=_routes(request),
         )
 
     @app.get("/health", response_model=HealthResponse)

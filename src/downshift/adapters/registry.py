@@ -59,7 +59,10 @@ def load_from_file(path_str: str, attr: str = "ADAPTER") -> Adapter:
     """
     path = Path(path_str)
     if not path.is_file():
-        raise LoadError(f"{path} does not exist")
+        raise LoadError(
+            f"adapter file {path} does not exist. Give the path of a .py file, or one "
+            f"of these names: {', '.join(available())}"
+        )
     spec = importlib.util.spec_from_file_location(f"downshift._custom_adapter_{path.stem}", path)
     if spec is None or spec.loader is None:
         raise LoadError(f"cannot import {path} as a Python module")

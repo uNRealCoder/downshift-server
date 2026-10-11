@@ -18,7 +18,7 @@ import sys
 import time
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from downshift.cli import render
 from downshift.cli.options import LogLevel
@@ -41,6 +41,42 @@ def _setup_logging(level: LogLevel, *, stderr: bool = False) -> None:
     """The one logging sink, on stdout. `stderr=True` is for `--json`. It keeps stdout as one
     JSON document that a program can parse."""
     setup_logging(level.value, stream=sys.stderr if stderr else None)
+
+
+def _tls_config(certfile: str | None, keyfile: str | None, password: str | None) -> dict[str, Any]:
+    """The uvicorn keyword arguments for HTTPS, or {} for plain HTTP.
+
+    It loads the files one time here, into the context of ssl.create_default_context. A bad
+    file is then a usage error (exit 4) before the model loads. Without this check, uvicorn
+    crashes after the load. The password is a callable. An encrypted key without a password
+    therefore fails, and OpenSSL does not wait for a password on the terminal. ssl_ciphers=None
+    keeps the cipher list of the standard library. The default of uvicorn ("TLSv1") also
+    enables NULL and anonymous ciphers.
+    """
+    if certfile is None:
+        if keyfile is not None:
+            raise ValueError("--ssl-keyfile needs --ssl-certfile. Give the certificate too")
+        return {}
+    import ssl  # here, and not at module scope: --help and plain HTTP do not need it
+
+    context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    try:
+        context.load_cert_chain(certfile, keyfile, lambda: password or "")
+    except ssl.SSLError as exc:
+        raise ValueError(
+            f"cannot load the TLS certificate {certfile} ({exc.reason or 'bad key or password'}). "
+            "Use PEM files. Use the key of this certificate. For an encrypted key, set "
+            "DOWNSHIFT_SSL_KEYFILE_PASSWORD"
+        ) from None
+    except OSError as exc:
+        files = " and ".join(filter(None, (certfile, keyfile)))
+        raise ValueError(f"cannot read {files}: {exc.strerror}") from None
+    return {
+        "ssl_certfile": certfile,
+        "ssl_keyfile": keyfile,
+        "ssl_keyfile_password": password,
+        "ssl_ciphers": None,
+    }
 
 
 def _load(spec: LoadSpec) -> LoadedModel:
