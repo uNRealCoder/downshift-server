@@ -25,7 +25,7 @@ Each page starts with one sentence that says what it covers. Use it to go to the
 |---|---|
 | [`python-api.md`](python-api.md) | Every name in `downshift.__all__`: `check`, `export`, `intake`, `build_verdict`, `prepare_model`, `app_for`, the types `ExportVerdict`, `NumericsReport`, `Adapter`, `Prepared` and `OnnxRuntimeError`, and `__version__`. It also describes the lazy-import behaviour of `import downshift`. |
 | [`cli.md`](cli.md) | `downshift check`, `downshift export` and `downshift serve`. For each flag: the environment variable and the default, if it has them. Also logging, the table of environment variables, and the process exit codes. |
-| [`http-api.md`](http-api.md) | Every HTTP route, including `GET /schema` (what to POST, with an example body). The request and response schemas, the status codes, the nested-list and base64 wire formats, the headers, and `curl` examples. |
+| [`http-api.md`](http-api.md) | Every HTTP route. `GET /` gives the index of routes. `GET /schema` gives what to POST, with an example body. HTTPS. The request and response schemas, the status codes, the nested-list and base64 wire formats, the headers, and `curl` examples. |
 | [`serving.md`](serving.md) | The programmatic serving layer under `serve`: `ServeOptions`, `ServingState`, `prepare_serving`, `build_app`, the selection of the backend, and the `Backend` implementations. |
 | [`adapters.md`](adapters.md) | The `Adapter` protocol, how downshift registers and resolves adapters, and how to write a custom adapter. |
 
@@ -44,7 +44,7 @@ All modules are in `src/downshift/`. Some leaf modules use only the standard lib
 | `hf_repo.py` | Reads a downloaded Hugging Face repo: `load_config`, `load_pretrained` (with its task head), the pooling recipe, and the tokenizer and labels for text input. Downshift imports it only if transformers is installed. |
 | `cli/main.py` | The three commands: `check`, `export` and `serve`. |
 | `cli/options.py` | The typer option types (`Annotated` aliases and `LogLevel`). |
-| `cli/runtime.py` | `ServeArgs`, `_collect_serve_args` and the `--workers` handoff. |
+| `cli/runtime.py` | `ServeArgs`, `_collect_serve_args`, the `--workers` handoff, and `_tls_config` (the TLS settings of `serve`). |
 | `cli/render.py` | The banner, the reports, the warnings and the errors. All are logged as plain text. |
 | `core/` | The gate. `verdict.py` has `check`, `prepare_model` and `build_verdict`. The other files are `capture.py`, `verify.py`, `prevalidated.py` (`intake`), `manifest.py`, `shapes.py`, `inputs.py` and `phase.py`. `phase.py` has the `Phase` enum (`load`, `export`, `verify`, `session`, `warmup`). The enum drives the `Boot` timings, `/ready` and the banner. |
 | `adapters/` | `base.py` has the `Adapter` protocol, `Prepared` and `Family`. The other files are `registry.py`, `generic.py`, `pyg.py` and `hf.py`. The Hugging Face parts are `text.py` (tokenizing and class probabilities), `pooling.py` (the `--pooling` choices) and `embedding.py` (the pooling recipe and the graph that applies it). |

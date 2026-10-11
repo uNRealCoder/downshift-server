@@ -15,6 +15,7 @@ from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
 from starlette.middleware.base import BaseHTTPMiddleware
 
+import downshift
 from downshift.loading import LoadedModel, LoadSpec, load_model
 from downshift.serve import app_for
 from downshift.serve import predict as serve_predict
@@ -527,6 +528,9 @@ def test_ready_and_predict_503_until_the_loader_lands(mlp_state):
     app = build_app(loader=loader)
     with TestClient(app) as client:
         assert client.get("/health").status_code == 200
+        index = client.get("/")
+        assert index.status_code == 200
+        assert (index.json()["ready"], index.json()["model"]) == (False, None)
 
         ready = client.get("/ready")
         assert ready.status_code == 503
@@ -548,6 +552,20 @@ def test_ready_and_predict_503_until_the_loader_lands(mlp_state):
         assert client.get("/metadata").status_code == 200
         assert client.get("/schema").status_code == 200
         assert client.post("/predict", json=MLP_INPUT).status_code == 200
+
+
+def test_index_names_the_model_and_the_routes(mlp_client):
+    """GET / is where a client that knows only the base URL starts. It points to /schema."""
+    body = mlp_client.get("/").json()
+    assert body["service"] == "downshift"
+    assert body["version"] == downshift.__version__
+    assert body["ready"] is True
+    assert body["model"] == "tests.models.clean_mlp:make_model"
+    assert body["routes"]["schema"] == "GET /schema"
+    assert "/schema" in body["next_step"]
+    for route in body["routes"].values():
+        method, path = route.split(" ")
+        assert mlp_client.request(method, path).status_code != 404, route
 
 
 def test_build_app_needs_exactly_one_of_state_or_loader(mlp_state):

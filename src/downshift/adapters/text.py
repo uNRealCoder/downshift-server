@@ -40,8 +40,9 @@ class TextIO:
         if over:
             rows = ", ".join(f"row {i}: {n}" for i, n in over.items())
             raise ValueError(
-                f"text longer than this model reads ({self.max_length} tokens, from the "
-                f"the model files set this limit) is refused and not cut. Token counts: {rows}"
+                f"text longer than this model reads ({self.max_length} tokens, a limit from the "
+                f"model files) is refused and not cut. Token counts: {rows}. Send shorter "
+                "text, or split it into more rows"
             )
         padded = self.tokenizer.pad(encoded, return_tensors="np")
         return {name: np.asarray(value) for name, value in padded.items()}

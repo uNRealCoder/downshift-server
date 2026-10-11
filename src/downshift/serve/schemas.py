@@ -400,6 +400,21 @@ class HealthResponse(BaseModel):
     status: str = "ok"
 
 
+class IndexResponse(BaseModel):
+    """GET /: where a client starts. It names the routes, so a client that knows only the base
+    URL can find /schema."""
+
+    service: str = "downshift"
+    version: str
+    ready: bool
+    model: str | None = None  # None until the model is ready
+    routes: dict[str, str]  # {"schema": "GET /schema", ...}, read from the app itself
+    next_step: str = (
+        "Send GET /schema. The response gives the inputs and an example_request body. POST "
+        "that body to /predict without a change"
+    )
+
+
 class ReadyResponse(BaseModel):
     ready: bool
     # The current phase of the loader while the app is not ready (U4). None when it is ready, or

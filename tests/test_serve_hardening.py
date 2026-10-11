@@ -78,6 +78,7 @@ def test_every_route_but_the_probes_needs_the_key(keyed):
     assert keyed.get("/ready").status_code == 200
     assert keyed.get("/metadata").status_code == 401
     assert keyed.get("/schema").status_code == 401
+    assert keyed.get("/").status_code == 401
     assert keyed.get("/metadata", headers=AUTH).status_code == 200
 
 
@@ -124,6 +125,10 @@ def test_the_probes_stay_exempt_when_the_app_is_mounted_under_a_prefix(mlp_state
     assert client.get("/model/ready").status_code == 200
     assert client.post("/model/predict", json=MLP_INPUT).status_code == 401
     assert client.post("/model/predict", json=MLP_INPUT, headers=AUTH).status_code == 200
+    # The index gives the paths with the mount prefix, so a client can follow them.
+    routes = client.get("/model/", headers=AUTH).json()["routes"]
+    assert routes["schema"] == "GET /model/schema"
+    assert routes["openapi"] == "GET /model/openapi.json"
 
 
 # --- request body limit ----------------------------------------------------------------------

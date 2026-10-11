@@ -87,10 +87,11 @@ downshift serve my_pkg.models:build --port 8000
 
 With `--workers N`, the parent process does these steps before uvicorn binds the port. Each worker needs the export that the parent makes. The routes are the same for all backends.
 
-[docs/production.md](docs/production.md) describes how to run downshift in a real deployment. It covers probes, sizing, Kubernetes, the optional API key and the absence of built-in TLS. If you set `DOWNSHIFT_SERVER_API_KEY`, every route except `/health` and `/ready` needs the header `Authorization: Bearer <key>`. If you do not set it, the server logs one warning at startup. The warning says that the endpoints are unauthenticated.
+[docs/production.md](docs/production.md) describes how to run downshift in a real deployment. It covers probes, sizing, Kubernetes, the optional API key and HTTPS. To serve HTTPS, give `--ssl-certfile` and `--ssl-keyfile`. If you set `DOWNSHIFT_SERVER_API_KEY`, every route except `/health` and `/ready` needs the header `Authorization: Bearer <key>`. If you do not set it, the server logs one warning at startup. The warning says that the endpoints are unauthenticated.
 
 | Route | What it does |
 |---|---|
+| `GET /` | The index. It gives the version, the model, whether the model is ready, and all routes. Start here if you know only the base URL. |
 | `POST /predict` | Takes named tensor inputs for any model. Returns `503` (with `Retry-After`) until the model is ready. |
 | `POST /predict/graph` | Takes one graph: `x`, `edge_index` and optional `edge_attr`. Returns the same `503` until ready. |
 | `GET /health` | Liveness. Returns `200` when the process is up, also during the load. |
@@ -258,6 +259,7 @@ These options change what downshift serves:
 - `--force-onnx` serves a DEGRADED graph through ONNX Runtime. The banner shows this.
 - `--reference model` verifies a pre-built `.onnx` file against a PyTorch model. Without it, the verdict is UNVERIFIED. This option is only numeric. If the `.onnx` file also needs a tokenizer, add `--tokenizer-from`.
 - `--tokenizer-from dir/` loads the tokenizer, the pooling recipe and the label metadata from a Hugging Face repo directory. It works for a `.onnx` file or a PyTorch model. With it, `{"text": ...}` works without a new export. The graph is served as it is. The option does not add pooling to a bare encoder. `/schema` reports the recipe only if the output is already pooled. The option does not depend on `--reference`, and it does not change verification. Both options can name the same directory or different directories. Refer to [Accepted model forms](#accepted-model-forms).
+- `--ssl-certfile cert.pem --ssl-keyfile key.pem` (env `DOWNSHIFT_SSL_CERTFILE`, `DOWNSHIFT_SSL_KEYFILE`) serves HTTPS with your certificate. For an encrypted key, set `DOWNSHIFT_SSL_KEYFILE_PASSWORD`. Refer to [HTTPS](docs/production.md#https).
 - `--middleware pkg.module:Attr` (repeatable) adds a middleware. It can be a class (pure ASGI, for example `starlette.middleware.gzip:GZipMiddleware`, or a `BaseHTTPMiddleware` subclass) or an `async (request, call_next)` function. If you add no middleware, there is no overhead.
 - `--output-encoding json|base64` (env `DOWNSHIFT_OUTPUT_ENCODING`, default `json`) sets the response encoding for requests that do not send `output_encoding`.
 - `--max-input-bytes N` (env `DOWNSHIFT_MAX_INPUT_BYTES`, default 256 MiB) sets the maximum decoded size of one base64 input. A larger input gets a `400`.
@@ -572,7 +574,11 @@ pytest
 python scripts/gen_matrix.py     # regenerates docs/compatibility.md and this README's table
 ```
 
-A plain `pytest` run has no coverage gate on your machine. CI runs it with `--cov-fail-under=95`.
+A plain `pytest` run has no coverage gate on your machine. CI runs it with `--cov-fail-under=95`. The HTTPS tests make a temporary certificate with the `openssl` command. If `openssl` is not on `PATH`, these tests skip.
+
+### For LLM agents
+
+[`llms.txt`](llms.txt) tells an agent how to call a downshift server and how to host a model. [`AGENTS.md`](AGENTS.md) tells a coding agent how to set up, test and change this repo.
 
 ## Changelog
 

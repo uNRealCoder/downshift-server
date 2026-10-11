@@ -198,6 +198,22 @@ def app_for(
 - `api_key`: if you set it, every route except `/health` and `/ready` needs `Authorization: Bearer <api_key>`. Without it, the route answers `401`. If you do not pass it, downshift uses the `DOWNSHIFT_SERVER_API_KEY` environment variable. Pass a value to override it for this app. If the key is unset or empty, downshift logs one `WARNING` that the endpoints are unauthenticated.
 - `options`: downshift forwards these as `ServeOptions` fields (`backend=`, `warmup=`, `max_concurrency=`, and others). [`serving.md`](serving.md) has the full list of fields. Every default comes from `downshift.settings`. The `DOWNSHIFT_*` environment variables therefore also apply here, not only to the CLI. Downshift reads them once, when `downshift` is imported. A keyword argument has priority. `check()`, `export()` and `intake()` are an exception for `k`. They use the constant `8` as the default and not `DOWNSHIFT_SAMPLES`.
 
+### HTTPS with `app_for`
+
+`app_for` returns a FastAPI app. The app has no TLS settings. Your server sets TLS. To serve the app over HTTPS with uvicorn, give uvicorn the certificate and the key:
+
+```python
+import uvicorn
+from downshift import app_for
+
+app = app_for("model.onnx")
+uvicorn.run(
+    app, host="0.0.0.0", port=8443, ssl_certfile="cert.pem", ssl_keyfile="key.pem", ssl_ciphers=None
+)
+```
+
+Use `ssl_ciphers=None`. With `None`, uvicorn keeps the cipher list of the Python standard library. The default of uvicorn (`"TLSv1"`) also enables NULL ciphers and anonymous ciphers. `downshift serve --ssl-certfile` uses the same settings. Refer to [HTTPS in production.md](../production.md#https).
+
 ## Types
 
 ### `ExportVerdict`

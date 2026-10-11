@@ -213,6 +213,23 @@ RequestTimeoutOpt = Annotated[
         "it gets a 503 and no inference. 0 = no limit",
     ),
 ]
+SslCertfileOpt = Annotated[
+    str | None,
+    typer.Option(
+        "--ssl-certfile",
+        metavar="PATH",
+        help="A PEM certificate (chain). Serve HTTPS with it. Default: plain HTTP",
+    ),
+]
+SslKeyfileOpt = Annotated[
+    str | None,
+    typer.Option(
+        "--ssl-keyfile",
+        metavar="PATH",
+        help="The PEM private key of --ssl-certfile. If the certificate file contains the key, "
+        "this option is not necessary. For an encrypted key, set DOWNSHIFT_SSL_KEYFILE_PASSWORD",
+    ),
+]
 AtolOpt = Annotated[
     float | None,
     typer.Option("--atol", help="Override the absolute tolerance. Default: by output dtype"),

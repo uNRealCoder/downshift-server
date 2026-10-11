@@ -250,7 +250,10 @@ def choose_backend(
         notes.append("no ONNX graph available; falling back to torch")
         wanted = BackendName.torch
     if wanted == BackendName.torch and not has_torch:
-        raise ValueError("torch backend requested but there is no PyTorch model to run")
+        raise ValueError(
+            "torch backend requested but there is no PyTorch model to run. Give "
+            "--reference with the PyTorch model, or use --backend onnxruntime"
+        )
     return wanted, notes
 
 

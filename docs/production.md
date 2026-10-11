@@ -7,9 +7,9 @@
 - It warms up the backend.
 - It answers `/predict`.
 
-It has one fixed API key for authentication. It has no TLS, no rate limiting and no process supervision. A real deployment adds these around downshift. This page describes how to do that.
+It has one fixed API key for authentication and optional HTTPS with your certificate. It has no rate limiting and no process supervision. A real deployment adds these around downshift. This page describes how to do that.
 
-## Authentication: one API key, no TLS, no rate limiting
+## Authentication: one API key, no rate limiting
 
 Set `DOWNSHIFT_SERVER_API_KEY`. Every route except `/health` and `/ready` then needs `Authorization: Bearer <key>`. The comparison takes constant time. Any other request gets a `401` with `WWW-Authenticate: Bearer` and this body: `{"detail": "Authorization header is not set or incorrect"}`. The two probes stay open, so Kubernetes never needs the key.
 
@@ -24,9 +24,9 @@ If the variable is unset or empty, the server logs one `WARNING` at startup. The
 
 `app_for()` and `build_app(..., api_key=...)` read the same variable by default. To override it for one app, pass `api_key=`. To turn it off, pass `api_key=None`.
 
-One key is not a user system. It is a shared secret that travels in a header. Use it only behind TLS. A proxy layer does the other jobs better than downshift can. Put a reverse proxy in front of downshift (nginx, Envoy, the load balancer of your cloud, or a service mesh sidecar). Configure these items in the proxy:
+One key is not a user system. It is a shared secret that travels in a header. Use it only with TLS: either the `--ssl-certfile` of downshift (refer to [HTTPS](#https)) or a proxy. A proxy layer does the other jobs better than downshift can. Put a reverse proxy in front of downshift. Examples are nginx, Envoy, the load balancer of your cloud, and a service mesh sidecar. Configure these items in the proxy:
 
-- TLS termination.
+- TLS termination, with automatic renewal of the certificate.
 - Authentication that is more than one shared key (mTLS, keys for each client, OAuth).
 - Rate limiting and IP allow-lists.
 - Limits on request size that are lower than `--max-body-bytes`. Use them to reject oversized bodies before they reach this process.
@@ -38,6 +38,36 @@ If you need something in the process, use `--middleware pkg.module:Attr` (repeat
 - An `async (request, call_next)` function.
 
 Downshift attaches them in the order that you give. Your middleware runs inside the key check. It sees only authenticated requests. A `401` never reaches it.
+
+## HTTPS
+
+Downshift can serve HTTPS with a certificate that you supply. To serve HTTPS, do these steps:
+
+1. Get a PEM certificate and its PEM private key. For a public name, get the two files from a certificate authority, for example Let's Encrypt. For a private network, use the certificate authority of your organization.
+2. Give the two files to `serve`:
+
+   ```bash
+   downshift serve my_pkg.models:build --host 0.0.0.0 --port 8443 \
+     --ssl-certfile /etc/downshift/cert.pem --ssl-keyfile /etc/downshift/key.pem
+   ```
+
+3. If the key is encrypted, set `DOWNSHIFT_SSL_KEYFILE_PASSWORD`. There is no flag for the password, because a flag shows in the process list.
+4. Make sure that the banner shows `https://` in the `Endpoint` row.
+
+Downshift loads the files before it loads the model. If a file is bad, `serve` stops with exit code `4`. Examples are a missing file, a key that does not agree with the certificate, and a wrong password. The error message gives the next step. Downshift never asks for a password on the terminal.
+
+Downshift uses the TLS settings of `ssl.create_default_context` in the Python standard library. The minimum protocol is TLS 1.2. The cipher list is the list of the standard library. The default cipher string of uvicorn (`"TLSv1"`) also enables NULL ciphers and anonymous ciphers. Downshift does not use that default.
+
+`--workers N` works with HTTPS. Each worker reads the same files.
+
+These items are not in downshift. If you need one of them, use a proxy:
+
+- Automatic renewal of the certificate. Downshift reads the files one time, at startup. After you renew the certificate, restart the process.
+- ACME (Let's Encrypt) requests.
+- Client certificates (mTLS).
+- HTTP and HTTPS on the same port, or a redirect from HTTP to HTTPS.
+
+If a proxy terminates TLS, do not give `--ssl-certfile` to downshift. Keep downshift on plain HTTP behind the proxy, on `127.0.0.1` or on a private network.
 
 ## `/health` and `/ready`
 
@@ -184,6 +214,7 @@ Downshift reads each `DOWNSHIFT_*` variable once, when `downshift` is imported. 
 - `DOWNSHIFT_MAX_INPUT_BYTES`, `DOWNSHIFT_MAX_BODY_BYTES`
 - `DOWNSHIFT_MAX_CONCURRENCY`, `DOWNSHIFT_MAX_QUEUE`, `DOWNSHIFT_REQUEST_TIMEOUT`
 - `DOWNSHIFT_WORKERS`, `DOWNSHIFT_SERVER_API_KEY`
+- `DOWNSHIFT_SSL_CERTFILE`, `DOWNSHIFT_SSL_KEYFILE`, `DOWNSHIFT_SSL_KEYFILE_PASSWORD`
 - The `DOWNSHIFT_TOL_*` variables for each dtype.
 
 They apply to library use (`app_for()` and `ServeOptions()`) and to the CLI. A flag or a keyword argument has priority over the variable. The variable has priority over the default. To change a variable, restart the process that reads it.
@@ -246,3 +277,5 @@ resources:
 ```
 
 Read the `Boot` row from a real run of the model that you deploy. Set `initialDelaySeconds` a little above it, on both probes in this mode. The pod does not listen at all until the export of the parent finishes.
+
+If `serve` uses `--ssl-certfile`, add `scheme: HTTPS` to the `httpGet` of both probes. The kubelet does not check the certificate.

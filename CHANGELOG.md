@@ -3,6 +3,28 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.5.1 - unreleased
+
+### Added
+
+- HTTPS. `serve --ssl-certfile PATH --ssl-keyfile PATH` (or `DOWNSHIFT_SSL_CERTFILE` and `DOWNSHIFT_SSL_KEYFILE`) serves HTTPS with your certificate. For an encrypted key, set `DOWNSHIFT_SSL_KEYFILE_PASSWORD`. Downshift loads the files before the model. A bad file is a usage error (exit code `4`) with a next step. Downshift uses the TLS settings of `ssl.create_default_context`: TLS 1.2 or later and the cipher list of the standard library. The default of uvicorn also enables NULL and anonymous ciphers. `--workers N` works with HTTPS. The banner, the `will listen on` line and `example_curl` in `/schema` show `https://`. The `serving with:` block has a `tls` row. Refer to "HTTPS" in `docs/production.md`.
+- `GET /`. It gives the service name, the version, `ready`, the model, all routes, and the next step (`GET /schema`). A client that knows only the base URL can find the input format. If the API key is active, this route needs the key.
+- `llms.txt` and `AGENTS.md` at the root of the repo. `llms.txt` tells an LLM agent how to call a server and how to host a model. `AGENTS.md` tells a coding agent how to set up, test and change this repo.
+- `--help` of `check`, `export` and `serve` shows the exit codes and an example.
+
+### Changed
+
+- More usage errors give a next step. These errors changed:
+  - A missing adapter file.
+  - A missing or read-only `--export-cache-dir`.
+  - `export` of a `.onnx` file.
+  - `--backend torch` with no PyTorch model.
+  - A repo with `auto_map`.
+  - A pooling recipe that downshift cannot apply.
+
+  A client or script that matches the old text must change.
+- The `400` for text that is too long had a doubled word. The message now also gives the next step: send shorter text, or split the text into more rows.
+
 ## 0.5.0 - 2026-10-10
 
 ### Added

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "downshift-server"
-version = "0.5.0"
+version = "0.5.1"
 description = "Serve PyTorch models over HTTP through ONNX Runtime. Downshift verifies each export against PyTorch before it serves, and it falls back to eager PyTorch."
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
@@ -41,7 +41,7 @@ dependencies = [
 dev = [
     "pytest>=7.0",
     "pytest-cov>=5.0",
-    "ruff>=0.6",
+    "ruff==0.17.0",  # pinned: CI and local runs must format the same way (0.17 also formats Markdown code blocks)
     "mypy>=1.0",
     "httpx>=0.24",  # FastAPI TestClient
     "safetensors>=0.4",  # reference reader/writer for the binary wire format tests

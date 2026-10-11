@@ -22,7 +22,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 
@@ -58,6 +58,8 @@ from downshift.cli.options import (
     RtolOpt,
     SamplesOpt,
     SeedOpt,
+    SslCertfileOpt,
+    SslKeyfileOpt,
     TokenizerFromOpt,
     UnsafeLoadOpt,
     VaryOpt,
@@ -70,6 +72,7 @@ from downshift.cli.runtime import (
     _build_serving_state,
     _load,
     _setup_logging,
+    _tls_config,
     _write_onnx_artifact,
 )
 from downshift.serve.options import BackendChoice, ExecutionChoice, ServeOptions
@@ -81,6 +84,14 @@ if TYPE_CHECKING:
 
 EXIT_USAGE = 4  # a bad model spec, a bad option, a file that cannot load
 EXIT_CRASH = 5
+
+_EXIT_CODES = "Exit codes: 0 CLEAN, 1 FAILED, 2 DEGRADED, 3 UNVERIFIED, 4 usage error, 5 crash."
+
+
+def _epilog(exit_codes: str, *example: str) -> str:
+    """The --help epilog of a command. "\\b" stops click from joining the example lines."""
+    return f"{exit_codes}\n\n\b\nExample:\n" + "\n".join(f"  {line}" for line in example)
+
 
 app = typer.Typer(
     help=(
@@ -176,7 +187,7 @@ def _log_capture_failure(verdict: ExportVerdict, log_level: LogLevel) -> None:
         render.logger.debug("%s failed:\n%s", name, trace)
 
 
-@app.command("check")
+@app.command("check", epilog=_epilog(_EXIT_CODES, "downshift check my_pkg.models:build --json"))
 def check_cmd(
     model: ModelArg,
     json_out: JsonOpt = False,
@@ -196,7 +207,7 @@ def check_cmd(
     normalize: NormalizeOpt = None,
     log_level: LogLevelOpt = LogLevel.warning,
 ) -> None:
-    """Export in memory and verify the numbers. Exit 0 CLEAN, 1 FAILED, 2 DEGRADED, 3 UNVERIFIED."""
+    """Export in memory and verify the numbers. The exit code is the verdict."""
     from downshift.core.shapes import parse_dynamic_spec
     from downshift.loading import LoadSpec
 
@@ -243,7 +254,7 @@ def check_cmd(
         raise typer.Exit(verdict.exit_code)
 
 
-@app.command("export")
+@app.command("export", epilog=_epilog(_EXIT_CODES, "downshift export ./bert-base-uncased -o ./out"))
 def export_cmd(
     model: ModelArg,
     output: Annotated[Path, typer.Option("-o", "--output", help="The output directory")],
@@ -287,7 +298,11 @@ def export_cmd(
         spec = LoadSpec(model, inputs, model_class, unsafe_load, pooling, normalize)
         loaded = _load(spec)
         if loaded.model is None:
-            raise LoadError(f"{model} is already ONNX. The export needs a PyTorch model")
+            raise LoadError(
+                f"{model} is already ONNX. The export needs a PyTorch model. To serve "
+                "the file, use downshift serve. To verify the file, use downshift check "
+                "--reference with the PyTorch model"
+            )
         onnx_path = output / f"{name or slug(model)}.onnx"
         if no_verify:
             render.warn("--no-verify: downshift saves the graph without a check of its numbers")
@@ -318,7 +333,15 @@ def export_cmd(
         raise typer.Exit(verdict.exit_code)
 
 
-@app.command("serve")
+@app.command(
+    "serve",
+    epilog=_epilog(
+        "Exit codes before the server is ready: 4 usage error, 5 crash.",
+        "downshift serve ./bert-base-uncased --port 8000",
+        "curl -s localhost:8000/ready      # 200 when the model is ready",
+        "curl -s localhost:8000/schema     # the inputs and an example_request body",
+    ),
+)
 def serve_cmd(
     model: ModelArg,
     host: Annotated[str, typer.Option("--host")] = settings.HOST,
@@ -360,6 +383,8 @@ def serve_cmd(
     request_timeout: RequestTimeoutOpt = settings.REQUEST_TIMEOUT,
     workers: WorkersOpt = settings.WORKERS,
     export_cache_dir: ExportCacheDirOpt = settings.EXPORT_CACHE_DIR,
+    ssl_certfile: SslCertfileOpt = settings.SSL_CERTFILE,
+    ssl_keyfile: SslKeyfileOpt = settings.SSL_KEYFILE,
     atol: AtolOpt = None,
     rtol: RtolOpt = None,
     seed: SeedOpt = 0,
@@ -377,6 +402,19 @@ def serve_cmd(
 
     _setup_logging(log_level)
     with _exit_on_error(log_level is LogLevel.debug):
+        tls = _tls_config(ssl_certfile, ssl_keyfile, settings.SSL_KEYFILE_PASSWORD)
+        https = bool(tls)
+        # The settings of both uvicorn paths. log_config=None: the loggers of uvicorn use the
+        # sink that _setup_logging installed. The app logs its own record for each request
+        # (access_log), so the access log of uvicorn stays off.
+        uvicorn_kwargs: dict[str, Any] = dict(
+            host=host,
+            port=port,
+            log_level=log_level.value,
+            log_config=None,
+            access_log=False,
+            **tls,
+        )
         if export_cache_dir:
             from downshift.core.export_cache import check_dir
 
@@ -444,6 +482,7 @@ def serve_cmd(
                 state,
                 host,
                 port,
+                https=https,
                 workers=workers,
                 log_level=log_level.value,
                 access_log=access_log,
@@ -470,7 +509,7 @@ def serve_cmd(
                     failure.append(exc)
                     server.should_exit = True
                     raise
-                render.print_banner(state, host, port)
+                render.print_banner(state, host, port, https=https)
                 print_config(state)
                 render.print_ready(state)
                 return state
@@ -478,19 +517,8 @@ def serve_cmd(
             api = build_app(
                 loader=loader, middleware=tuple(args.middleware or ()), access_log=access_log
             )
-            render.print_booting(model, host, port)
-            # log_config=None: the loggers of uvicorn use the sink that _setup_logging
-            # installed. The app logs its own record for each request (access_log), so the
-            # access log of uvicorn stays off.
-            config = uvicorn.Config(
-                api,
-                host=host,
-                port=port,
-                log_level=log_level.value,
-                log_config=None,
-                access_log=False,
-            )
-            server = uvicorn.Server(config)
+            render.print_booting(model, host, port, https=https)
+            server = uvicorn.Server(uvicorn.Config(api, **uvicorn_kwargs))
             server.run()
             if failure:
                 raise failure[0]
@@ -504,7 +532,7 @@ def serve_cmd(
             parent_options = replace(args.options, warmup=0, intra_op_threads=0, inter_op_threads=0)
             state = _build_serving_state(replace(args, options=parent_options))
             state.options = args.options  # the banner reports what the workers use
-            render.print_banner(state, host, port, workers=workers)
+            render.print_banner(state, host, port, workers=workers, https=https)
             print_config(state, workers=workers)
             temp_dir: Path | None = None
             onnx_path_str: str | None = None
@@ -538,13 +566,9 @@ def serve_cmd(
             try:
                 uvicorn.run(
                     "downshift.cli.runtime:_serve_app_factory",
-                    host=host,
-                    port=port,
                     workers=workers,
-                    log_level=log_level.value,
-                    log_config=None,
-                    access_log=False,
                     factory=True,
+                    **uvicorn_kwargs,
                 )
             finally:
                 if temp_dir is not None:

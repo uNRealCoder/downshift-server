@@ -106,12 +106,15 @@ def _prompts(root: Path) -> tuple[dict[str, str], str | None]:
 def _pooling_mode(directory: Path) -> str:
     config = _read_json(directory / "config.json")
     if not isinstance(config, dict):
-        raise RecipeError(f"modules.json names a Pooling module but {directory} has no config.json")
+        raise RecipeError(
+            f"modules.json names a Pooling module but {directory} has no config.json. "
+            "The download is not complete. Download the repo again"
+        )
     modes = [mode for flag, mode in _POOLING_FLAGS.items() if config.get(flag)]
     if len(modes) != 1:
         raise RecipeError(
             f"{directory.name}/config.json enables {len(modes)} pooling modes. "
-            "Downshift applies exactly one"
+            "Downshift applies exactly one. Pass --pooling to select it"
         )
     return str(modes[0])
 
@@ -125,7 +128,9 @@ def read_recipe(path: Path) -> EmbeddingRecipe | None:
     if modules is None:
         return None
     if not isinstance(modules, list):
-        raise RecipeError("modules.json is not a list of modules")
+        raise RecipeError(
+            "modules.json is not a list of modules. Pass --pooling to set the pooling"
+        )
     pooling: str | None = None
     normalize = False
     transformer_dir = path
@@ -145,7 +150,10 @@ def read_recipe(path: Path) -> EmbeddingRecipe | None:
                 "serve the encoder's token-level output instead."
             )
     if pooling is None:
-        raise RecipeError("modules.json has no Pooling module")
+        raise RecipeError(
+            "modules.json has no Pooling module. Pass --pooling to set one, or "
+            "--pooling none to serve token vectors"
+        )
     prompts, default_prompt = _prompts(path)
     return EmbeddingRecipe(
         pooling,
@@ -177,7 +185,7 @@ def resolve_recipe(
         if pooling is not None or normalize is not None:
             raise RecipeError(
                 "--pooling/--normalize apply to encoder-only repos. "
-                "This repo has a classification head"
+                "This repo has a classification head. Remove --pooling and --normalize"
             )
         return None
     root = Path(path)

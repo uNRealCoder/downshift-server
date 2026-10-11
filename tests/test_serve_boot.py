@@ -1,10 +1,12 @@
 """U3: `serve` binds a real socket before the model is ready. The test uses a real subprocess and
 a real uvicorn server on an ephemeral port. This exercises the lifespan and signal handling of
 uvicorn.Server on Windows (see the risk table of PLAN_0.4.0.md). The TestClient tests in
-tests/test_serve.py run in the same process and cannot do this.
+tests/test_serve.py run in the same process and cannot do this. The HTTPS test also needs a
+real socket, because TestClient has no TLS. It runs uvicorn in a thread with a stub app.
 """
 
 import socket
+import ssl
 import subprocess
 import sys
 import threading
@@ -12,6 +14,9 @@ import time
 import urllib.error
 import urllib.request
 
+import uvicorn
+
+from downshift.cli.runtime import _tls_config
 from tests.conftest import subprocess_env
 
 MODEL = "tests.models.clean_mlp:make_model"
@@ -94,3 +99,37 @@ def test_ready_is_503_then_200_with_no_restart() -> None:
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait(timeout=5)
+
+
+async def _ok_app(scope, receive, send) -> None:
+    await send({"type": "http.response.start", "status": 200, "headers": []})
+    await send({"type": "http.response.body", "body": b"ok"})
+
+
+def test_uvicorn_serves_https_with_the_tls_config_of_serve(tls_files) -> None:
+    """The same keyword arguments that `serve` gives uvicorn. The CLI tests check that `serve`
+    passes them. This test checks that uvicorn accepts them and makes a real TLS handshake."""
+    port = _free_port()
+    config = uvicorn.Config(
+        _ok_app, host="127.0.0.1", port=port, lifespan="off", log_config=None,
+        **_tls_config(tls_files.cert, tls_files.key, None),
+    )  # fmt: skip
+    config.load()
+    ciphers = {cipher["name"] for cipher in config.ssl.get_ciphers()}
+    assert not any("NULL" in name or name.startswith("AECDH") for name in ciphers), ciphers
+
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    trusted = ssl.create_default_context(cafile=tls_files.cert)
+    try:
+        deadline = time.monotonic() + BOOT_TIMEOUT
+        while not server.started and time.monotonic() < deadline:
+            time.sleep(0.02)
+        with urllib.request.urlopen(f"https://127.0.0.1:{port}/", context=trusted) as resp:
+            assert resp.read() == b"ok"
+        # Plain HTTP on the TLS port gets no HTTP response.
+        assert _status(f"http://127.0.0.1:{port}/") is None
+    finally:
+        server.should_exit = True
+        thread.join(timeout=5)

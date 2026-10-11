@@ -44,13 +44,16 @@ def check_dir(path: str | Path) -> Path:
     The operator asked for persistence. Serving without it would hide the problem."""
     root = Path(path)
     if not root.is_dir():
-        raise ValueError(f"--export-cache-dir {str(root)!r} is not an existing directory")
+        raise ValueError(
+            f"--export-cache-dir {str(root)!r} is not an existing directory. Create it first"
+        )
     try:
         with tempfile.TemporaryFile(dir=root):
             pass
     except OSError as exc:
         raise ValueError(
-            f"--export-cache-dir {str(root)!r} is not writable: {exc.strerror or exc}"
+            f"--export-cache-dir {str(root)!r} is not writable: {exc.strerror or exc}. "
+            "Give a directory that this process can write to"
         ) from exc
     return root
 
