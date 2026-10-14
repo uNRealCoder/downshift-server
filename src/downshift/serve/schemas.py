@@ -273,6 +273,15 @@ class Limits(BaseModel):
     request_timeout: float
 
 
+class CacheInfo(BaseModel):
+    """The result cache of this worker process. `hits` and `misses` count rows."""
+
+    max_rows: int
+    entries: int
+    hits: int
+    misses: int
+
+
 class MetadataResponse(BaseModel):
     model: str
     family: str
@@ -283,6 +292,7 @@ class MetadataResponse(BaseModel):
     notes: list[str] = Field(default_factory=list)
     version: str
     limits: Limits
+    cache: CacheInfo | None = None  # None if the result cache is off
     execution: str  # "threadpool" or "inline" (--execution)
     boot: dict[str, float] = Field(default_factory=dict)
     warmup: dict | None = None

@@ -9,7 +9,7 @@ from downshift.serve.result_cache import ResultCache
 
 
 def _row(value: float, size: int = 4):
-    return (np.full(size, value, dtype=np.float32),)
+    return {"output_0": np.full(size, value, dtype=np.float32)}
 
 
 def _put(cache: ResultCache, key: bytes, row) -> None:
@@ -30,7 +30,7 @@ def test_a_row_is_stored_on_its_second_sighting():
 
     found = cache.lookup([b"k"])
     assert list(found.hits) == [0]
-    assert found.hits[0][0].tolist() == [1.0] * 4
+    assert found.hits[0]["output_0"].tolist() == [1.0] * 4
     assert found.missing == []
 
 
@@ -88,10 +88,10 @@ def test_a_stored_row_is_a_copy():
     batch = np.arange(8, dtype=np.float32).reshape(2, 4)
     for _ in range(2):
         cache.lookup([b"k"])
-        cache.complete(b"k", (batch[0],))
+        cache.complete(b"k", {"output_0": batch[0]})
     batch[:] = -1
 
-    assert cache.lookup([b"k"]).hits[0][0].tolist() == [0.0, 1.0, 2.0, 3.0]
+    assert cache.lookup([b"k"]).hits[0]["output_0"].tolist() == [0.0, 1.0, 2.0, 3.0]
 
 
 def test_two_requests_never_compute_the_same_row():
@@ -103,7 +103,7 @@ def test_two_requests_never_compute_the_same_row():
     assert first.missing == [0]
     assert second.missing == []
     cache.complete(b"k", _row(7))
-    assert second.pending[0].result()[0].tolist() == [7.0] * 4
+    assert second.pending[0].result()["output_0"].tolist() == [7.0] * 4
 
 
 def test_the_same_row_twice_in_one_request_has_one_owner():
@@ -131,9 +131,9 @@ def test_single_flight_across_threads():
             cache.complete(b"k", _row(3))
             results.append(3.0)
         elif found.pending:
-            results.append(float(found.pending[0].result(timeout=5)[0][0]))
+            results.append(float(found.pending[0].result(timeout=5)["output_0"][0]))
         else:
-            results.append(float(found.hits[0][0][0]))
+            results.append(float(found.hits[0]["output_0"][0]))
 
     threads = [threading.Thread(target=worker) for _ in range(8)]
     for t in threads:
@@ -172,3 +172,33 @@ def test_the_counters():
     cache.lookup([b"k", b"other"])
 
     assert cache.stats() == {"max_rows": 4, "entries": 1, "hits": 1, "misses": 3}
+
+
+def test_a_text_key_covers_the_prompt_and_the_row():
+    from downshift.serve.result_cache import text_keys
+
+    same = text_keys("", ["a", "b"])
+    assert text_keys("", ["a", "b"]) == same
+    assert len(set(same)) == 2
+    assert text_keys("query: ", ["a"]) != text_keys("", ["a"])
+    # The prompt and the row must not blur into each other.
+    assert text_keys("ab", ["c"]) != text_keys("a", ["bc"])
+
+
+def test_a_tensor_key_comes_from_the_array_and_not_from_the_json():
+    from downshift.serve.result_cache import tensor_keys
+    from downshift.serve.schemas import to_numpy
+
+    spaced = to_numpy("x", [[1, 2.5], [3, 4]], "float32")
+    compact = to_numpy("x", [[1.0, 2.50], [3.0, 4.0]], "float32")
+
+    assert tensor_keys({"x": spaced}, 2) == tensor_keys({"x": compact}, 2)
+    assert len(set(tensor_keys({"x": spaced}, 2))) == 2
+    assert tensor_keys({"x": spaced.astype(np.float64)}, 2) != tensor_keys({"x": spaced}, 2)
+    assert tensor_keys({"y": spaced}, 2) != tensor_keys({"x": spaced}, 2)
+
+
+def test_a_text_key_and_a_tensor_key_never_meet():
+    from downshift.serve.result_cache import tensor_keys, text_keys
+
+    assert set(text_keys("", ["x"])).isdisjoint(tensor_keys({"x": np.zeros((1, 1))}, 1))

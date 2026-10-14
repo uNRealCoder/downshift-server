@@ -31,6 +31,7 @@ from downshift.serve.predict import (
 )
 from downshift.serve.schemas import (
     BackendInfo,
+    CacheInfo,
     GraphPredictRequest,
     HealthResponse,
     IndexResponse,
@@ -531,6 +532,11 @@ def build_app(
             notes=[hide_paths(note, paths) for note in current.notes],
             version=downshift.__version__,
             limits=limits_info(current),
+            cache=(
+                CacheInfo(**current.result_cache.stats())
+                if current.result_cache is not None
+                else None
+            ),
             execution=current.execution.value,
             boot=dict(current.timings),
             warmup=asdict(current.warmup_stats) if current.warmup_stats is not None else None,

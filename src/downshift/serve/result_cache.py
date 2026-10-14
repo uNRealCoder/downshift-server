@@ -13,6 +13,7 @@ Three rules keep it safe and useful:
   whole batch alive.
 """
 
+import hashlib
 import threading
 from collections import OrderedDict
 from concurrent.futures import Future
@@ -20,7 +21,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-Row = tuple[np.ndarray, ...]  # one array for each output, with no batch axis
+Row = dict[str, np.ndarray]  # output name -> the array of this row, with no batch axis
 
 _MIN_DOORKEEPER = 1024
 
@@ -73,7 +74,7 @@ class ResultCache:
     def complete(self, key: bytes, row: Row) -> None:
         """The owner has computed a row. Give it to the waiters, and store it if this is its
         second sighting. `key` may have no owner (a request that skipped the lookup)."""
-        row = tuple(a.copy() for a in row)
+        row = {name: arr.copy() for name, arr in row.items()}
         with self._lock:
             future = self._flying.pop(key, None)
             if key in self._seen or key in self._rows:
@@ -104,3 +105,35 @@ class ResultCache:
                 "hits": self.hits,
                 "misses": self.misses,
             }
+
+
+def _digest(kind: bytes) -> hashlib.blake2b:
+    return hashlib.blake2b(kind, digest_size=16)
+
+
+def text_keys(prompt: str, rows: list[str]) -> list[bytes]:
+    """One key for each text row. The key covers the prompt and the row, and it is made before
+    the tokenizer runs. A hit therefore also skips the tokenization."""
+    head = prompt.encode()
+    keys = []
+    for row in rows:
+        h = _digest(b"T")
+        h.update(len(head).to_bytes(4, "big") + head)
+        h.update(row.encode())
+        keys.append(h.digest())
+    return keys
+
+
+def tensor_keys(arrays: dict[str, np.ndarray], rows: int) -> list[bytes]:
+    """One key for each row of the batch axis. The key covers the name, the dtype, the shape and
+    the bytes of each input row. It comes from the arrays, so the spaces and the number format of
+    the JSON body do not change it."""
+    keys = []
+    for i in range(rows):
+        h = _digest(b"N")
+        for name, arr in arrays.items():
+            row = np.ascontiguousarray(arr[i])
+            h.update(f"{name}|{row.dtype.name}|{row.shape}|".encode())
+            h.update(row.data)
+        keys.append(h.digest())
+    return keys

@@ -149,6 +149,17 @@ PREP_THREADS = _env_int("DOWNSHIFT_PREP_THREADS", min(4, usable_cpus()))
 DEFAULT_MAX_QUEUE = 64
 MAX_QUEUE = _env_int("DOWNSHIFT_MAX_QUEUE", DEFAULT_MAX_QUEUE)
 
+# The number of rows that the result cache keeps in each worker process. A row that arrives a
+# second time then skips the model. The cache counts rows and not bytes. Set a number that fits
+# the size of one output row. 0 turns the cache off. If the variable is unset, downshift uses
+# DEFAULT_RESULT_CACHE_ROWS for a model with independent rows and no cache for other models.
+DEFAULT_RESULT_CACHE_ROWS = 100
+RESULT_CACHE_ROWS: int | None = (
+    _env_int("DOWNSHIFT_RESULT_CACHE_ROWS", DEFAULT_RESULT_CACHE_ROWS)
+    if "DOWNSHIFT_RESULT_CACHE_ROWS" in os.environ
+    else None
+)
+
 # The number of seconds that an admitted predict can wait without a start. After this time, it
 # gets a 503 and no inference. 0 means no limit.
 DEFAULT_REQUEST_TIMEOUT = 30.0

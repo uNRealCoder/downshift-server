@@ -624,3 +624,23 @@ def test_print_banner_shows_the_rows_row(caplog):
     render.print_banner(state, "127.0.0.1", 8000)
 
     assert "independent" in caplog.text
+
+
+def test_print_banner_shows_the_cache_row(caplog):
+    from downshift.serve.result_cache import ResultCache
+
+    state = _serving_state(_verdict(row_independent=True))
+    state.result_cache = ResultCache(100)
+    render.print_banner(state, "127.0.0.1", 8000)
+    assert "100 rows per worker" in caplog.text
+
+    caplog.clear()
+    state.result_cache = None
+    state.cache_off_reason = "not checked: the verdict is FAILED"
+    render.print_banner(state, "127.0.0.1", 8000)
+    assert "off (the verdict is FAILED)" in caplog.text
+
+    caplog.clear()
+    state.cache_off_reason = None
+    render.print_banner(state, "127.0.0.1", 8000)
+    assert "--result-cache-rows 0" in caplog.text

@@ -185,6 +185,14 @@ def _capacity_text(state: ServingState) -> str:
     )
 
 
+def _cache_text(state: ServingState) -> str:
+    if state.result_cache is not None:
+        return f"{state.result_cache.max_rows} rows per worker  (--result-cache-rows)"
+    if state.cache_off_reason is not None:
+        return f"off ({state.cache_off_reason.removeprefix('not checked: ')})"
+    return "off  (--result-cache-rows 0)"
+
+
 def _execution_text(state: ServingState) -> str:
     if state.execution == ExecutionChoice.inline:
         return "inline for small JSON bodies  (--execution inline)"
@@ -370,6 +378,7 @@ def print_banner(
     _add_numerics_rows(rows, verdict)
     if verdict.numerics is not None:
         rows.add("Rows", _rows_text(verdict))
+    rows.add("Cache", _cache_text(state))
     warmup_text = _warmup_text(state)
     if warmup_text is not None:
         rows.add("Warmup", warmup_text)

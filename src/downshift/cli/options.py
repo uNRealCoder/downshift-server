@@ -204,6 +204,17 @@ MaxQueueOpt = Annotated[
         "predict gets a fast 503",
     ),
 ]
+ResultCacheRowsOpt = Annotated[
+    int | None,
+    typer.Option(
+        "--result-cache-rows",
+        min=0,
+        help="The number of rows that the result cache keeps in each worker. A row that comes "
+        "a second time then skips the model. The cache counts rows and not bytes: set a number "
+        "that fits the size of one output row. 0 = off. Default: 100 for a model with "
+        "independent rows, and off for any other model",
+    ),
+]
 RequestTimeoutOpt = Annotated[
     float,
     typer.Option(

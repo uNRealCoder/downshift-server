@@ -56,6 +56,8 @@ class ServeOptions:
     prep_threads: int = settings.PREP_THREADS  # threads that parse and convert requests
     max_queue: int = settings.MAX_QUEUE  # admitted predicts that can wait beyond max_concurrency
     request_timeout: float = settings.REQUEST_TIMEOUT  # queue seconds. 0 = none
+    # Rows in the result cache. None = the default, but only for a model with independent rows. 0 = off
+    result_cache_rows: int | None = settings.RESULT_CACHE_ROWS
     atol: float | None = None  # None means "by the floating dtype of the model"
     rtol: float | None = None
     seed: int = 0  # makes the verification samples reproducible

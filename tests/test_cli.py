@@ -718,3 +718,13 @@ def test_serve_execution_round_trips_through_serve_args():
     )
     restored = ServeArgs.from_json(args.to_json()).options.execution
     assert restored is ExecutionChoice.inline
+
+
+def test_serve_passes_result_cache_rows_and_it_survives_workers(monkeypatch):
+    _, captured = _serve_captured(monkeypatch, "--result-cache-rows", "12")
+    assert captured["app"].state.serving.options.result_cache_rows == 12
+    assert captured["app"].state.serving.result_cache.max_rows == 12
+
+    _serve_captured(monkeypatch, "--result-cache-rows", "12", "--workers", "2")
+    args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
+    assert args.options.result_cache_rows == 12
