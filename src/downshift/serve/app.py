@@ -164,6 +164,7 @@ async def _predict(
         admitted_at=admitted_at,
         timings_ms=timings,
         accept_safetensors=SAFETENSORS_MEDIA_TYPE in request.headers.get("accept", "").lower(),
+        use_cache="no-cache" not in request.headers.get("cache-control", "").lower(),
     )
 
 

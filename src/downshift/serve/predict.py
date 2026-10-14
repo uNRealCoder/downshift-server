@@ -57,6 +57,7 @@ SAFETENSORS_MEDIA_TYPE = "application/vnd.safetensors"
 BINARY_REQUEST_TYPES = frozenset({SAFETENSORS_MEDIA_TYPE, "application/octet-stream"})
 # The Server-Timing stages, in the order of the request.
 STAGES = ("parse", "prep_wait", "prep", "infer_wait", "infer", "encode")
+CACHE_HEADER = "X-Downshift-Cache"
 
 # The dtypes that OPT_SERIALIZE_NUMPY of orjson writes directly from the array buffer (orjson >= 3.9).
 _ORJSON_DTYPES = frozenset(
@@ -380,9 +381,11 @@ def _encode_response(
             body["predictions"] = predictions
         response = NumpyJSONResponse(body)
     timings_ms["encode"] = round((time.perf_counter() - start) * 1000, 2)
-    response.headers["Server-Timing"] = ", ".join(
-        f"{stage};dur={timings_ms.get(stage, 0.0):.2f}" for stage in STAGES
-    )
+    stages = [f"{stage};dur={timings_ms.get(stage, 0.0):.2f}" for stage in STAGES]
+    if "cache" in timings_ms:  # only a server with the cache on has this stage
+        hits, total = int(timings_ms["cache_hits"]), int(timings_ms["cache_rows"])
+        stages.append(f'cache;dur={timings_ms["cache"]:.2f};desc="{hits}/{total}"')
+    response.headers["Server-Timing"] = ", ".join(stages)
     return response
 
 
@@ -565,6 +568,7 @@ class _CachePlan:
     keys: list[bytes]
     found: Lookup
     feeds: dict[str, np.ndarray] | None  # for the missing rows only. None if there are none
+    owned: list[bytes] = field(default_factory=list)  # the keys that this request claimed
     passthrough: bool = False  # an empty batch: run the model once and skip the cache
 
 
@@ -587,7 +591,11 @@ def _subset(request: _Request, arrays: dict[str, np.ndarray] | None, rows: list[
 
 
 def _cache_prepare(
-    state: ServingState, cache: ResultCache, request: _Request, timings_ms: dict[str, float]
+    state: ServingState,
+    cache: ResultCache,
+    request: _Request,
+    timings_ms: dict[str, float],
+    use_lookup: bool = True,
 ) -> _CachePlan:
     """Prep hop of a cached request: the row keys, the lookup, and the feeds of the rows that
     missed. A tensor request is checked as a whole before the lookup, so a hit never hides a
@@ -627,8 +635,13 @@ def _cache_prepare(
     if not keys:
         whole, _, _ = _prepare_feeds(state, request)
         return _CachePlan(request, arrays, keys, Lookup(), whole, passthrough=True)
-    found = cache.lookup(keys)
-    claimed = [keys[i] for i in found.missing]
+    cache_start = time.perf_counter()
+    # Cache-Control: no-cache. Nothing is read and nothing is claimed. The rows are still stored.
+    found = cache.lookup(keys) if use_lookup else Lookup(missing=list(range(len(keys))))
+    claimed = [keys[i] for i in found.missing] if use_lookup else []
+    timings_ms["cache"] = round((time.perf_counter() - cache_start) * 1000, 2)
+    timings_ms["cache_hits"] = len(found.hits) + len(found.pending)
+    timings_ms["cache_rows"] = len(keys)
     try:
         feeds: dict[str, np.ndarray] | None = None
         if found.missing:
@@ -640,7 +653,7 @@ def _cache_prepare(
         cache.fail(claimed, exc)
         raise
     timings_ms["prep"] = round((time.perf_counter() - start) * 1000, 2)
-    return _CachePlan(request, arrays, keys, found, feeds)
+    return _CachePlan(request, arrays, keys, found, feeds, claimed)
 
 
 async def _run_cached(
@@ -654,6 +667,7 @@ async def _run_cached(
     admitted_at: float,
     timings_ms: dict[str, float],
     accept_safetensors: bool,
+    use_lookup: bool = True,
 ) -> Response:
     """run_predict with the result cache. The model sees only the rows that missed. The rows
     that hit, the rows of other requests that are in flight, and the new rows are joined in the
@@ -663,11 +677,12 @@ async def _run_cached(
 
     def prepare() -> _CachePlan:
         request = parsed or _parse(state, body, False, binary, timings_ms)
-        return _cache_prepare(state, cache, request, timings_ms)
+        return _cache_prepare(state, cache, request, timings_ms, use_lookup)
 
     plan: _CachePlan = await _run_in(pool, "prep_wait", timings_ms, prepare)
-    owned = [plan.keys[i] for i in plan.found.missing]
+    owned = plan.owned
     rows: dict[int, Row] = dict(plan.found.hits)
+    served = len(plan.found.hits)  # the rows that this request did not compute
 
     async def compute(feeds: dict[str, np.ndarray], indexes: list[int]) -> Response | None:
         """Run the model on `feeds` (the rows `indexes`) and give each row to the cache."""
@@ -707,6 +722,7 @@ async def _run_cached(
         for i, future in plan.found.pending.items():
             try:
                 rows[i] = await asyncio.wrap_future(future)
+                served += 1
             except Exception:  # noqa: BLE001 - any failure of the owner means "compute it here"
                 retry.append(i)
         if retry:
@@ -730,6 +746,10 @@ async def _run_cached(
         )
 
     response: Response = await _run_in(pool, "encode_wait", timings_ms, finish)
+    computed = len(plan.keys) - served
+    response.headers[CACHE_HEADER] = (
+        "hit" if computed == 0 else "miss" if served == 0 else "partial"
+    )
     return response
 
 
@@ -743,6 +763,7 @@ async def run_predict(
     admitted_at: float,
     timings_ms: dict[str, float],
     accept_safetensors: bool,
+    use_cache: bool = True,
 ) -> Response:
     """One /predict request (or /predict/graph, with `graph`), from its raw body, in two hops.
     First, _parse and _prepare_feeds run in the prep pool. Then _infer and _encode_response run
@@ -776,6 +797,7 @@ async def run_predict(
             admitted_at=admitted_at,
             timings_ms=timings_ms,
             accept_safetensors=accept_safetensors,
+            use_lookup=use_cache,
         )
 
     def prepare() -> tuple[Any, dict[str, np.ndarray], GraphLayout | None]:

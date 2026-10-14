@@ -210,6 +210,52 @@ def test_an_empty_batch_is_not_a_server_error(served):
     assert _post(client, []).status_code in (200, 400)
 
 
+def test_the_cache_header_says_hit_partial_or_miss(served):
+    client, _, _ = served
+
+    labels = [_post(client, _x(20.0)).headers["X-Downshift-Cache"] for _ in range(3)]
+    partial = _post(client, _x(20.0, 21.0)).headers["X-Downshift-Cache"]
+
+    assert labels == ["miss", "miss", "hit"]
+    assert partial == "partial"
+
+
+def test_server_timing_has_a_cache_stage_with_the_hit_count(served):
+    client, _, _ = served
+    for _ in range(2):
+        _post(client, _x(22.0))
+
+    timing = _post(client, _x(22.0, 23.0)).headers["Server-Timing"]
+
+    assert "cache;dur=" in timing
+    assert 'desc="1/2"' in timing
+
+
+def test_a_server_with_the_cache_off_has_the_old_header_and_no_cache_header():
+    client = TestClient(build_app(_state("clean_mlp", result_cache_rows=0)))
+
+    resp = _post(client, _x(1.0))
+
+    assert "X-Downshift-Cache" not in resp.headers
+    assert "cache" not in resp.headers["Server-Timing"]
+
+
+def test_no_cache_skips_the_lookup_but_still_stores_the_row(served):
+    client, spy, _ = served
+    for _ in range(2):
+        _post(client, _x(24.0))
+    spy.rows.clear()
+
+    skipped = client.post(
+        "/predict", json={"inputs": {"x": _x(24.0)}}, headers={"Cache-Control": "no-cache"}
+    )
+    normal = _post(client, _x(24.0))
+
+    assert skipped.headers["X-Downshift-Cache"] == "miss"
+    assert spy.rows == [1]
+    assert normal.headers["X-Downshift-Cache"] == "hit"
+
+
 def _run_two(client, rows):
     results: list = []
 
