@@ -596,3 +596,73 @@ def test_print_banner_inline_execution_warns(caplog):
     assert "inline for small JSON bodies" in out
     assert "under ~1 ms" in out
     assert "/health and /ready" in out
+
+
+@pytest.mark.parametrize(
+    ("independent", "reason", "expected"),
+    [
+        (True, None, "independent"),
+        (False, "output_0 axis 1 changes", "dependent (output_0 axis 1 changes)"),
+        (None, "not checked: no two rows", "not checked (no two rows)"),
+    ],
+)
+def test_print_verdict_shows_the_rows_row(caplog, independent, reason, expected):
+    render.print_verdict(_verdict(row_independent=independent, row_reason=reason), "model")
+
+    assert expected in caplog.text
+
+
+def test_print_verdict_has_no_rows_row_without_numerics(caplog):
+    render.print_verdict(_verdict(status="FAILED", numerics=None), "model")
+
+    assert "Rows" not in caplog.text
+
+
+def test_print_banner_shows_the_rows_row(caplog):
+    state = _serving_state(_verdict(row_independent=True))
+
+    render.print_banner(state, "127.0.0.1", 8000)
+
+    assert "independent" in caplog.text
+
+
+def test_print_banner_shows_the_cache_row(caplog):
+    from downshift.serve.result_cache import ResultCache
+
+    state = _serving_state(_verdict(row_independent=True))
+    state.result_cache = ResultCache(100)
+    render.print_banner(state, "127.0.0.1", 8000)
+    assert "100 rows per worker" in caplog.text
+
+    caplog.clear()
+    state.result_cache = None
+    state.cache_off_reason = "not checked: the verdict is FAILED"
+    render.print_banner(state, "127.0.0.1", 8000)
+    assert "off (the verdict is FAILED)" in caplog.text
+
+    caplog.clear()
+    state.cache_off_reason = None
+    render.print_banner(state, "127.0.0.1", 8000)
+    assert "--result-cache-rows 0" in caplog.text
+
+
+def test_a_model_with_two_outputs_shows_the_error_of_each(caplog):
+    from downshift.core.verify import OutputNumerics
+
+    outputs = [
+        OutputNumerics("output_0", 1e-7, 1e-6, 1e-4, 1e-3, 0),
+        OutputNumerics("output_1", 3.2e-4, 1e-3, 1e-3, 1e-3, 0, overridden=True),
+    ]
+    render.print_verdict(_verdict(numerics=_numerics(True, outputs=outputs)), "model")
+
+    assert "output_0" in caplog.text and "max abs 1.0e-07" in caplog.text
+    assert "max abs 3.2e-04  atol 1e-03, rtol 1e-03  (--output-tol)" in caplog.text
+
+
+def test_a_model_with_one_output_has_no_output_rows(caplog):
+    from downshift.core.verify import OutputNumerics
+
+    outputs = [OutputNumerics("output_0", 1e-7, 1e-6, 1e-4, 1e-3, 0)]
+    render.print_verdict(_verdict(numerics=_numerics(True, outputs=outputs)), "model")
+
+    assert "max abs 1.0e-07" not in caplog.text

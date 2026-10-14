@@ -80,6 +80,16 @@ AxisMaxOpt = Annotated[
         "bound that the export chose",
     ),
 ]
+OutputTolOpt = Annotated[
+    list[str] | None,
+    typer.Option(
+        "--output-tol",
+        metavar="NAME=ATOL[:RTOL]",
+        help="Use other bounds for one output in the check of the numbers. NAME is output_0, "
+        "output_1 and so on, as in /predict. If you give no RTOL, the rtol stays at its default. "
+        "You can repeat this option. --atol and --rtol set the bounds of the other outputs",
+    ),
+]
 ExportCacheDirOpt = Annotated[
     str | None,
     typer.Option(
@@ -202,6 +212,17 @@ MaxQueueOpt = Annotated[
         min=0,
         help="The number of predicts that can wait beyond --max-concurrency. After that, a new "
         "predict gets a fast 503",
+    ),
+]
+ResultCacheRowsOpt = Annotated[
+    int | None,
+    typer.Option(
+        "--result-cache-rows",
+        min=0,
+        help="The number of rows that the result cache keeps in each worker. A row that comes "
+        "a second time then skips the model. The cache counts rows and not bytes: set a number "
+        "that fits the size of one output row. 0 = off. Default: 100 for a model with "
+        "independent rows, and off for any other model",
     ),
 ]
 RequestTimeoutOpt = Annotated[

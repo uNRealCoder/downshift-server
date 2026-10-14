@@ -145,7 +145,8 @@ def _access_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]
 @pytest.fixture(scope="module")
 def mlp_state():
     return prepare_serving(
-        load_model(LoadSpec("tests.models.clean_mlp:make_model")), ServeOptions(warmup=1)
+        load_model(LoadSpec("tests.models.clean_mlp:make_model")),
+        ServeOptions(warmup=1, result_cache_rows=0),
     )
 
 
@@ -172,6 +173,20 @@ def test_predict_writes_one_request_line_with_timings(client, caplog):
         "infer",
         "encode",
     }
+
+
+def test_a_server_with_the_cache_on_logs_the_cache_timings(caplog):
+    state = prepare_serving(
+        load_model(LoadSpec("tests.models.clean_mlp:make_model")), ServeOptions(warmup=1)
+    )
+    client = TestClient(build_app(state, api_key=None))
+
+    with caplog.at_level(logging.INFO, logger="downshift.access"):
+        assert client.post("/predict", json=MLP_INPUT).status_code == 200
+
+    (record,) = _access_records(caplog)
+    assert {"cache", "cache_hits", "cache_rows", "encode_wait"} <= set(record.timings_ms)
+    assert (record.timings_ms["cache_hits"], record.timings_ms["cache_rows"]) == (0, 1)
 
 
 def test_health_is_debug_only(client, caplog):

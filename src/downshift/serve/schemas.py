@@ -193,6 +193,18 @@ class WorstMismatchInfo(BaseModel):
     input_shapes: list[list[int]]
 
 
+class OutputNumericsInfo(BaseModel):
+    """The numbers of one output next to its bounds. `overridden`: --output-tol set the bounds."""
+
+    name: str
+    max_abs_err: float
+    max_rel_err: float
+    atol: float
+    rtol: float
+    failures: int
+    overridden: bool
+
+
 class NumericsInfo(BaseModel):
     samples_tested: int
     max_abs_err: float
@@ -208,6 +220,7 @@ class NumericsInfo(BaseModel):
     sample_shapes: list[list[list[int]]] = Field(default_factory=list)
     seed: int
     notes: list[str] = Field(default_factory=list)
+    outputs: list[OutputNumericsInfo] = Field(default_factory=list)
     passed: bool
 
 
@@ -228,6 +241,9 @@ class VerdictInfo(BaseModel):
     dynamic_dims: dict[str, list[int]]
     unsupported_ops: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    # Does each row give the same output with other rows? None: not checked (row_reason says why).
+    row_independent: bool | None = None
+    row_reason: str | None = None
     # No onnx_path. to_dict() has one, but it is a location on the disk of the server.
 
 
@@ -270,6 +286,15 @@ class Limits(BaseModel):
     request_timeout: float
 
 
+class CacheInfo(BaseModel):
+    """The result cache of this worker process. `hits` and `misses` count rows."""
+
+    max_rows: int
+    entries: int
+    hits: int
+    misses: int
+
+
 class MetadataResponse(BaseModel):
     model: str
     family: str
@@ -280,6 +305,7 @@ class MetadataResponse(BaseModel):
     notes: list[str] = Field(default_factory=list)
     version: str
     limits: Limits
+    cache: CacheInfo | None = None  # None if the result cache is off
     execution: str  # "threadpool" or "inline" (--execution)
     boot: dict[str, float] = Field(default_factory=dict)
     warmup: dict | None = None

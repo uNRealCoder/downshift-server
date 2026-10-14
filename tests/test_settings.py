@@ -146,3 +146,13 @@ def test_bad_execution_env_var_raises_clear_error(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("DOWNSHIFT_EXECUTION", "auto")
     with pytest.raises(ValueError, match="DOWNSHIFT_EXECUTION.*auto.*execution mode"):
         importlib.reload(settings)
+
+
+def test_result_cache_rows_is_unset_by_default_and_read_from_the_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DOWNSHIFT_RESULT_CACHE_ROWS", raising=False)
+    assert importlib.reload(settings).RESULT_CACHE_ROWS is None
+
+    monkeypatch.setenv("DOWNSHIFT_RESULT_CACHE_ROWS", "250")
+    assert importlib.reload(settings).RESULT_CACHE_ROWS == 250

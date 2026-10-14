@@ -185,6 +185,14 @@ def _capacity_text(state: ServingState) -> str:
     )
 
 
+def _cache_text(state: ServingState) -> str:
+    if state.result_cache is not None:
+        return f"{state.result_cache.max_rows} rows per worker  (--result-cache-rows)"
+    if state.cache_off_reason is not None:
+        return f"off ({state.cache_off_reason.removeprefix('not checked: ')})"
+    return "off  (--result-cache-rows 0)"
+
+
 def _execution_text(state: ServingState) -> str:
     if state.execution == ExecutionChoice.inline:
         return "inline for small JSON bodies  (--execution inline)"
@@ -215,7 +223,8 @@ def _shape_text(verdict: ExportVerdict) -> str:
 
 
 def _add_numerics_rows(rows: _Rows, verdict: ExportVerdict) -> None:
-    """Tolerance, Worst and Samples: the three rows that explain the numbers of a verdict.
+    """Tolerance, Worst and Samples: the rows that explain the numbers of a verdict. A model with
+    more than one output also gets one row for each output.
 
     The report of `check` and the banner of `serve` show them in the same way. Downshift
     therefore builds them one time here. Nobody must keep two places in step by hand.
@@ -227,9 +236,24 @@ def _add_numerics_rows(rows: _Rows, verdict: ExportVerdict) -> None:
         worst = _worst_text(verdict)
         if worst is not None:
             rows.add("Worst", worst)
+    n = verdict.numerics
+    if n is not None and len(n.outputs) > 1:
+        for out in n.outputs:
+            source = "  (--output-tol)" if out.overridden else ""
+            rows.add(
+                out.name,
+                f"max abs {out.max_abs_err:.1e}  atol {out.atol:.0e}, rtol {out.rtol:.0e}{source}",
+            )
     samples = _samples_text(verdict)
     if samples is not None:
         rows.add("Samples", samples)
+
+
+def _rows_text(verdict: ExportVerdict) -> str:
+    if verdict.row_independent:
+        return "independent"
+    kind = "dependent" if verdict.row_independent is False else "not checked"
+    return f"{kind} ({str(verdict.rows_note).removeprefix('not checked: ')})"
 
 
 def print_verdict(verdict: ExportVerdict, model_name: str) -> None:
@@ -239,6 +263,8 @@ def print_verdict(verdict: ExportVerdict, model_name: str) -> None:
     rows.add("Export", _status_text(verdict))
     rows.add("Numerics", _numerics_text(verdict))
     _add_numerics_rows(rows, verdict)
+    if verdict.numerics is not None:
+        rows.add("Rows", _rows_text(verdict))
     rows.add("Shape-general", _shape_text(verdict))
     rows.add("Dynamic dims", _axes_text(verdict))
     if verdict.unsupported_ops:
@@ -359,6 +385,9 @@ def print_banner(
             rows.add("Override", "--force-onnx to serve the ONNX graph anyway")
 
     _add_numerics_rows(rows, verdict)
+    if verdict.numerics is not None:
+        rows.add("Rows", _rows_text(verdict))
+    rows.add("Cache", _cache_text(state))
     warmup_text = _warmup_text(state)
     if warmup_text is not None:
         rows.add("Warmup", warmup_text)

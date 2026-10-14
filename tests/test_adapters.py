@@ -223,7 +223,9 @@ def test_check_vary_is_used_for_verification_samples():
     verdict = downshift.check(clean_mlp.make_model(), base, vary=custom_vary, k=3)
 
     assert verdict.status == "CLEAN", verdict.reason
-    assert calls == [0, 1, 2]
+    # The verification takes samples 0 to 2. The row check then asks for the rows 0 and 1 again.
+    assert calls[:3] == [0, 1, 2]
+    assert calls[3:] == [0, 1]
 
 
 @pytest.mark.parametrize(

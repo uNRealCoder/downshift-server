@@ -1,0 +1,24 @@
+{
+  "model": "all-MiniLM-L6-v2",
+  "repeats": 60,
+  "a_repeated_query_server_ms": {
+    "hit_median": 0.255,
+    "hit_max": 0.42,
+    "no_cache_median": 4.62
+  },
+  "b_batch_32_with_30_known": {
+    "rows_in_the_model_call": [
+      2
+    ]
+  },
+  "c_unique_queries_server_ms": {
+    "cache_on_median": 4.975,
+    "cache_off_median": 4.8
+  },
+  "when": "2026-10-14 23:46:17",
+  "accepted": {
+    "a": true,
+    "b": true,
+    "c": true
+  }
+}

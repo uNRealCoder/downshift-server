@@ -38,7 +38,7 @@ def _with_options(state: ServingState, **overrides) -> ServingState:
 
 @pytest.fixture(scope="module")
 def mlp_state() -> ServingState:
-    return _serve("tests.models.clean_mlp:make_model")
+    return _serve("tests.models.clean_mlp:make_model", result_cache_rows=0)
 
 
 @pytest.fixture(scope="module")

@@ -35,6 +35,7 @@ def check(
     verify_numerics: bool = True,
     atol: float | None = None,
     rtol: float | None = None,
+    output_tol: dict[str, tuple[float, float | None]] | None = None,
     seed: int = 0,
     vary: VaryFn | str | None = None,
     axis_max: dict[str, int] | None = None,
@@ -51,6 +52,7 @@ def check(
 - `fp16`: casts a deep copy of `model` to `float16` before the export. The model of the caller and the tensors in `example_inputs` do not change. Downshift sets the model to `eval()` in place if it was in training mode. When `fp16=True`, downshift does this on the copy. The model of the caller then stays in its own mode.
 - `verify_numerics`: `False` skips the numerics check. This is the `--no-verify` behaviour. The graph is still exported, but the verdict can be only `UNVERIFIED` and never `CLEAN`.
 - `atol` and `rtol`: override the absolute and relative tolerance. `None` (the default for both) selects the tolerance from the floating dtype of the model. Refer to `downshift.core.verify.default_tolerances` and `settings.TOLERANCES`.
+- `output_tol`: `{"output_1": (atol, rtol)}`. Other bounds for named outputs. An `rtol` of `None` keeps the base rtol. A name that the model does not have raises `ValueError`.
 - `seed`: seeds the generator of verification samples. `verify()` runs under `torch.random.fork_rng`, so the global RNG state of the caller does not change.
 - `vary`: a `fn(i) -> inputs` that replaces the sampler of the adapter. Downshift imports a string in the same way as for `--vary`. `fn(0)` must return the example inputs.
 - `axis_max`: `{axis_name: N}`. It lowers a named dynamic axis to `N` and uses one verification sample at exactly `N`. Refer to `--axis-max`.
@@ -81,6 +83,7 @@ def export(
     verify_numerics: bool = True,
     atol: float | None = None,
     rtol: float | None = None,
+    output_tol: dict[str, tuple[float, float | None]] | None = None,
     seed: int = 0,
     vary: VaryFn | str | None = None,
     axis_max: dict[str, int] | None = None,
@@ -109,6 +112,7 @@ def intake(
     dynamic: dict[str, list[int]] | None = None,
     atol: float | None = None,
     rtol: float | None = None,
+    output_tol: dict[str, tuple[float, float | None]] | None = None,
     seed: int = 0,
     vary: VaryFn | str | None = None,
     axis_max: dict[str, int] | None = None,
@@ -133,6 +137,7 @@ def build_verdict(
     verify_numerics: bool = True,
     atol: float | None = None,
     rtol: float | None = None,
+    output_tol: dict[str, tuple[float, float | None]] | None = None,
     seed: int = 0,
     timings: dict[str, float] | None = None,
 ) -> ExportVerdict
@@ -261,6 +266,8 @@ All other code reads this one object. `check`, `export`, `intake` and `build_ver
 | `output_axes` | `list[str]` | For the `pyg` adapter, the class of axis 0 of each output: `node`, `edge`, `fixed` or `unknown`. |
 | `unsupported_ops` | `list[str]` | The `aten::*` operation names that downshift found in the exception messages of a `FAILED` capture. |
 | `warnings` | `list[str]` | Notices that are not fatal: tied weights, the switch to training mode, and the message of an ONNX Runtime load failure. |
+| `row_independent` | `bool \| None` | `True` if each row gives the same output with other rows. Downshift checks it on ONNX Runtime and on torch. `False` if not. `None` if downshift did not check it (the verdict is `FAILED` or `UNVERIFIED`, or a model from 0.5 in the export cache). The result cache needs `True`. |
+| `row_reason` | `str \| None` | Why `row_independent` is not `True`. |
 | `onnx_path` | `Path \| None` | `export()` sets it after it writes the artifact. `intake()` or the serving of a pre-built `.onnx` file also sets it. |
 | `onnx_program` | `object \| None` | The live `torch.onnx.ONNXProgram`, if the capture made one. It is not JSON-able. |
 | `onnx_bytes` | `bytes` | The serialized graph. `capture()` builds it once. It is not JSON-able. |
@@ -325,6 +332,7 @@ class NumericsReport:
 | `output_shapes` | `list[list[tuple[int, ...]]]` | The shapes of each output in each sample, as `[sample][output]`. |
 | `seed` | `int` | The seed that generated the samples. |
 | `notes` | `list[str]` | Notes on a mismatch in shape or count between the outputs of torch and ONNX Runtime. There is one note for each affected sample. |
+| `outputs` | `list[OutputNumerics]` | One entry for each output: `name`, `max_abs_err`, `max_rel_err`, `atol`, `rtol`, `failures` (the samples in which this output failed) and `overridden` (`output_tol` set its bounds). `max_abs_err` and `max_rel_err` above are the largest values of these entries. |
 
 `passed` is a derived property (`failures == 0`) and not a field.
 

@@ -52,7 +52,7 @@ curl -s localhost:8000/schema -H "Authorization: Bearer $DOWNSHIFT_SERVER_API_KE
 This route always returns `200`, also while the model loads. It tells a client where to start. The response model is `IndexResponse`:
 
 ```json
-{"service": "downshift", "version": "0.5.1", "ready": true, "model": "clean_mlp",
+{"service": "downshift", "version": "0.6.0", "ready": true, "model": "clean_mlp",
  "routes": {"index": "GET /", "health": "GET /health", "ready": "GET /ready",
             "metadata": "GET /metadata", "schema": "GET /schema",
             "predict": "POST /predict", "predict_graph": "POST /predict/graph",
@@ -108,13 +108,14 @@ class MetadataResponse(BaseModel):
     execution: str  # "threadpool" or "inline"
     boot: dict[str, float] = {}
     warmup: dict | None = None
+    cache: dict | None = None  # max_rows, entries, hits, misses. None if the cache is off
 ```
 
 | Field | Meaning |
 |---|---|
 | `model` | The source that `serve` or `app_for` received. It is always a form that is already on this machine: a `.onnx` file, a checkpoint, a downloaded Hugging Face repo directory, or an import spec. A file or directory has only its last path component (`/srv/models/bert` gives `bert`). The server never sends its directory layout. An import spec is reported as given. |
 | `family` | `verdict.model_family`. |
-| `verdict` | `ExportVerdict.to_dict()` without `onnx_path`, which is a location on the disk of the server. Refer to [`python-api.md`](python-api.md#exportverdict). Paths in `reason`, `warnings` and `notes` are also cut to their file name. |
+| `verdict` | `ExportVerdict.to_dict()` without `onnx_path`, which is a location on the disk of the server. Refer to [`python-api.md`](python-api.md#exportverdict). Paths in `reason`, `warnings` and `notes` are also cut to their file name. `row_independent` (`true`, `false` or `null`) says if each row gives the same output with other rows. `row_reason` says why it is not `true`. `numerics.outputs` has the error and the bounds of each output. |
 | `backend` | `BackendMeta.to_dict()`: `{"name", "device", "inputs": [...], "outputs": [...]}`. Each input and output is an `IOSpec` (`name`, `dtype`, `shape`). |
 | `input_names` | The flat input names, in the order of the forward arguments. |
 | `notes` | Notes for the banner, for example warnings about `--force-onnx`. |
@@ -123,6 +124,7 @@ class MetadataResponse(BaseModel):
 | `execution` | The value of `--execution`: `"threadpool"` or `"inline"`. |
 | `boot` | The wall-clock seconds of each phase (`load`, `export`, `verify`, `session` and `warmup`, for the phases that ran). The `Boot` row of the CLI banner prints the same dict. |
 | `warmup` | `{"count", "mean_ms", "synthesized"}` from `WarmupStats`. It is `null` if the warmup did not run. |
+| `cache` | The result cache of this worker process: `{"max_rows", "entries", "hits", "misses"}`. `hits` and `misses` count rows. It is `null` if the cache is off. With `--workers N`, each worker has its own numbers. |
 
 ```bash
 curl -s localhost:8000/metadata | python -m json.tool
@@ -463,6 +465,8 @@ To get a safetensors response, send `Accept: application/vnd.safetensors`, or se
 | `Authorization` | Request | `Bearer <key>`. It is required on every route except `/health` and `/ready` when `DOWNSHIFT_SERVER_API_KEY` is set. |
 | `WWW-Authenticate` | Response (`401` only) | `Bearer`. |
 | `Server-Timing` | Response (`/predict` and `/predict/graph`, `200` only) | The stages are listed below. Each one has `;dur=<ms>`. The access log line has the same split as `timings_ms`. |
+| `X-Downshift-Cache` | Response (`/predict`, only if the result cache is on) | `hit`: the server computed no row for this request. `partial`: it computed some rows. `miss`: it computed all rows. |
+| `Cache-Control` | Request (`/predict`) | `no-cache`: the server does not read the result cache for this request. The server still stores the rows that it computes. The response says `miss`. |
 | `Retry-After` | Response (`503` only) | `2` for "not ready yet" (`/metadata` and the predict routes). `1` for "at capacity". The `503` for "queued past `--request-timeout`" does not have it. |
 | `Content-Length` | Request (optional) | If it is present, downshift checks it against `--max-body-bytes` before it reads the body. Downshift reads a chunked body without it and checks it while it arrives. |
 
@@ -474,6 +478,11 @@ The `Server-Timing` stages:
 - `infer_wait`: the wait for an inference slot.
 - `infer`: the call to the backend.
 - `encode`: the response body.
+- `cache`: the key and the lookup of the result cache. It is only in the header of a server with the cache on. Its `desc` is `<rows that hit>/<rows of the request>`.
+
+With the cache on, the `encode` stage runs on a prep thread and not on an inference thread. A request that has a hit for each row has no `infer_wait` and no `infer`.
+
+A hit is bit for bit the answer of the request that stored the row. The same row can differ in the last bits if a later miss computes it in another batch. The difference is inside the tolerance of the verdict.
 
 ## Error body shape
 

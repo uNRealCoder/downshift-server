@@ -40,7 +40,9 @@ from downshift.serve.backends import (
 )
 from downshift.serve.graphs import eager_output_axes
 from downshift.serve.options import BackendChoice, ExecutionChoice, ServeOptions
+from downshift.serve.result_cache import ResultCache
 from downshift.serve.schemas import normalize_dtype
+from downshift.settings import DEFAULT_RESULT_CACHE_ROWS
 from downshift.sources import HF_REPO_DIR, UNKNOWN_SOURCE
 
 
@@ -108,14 +110,37 @@ class ServingState:
     # queue). _admission_lock guards it. The event loop reads and then writes it, and the
     # executor thread that finishes a request writes it again.
     in_flight: int = field(init=False, repr=False, compare=False, default=0)
+    # The rows of earlier requests (serve/result_cache.py). None if the cache is off. Then
+    # `cache_off_reason` says why, if the user did not turn it off.
+    result_cache: ResultCache | None = field(init=False, repr=False, compare=False, default=None)
+    cache_off_reason: str | None = field(init=False, repr=False, compare=False, default=None)
     _admission_lock: threading.Lock = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        self._set_up_result_cache()
         self.executor = ThreadPoolExecutor(max_workers=self.options.max_concurrency)
         self.prep_executor = ThreadPoolExecutor(
             max_workers=self.options.prep_threads, thread_name_prefix="downshift-prep"
         )
         self._admission_lock = threading.Lock()
+
+    def _set_up_result_cache(self) -> None:
+        """The cache serves one row on its own, so it needs rows that do not depend on each
+        other. A user who asks for the cache on another model gets a usage error. The default
+        turns the cache off for such a model, and the banner says why."""
+        wanted = self.options.result_cache_rows
+        rows = DEFAULT_RESULT_CACHE_ROWS if wanted is None else wanted
+        if rows <= 0:
+            return
+        if self.verdict.row_independent:
+            self.result_cache = ResultCache(rows)
+        elif wanted is not None:
+            raise ValueError(
+                f"--result-cache-rows needs a model with independent rows. This model: "
+                f"{self.verdict.rows_note}. Remove --result-cache-rows, or set it to 0."
+            )
+        else:
+            self.cache_off_reason = self.verdict.rows_note
 
     def try_admit(self) -> bool:
         """Atomically claim one of max_concurrency + max_queue slots, or refuse."""
@@ -188,6 +213,7 @@ def _verdict_for(
             dynamic=opts.dynamic,
             atol=opts.atol,
             rtol=opts.rtol,
+            output_tol=opts.output_tol,
             seed=opts.seed,
             vary=opts.vary,
             axis_max=opts.axis_max,
@@ -209,7 +235,13 @@ def _verdict_for(
             eager_output_axes(prepared),
         )
     verdict = build_verdict(
-        prepared, k=opts.k, atol=opts.atol, rtol=opts.rtol, seed=opts.seed, timings=timings
+        prepared,
+        k=opts.k,
+        atol=opts.atol,
+        rtol=opts.rtol,
+        output_tol=opts.output_tol,
+        seed=opts.seed,
+        timings=timings,
     )
     if verdict.status == Status.FAILED and not verdict.output_axes:
         # A failed export never reached the verification. Classify on the eager model that it uses instead.

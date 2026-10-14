@@ -42,6 +42,23 @@ class WorstMismatch:
     input_shapes: list[tuple[int, ...]]
 
 
+# --output-tol: {output name: (atol, rtol)}. An rtol of None keeps the base rtol.
+OutputTol = dict[str, tuple[float, float | None]]
+
+
+@dataclass
+class OutputNumerics:
+    """The numbers of one output across all samples, next to the bounds that applied to it."""
+
+    name: str
+    max_abs_err: float
+    max_rel_err: float
+    atol: float
+    rtol: float
+    failures: int  # the samples in which this output failed
+    overridden: bool = False  # --output-tol set its bounds
+
+
 @dataclass
 class NumericsReport:
     samples_tested: int
@@ -63,6 +80,8 @@ class NumericsReport:
     output_shapes: list[list[tuple[int, ...]]] = field(default_factory=list)  # [sample][output]
     seed: int = 0
     notes: list[str] = field(default_factory=list)
+    # One entry for each output. The top-level errors above are the maximum over these.
+    outputs: list[OutputNumerics] = field(default_factory=list)
 
     @property
     def passed(self) -> bool:
@@ -107,6 +126,7 @@ class NumericsReport:
             ],
             seed=data.get("seed", 0),
             notes=list(data.get("notes", [])),
+            outputs=[OutputNumerics(**o) for o in data.get("outputs", [])],
         )
 
 
@@ -241,15 +261,19 @@ def _to_numpy(tensor: torch.Tensor) -> np.ndarray:
 WorstCandidate = tuple[int, tuple[int, ...], float, float, float]
 
 
+# (abs_err, rel_err, failed) of one output in one sample.
+OutputResult = tuple[float, float, bool]
+
+
 def _compare_sample(
     torch_outs: list[torch.Tensor],
     ort_outs: list,
-    atol: float,
-    rtol: float,
+    tolerances: list[tuple[float, float]],
     sample_index: int,
-) -> tuple[float, float, bool, str | None, WorstCandidate | None]:
+) -> tuple[float, float, bool, str | None, WorstCandidate | None, list[OutputResult]]:
     """The allclose rule for each element of one sample: (max_abs_err, max_rel_err, failed, note,
-    worst).
+    worst, per_output). `tolerances` has one (atol, rtol) for each output. `per_output` has
+    the result of each output.
 
     A sample fails if one element has abs_err > atol + rtol * |expected|. The rule uses the
     semantics of np.isclose(equal_nan=False). NaN against NaN is a mismatch. An inf against an
@@ -265,7 +289,7 @@ def _compare_sample(
             f"sample {sample_index}: {len(torch_outs)} torch outputs "
             f"vs {len(ort_outs)} onnxruntime outputs"
         )
-        return 0.0, 0.0, True, note, None
+        return 0.0, 0.0, True, note, None, []
 
     sample_abs = 0.0
     sample_rel = 0.0
@@ -273,7 +297,9 @@ def _compare_sample(
     note = None
     worst: WorstCandidate | None = None
     worst_abs = -1.0
+    per_output: list[OutputResult] = []
     for idx, (expected, got) in enumerate(zip(torch_outs, ort_outs, strict=True)):
+        atol, rtol = tolerances[idx]
         expected_np = _to_numpy(expected)
         got_np = np.asarray(got)
         if expected_np.shape != got_np.shape:
@@ -282,6 +308,7 @@ def _compare_sample(
                 f"sample {sample_index}: output_{idx} shape {expected_np.shape} from torch "
                 f"vs {got_np.shape} from onnxruntime"
             )
+            per_output.append((0.0, 0.0, True))
             continue
 
         expected64 = expected_np.astype(np.float64)
@@ -289,8 +316,9 @@ def _compare_sample(
         abs_err = np.abs(expected64 - got64)
         rel_err = abs_err / (np.abs(expected64) + 1e-8)
         output_abs = float(abs_err.max(initial=0.0))
+        output_rel = float(rel_err.max(initial=0.0))
         sample_abs = max(sample_abs, output_abs)
-        sample_rel = max(sample_rel, float(rel_err.max(initial=0.0)))
+        sample_rel = max(sample_rel, output_rel)
 
         if abs_err.size and output_abs > worst_abs:
             flat_index = int(np.argmax(abs_err))
@@ -304,10 +332,39 @@ def _compare_sample(
                 worst_abs,
             )
 
-        if np.any(~np.isclose(got64, expected64, rtol=rtol, atol=atol, equal_nan=False)):
-            failed = True
+        output_failed = bool(
+            np.any(~np.isclose(got64, expected64, rtol=rtol, atol=atol, equal_nan=False))
+        )
+        failed = failed or output_failed
+        per_output.append((output_abs, output_rel, output_failed))
 
-    return sample_abs, sample_rel, failed, note, worst
+    return sample_abs, sample_rel, failed, note, worst, per_output
+
+
+def _output_bounds(
+    count: int, atol: float, rtol: float, output_tol: OutputTol | None
+) -> tuple[list[tuple[float, float]], list[OutputNumerics]]:
+    """The (atol, rtol) of each output, and its empty record. A name in `output_tol` that is not
+    an output of the model is a usage error."""
+    names = [f"output_{i}" for i in range(count)]
+    unknown = [name for name in output_tol or {} if name not in names]
+    if unknown:
+        have = ", ".join(f"`{n}`" for n in names)
+        raise ValueError(
+            f"unknown output `{unknown[0]}`. The model has {have}. Change the name in --output-tol."
+        )
+    tolerances = []
+    stats = []
+    for name in names:
+        out_atol, out_rtol = (output_tol or {}).get(name, (atol, None))
+        out_rtol = rtol if out_rtol is None else out_rtol
+        tolerances.append((out_atol, out_rtol))
+        stats.append(
+            OutputNumerics(
+                name, 0.0, 0.0, out_atol, out_rtol, 0, overridden=name in (output_tol or {})
+            )
+        )
+    return tolerances, stats
 
 
 def verify(
@@ -320,6 +377,7 @@ def verify(
     atol: float | None = None,
     rtol: float | None = None,
     seed: int = 0,
+    output_tol: OutputTol | None = None,
 ) -> NumericsReport:
     if vary_fn is None:
         if dynamic_shapes is None:
@@ -340,6 +398,8 @@ def verify(
     failures = 0
     baseline_failed = False
     notes: list[str] = []
+    tolerances: list[tuple[float, float]] = []
+    stats: list[OutputNumerics] = []
     sample_shapes: list[list[tuple[int, ...]]] = []
     output_shapes: list[list[tuple[int, ...]]] = []
     worst: WorstMismatch | None = None
@@ -387,6 +447,8 @@ def verify(
                 ) from exc
             torch_outs = as_tensor_list(raw_output)
             output_shapes.append([tuple(t.shape) for t in torch_outs])
+            if i == 0:
+                tolerances, stats = _output_bounds(len(torch_outs), atol, rtol, output_tol)
 
             try:
                 # A bfloat16 input tensor also has no numpy equivalent. This TypeError can
@@ -400,9 +462,13 @@ def verify(
                     f"onnxruntime failed on sample {i} (input shapes {shapes}): {first_line(exc)}"
                 ) from exc
 
-            sample_abs, sample_rel, sample_failed, note, candidate = _compare_sample(
-                torch_outs, ort_outs, atol, rtol, i
+            sample_abs, sample_rel, sample_failed, note, candidate, per_output = _compare_sample(
+                torch_outs, ort_outs, tolerances if len(torch_outs) == len(ort_outs) else [], i
             )
+            for stat, (out_abs, out_rel, out_failed) in zip(stats, per_output, strict=False):
+                stat.max_abs_err = max(stat.max_abs_err, out_abs)
+                stat.max_rel_err = max(stat.max_rel_err, out_rel)
+                stat.failures += out_failed
             if note is not None:
                 notes.append(note)
             if candidate is not None:
@@ -442,4 +508,5 @@ def verify(
         output_shapes=output_shapes,
         seed=seed,
         notes=notes,
+        outputs=stats,
     )

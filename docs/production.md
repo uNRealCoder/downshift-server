@@ -125,7 +125,7 @@ Downshift uses boot time to make serving fast. Before `/ready` changes to `200`,
 2. **Prep pool** (`--prep-threads`, default `min(4, CPUs)`): Parse and validate the body. Convert it to arrays (or tokenize text). Check the shapes and the bounds.
 3. **Inference pool** (`--max-concurrency`, default 4): Run the model. Then encode the response on the same thread.
 
-`Server-Timing` on each predict response shows each stage: `parse`, `prep_wait`, `prep`, `infer_wait`, `infer` and `encode`. You can see the slow part of each request. The access log line has the same split as `timings_ms`.
+`Server-Timing` on each predict response shows each stage: `parse`, `prep_wait`, `prep`, `infer_wait`, `infer` and `encode`. If the result cache is on, there is a seventh stage, `cache`. A request in which all rows hit the cache makes no hop to the inference pool. You can see the slow part of each request. The access log line has the same split as `timings_ms`.
 
 These items change the numbers. They are in the order of the gain, approximately. The test machine had 16 logical cores. `bench/results/v0.5.0/REPORT.md` has every row.
 
@@ -139,6 +139,25 @@ These items change the numbers. They are in the order of the gain, approximately
 
 Below about one millisecond of inference, the HTTP stack (uvicorn, routing and the response) is most of the latency of a request. For `clean_mlp` on that machine, it was 0.63 of 1.00 ms. Only `--workers` and `--execution inline` decrease it. On Linux, uvicorn uses `uvloop` and `httptools` (installed with `uvicorn[standard]`). They are faster than the Windows event loop that was used for the numbers above.
 
+## Result cache
+
+The result cache keeps the output of single rows. A row that arrives again skips the model. This helps a server that gets the same query many times. Examples: the same RAG question, or the same chunk of a document.
+
+- The cache is on by default. It keeps 100 rows in each worker process. To change this, set `--result-cache-rows N`. `0` turns the cache off.
+- A row enters the cache when it arrives for the second time. A bulk load of rows that arrive one time does not push out the rows that arrive often.
+- The cache needs a model with independent rows. A row must give the same output with any other rows in its batch. Downshift checks this at boot. The `Rows` line of the banner shows the result. `/metadata` has it as `verdict.row_independent`. A model such as `x - x.mean(0)` is not independent. A model that returns one vector for each token is not independent. For these models, the cache is off and the banner says why. If you set `--result-cache-rows` for such a model, `serve` stops with exit code `4`.
+- If two requests ask for the same new row at the same time, the model runs one time.
+- The cache counts rows and not bytes. Its memory is the number of rows times the size of one output row. If the output rows are large, set a smaller number. The memory of the cache is part of the memory of the worker.
+- Each worker process has its own cache. With `--workers 4` and the default, the server keeps up to 400 rows.
+- `/predict/graph` does not use the cache.
+- Each response has `X-Downshift-Cache: hit`, `partial` or `miss`. If a request sends `Cache-Control: no-cache`, the server does not read the cache for it. The server still stores the rows.
+- `Server-Timing` has a `cache` stage when the cache is on. Its `desc` is the number of rows that hit and the number of rows of the request, for example `desc="3/5"`.
+
+**Warning for a server with more than one tenant.** A hit is faster than a miss. A client can use the difference in time to learn that another client sent the same text. If the clients of a server must not learn this about each other, set `--result-cache-rows 0`. For a server with one tenant, there is no such risk.
+
+**Values.** A hit returns exactly the values of the request that stored the row. A miss for the same row in another batch can differ in the last bits. The difference is inside the tolerance of the verdict.
+
+
 ## Concurrency, queueing and the meaning of a `503`
 
 - **`--max-concurrency N`** (default 4) is the number of inferences that run at the same time in each worker process. A dedicated thread pool of this size runs them. Each inference also encodes its response before it gives the slot back. One inference does not usually fill all cores. The default therefore serves more requests for each second than 1. Measurements:
@@ -147,6 +166,7 @@ Below about one millisecond of inference, the HTTP stack (uvicorn, routing and t
 
   Each inference in progress holds its own activation memory. For a large model whose big requests run out of memory together, decrease the value.
 - **`--max-queue N`** (default 64) is the number of predicts that can wait beyond `--max-concurrency`. When `max-concurrency + max-queue` requests are admitted, the next request gets an immediate `503` with `Retry-After: 1`. The body says how many requests run and how many wait. The request does not join an unbounded queue. Such a queue would time out on the client side later.
+  `--max-queue` counts requests and not rows. A request with many rows counts as one.
 - **`--request-timeout SECONDS`** (default `30`, `0` turns it off) sets how long an admitted predict can wait in the queue for its turn. The clock starts when the request is admitted. It therefore counts the time in the queue. After this time, the request gets a `503` and does not start. This limit never interrupts a request that already runs.
 
 The `Capacity` row of the banner shows all three:
@@ -212,7 +232,7 @@ Downshift reads each `DOWNSHIFT_*` variable once, when `downshift` is imported. 
 - `DOWNSHIFT_INTRA_OP_THREADS`, `DOWNSHIFT_INTER_OP_THREADS`
 - `DOWNSHIFT_OUTPUT_ENCODING`
 - `DOWNSHIFT_MAX_INPUT_BYTES`, `DOWNSHIFT_MAX_BODY_BYTES`
-- `DOWNSHIFT_MAX_CONCURRENCY`, `DOWNSHIFT_MAX_QUEUE`, `DOWNSHIFT_REQUEST_TIMEOUT`
+- `DOWNSHIFT_MAX_CONCURRENCY`, `DOWNSHIFT_MAX_QUEUE`, `DOWNSHIFT_REQUEST_TIMEOUT`, `DOWNSHIFT_RESULT_CACHE_ROWS`, `DOWNSHIFT_OUTPUT_TOL`
 - `DOWNSHIFT_WORKERS`, `DOWNSHIFT_SERVER_API_KEY`
 - `DOWNSHIFT_SSL_CERTFILE`, `DOWNSHIFT_SSL_KEYFILE`, `DOWNSHIFT_SSL_KEYFILE_PASSWORD`
 - The `DOWNSHIFT_TOL_*` variables for each dtype.

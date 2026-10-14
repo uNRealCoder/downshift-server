@@ -51,10 +51,12 @@ from downshift.cli.options import (
     ModelClassOpt,
     NormalizeOpt,
     OutputEncodingOpt,
+    OutputTolOpt,
     PoolingOpt,
     PrepThreadsOpt,
     ReferenceOpt,
     RequestTimeoutOpt,
+    ResultCacheRowsOpt,
     RtolOpt,
     SamplesOpt,
     SeedOpt,
@@ -157,6 +159,12 @@ def _axis_max(values: list[str] | None) -> dict[str, int] | None:
     return parsed or None
 
 
+def _output_tol(values: list[str] | None) -> dict[str, tuple[float, float | None]] | None:
+    """--output-tol NAME=ATOL[:RTOL] (repeatable). Without the flag, DOWNSHIFT_OUTPUT_TOL."""
+    parsed = settings.parse_output_tol(values) if values else dict(settings.OUTPUT_TOL)
+    return parsed or None
+
+
 def slug(spec: str) -> str:
     """tests.models.clean_mlp:make_model -> clean_mlp, ./gat_v3.pt -> gat_v3, hf/bert/ -> bert."""
     from downshift.loading import is_import_spec
@@ -201,6 +209,7 @@ def check_cmd(
     axis_max: AxisMaxOpt = None,
     atol: AtolOpt = None,
     rtol: RtolOpt = None,
+    output_tol: OutputTolOpt = None,
     seed: SeedOpt = 0,
     vary: VaryOpt = None,
     pooling: PoolingOpt = None,
@@ -230,6 +239,7 @@ def check_cmd(
                 dynamic=dynamic_spec,
                 atol=atol,
                 rtol=rtol,
+                output_tol=_output_tol(output_tol),
                 seed=seed,
                 vary=vary,
                 axis_max=axis_max_spec,
@@ -244,6 +254,7 @@ def check_cmd(
                 dynamic=dynamic_spec,
                 atol=atol,
                 rtol=rtol,
+                output_tol=_output_tol(output_tol),
                 seed=seed,
                 vary=vary,
                 axis_max=axis_max_spec,
@@ -277,6 +288,7 @@ def export_cmd(
     axis_max: AxisMaxOpt = None,
     atol: AtolOpt = None,
     rtol: RtolOpt = None,
+    output_tol: OutputTolOpt = None,
     seed: SeedOpt = 0,
     vary: VaryOpt = None,
     pooling: PoolingOpt = None,
@@ -318,6 +330,7 @@ def export_cmd(
             verify_numerics=not no_verify,
             atol=atol,
             rtol=rtol,
+            output_tol=_output_tol(output_tol),
             seed=seed,
             vary=vary,
             axis_max=_axis_max(axis_max),
@@ -381,12 +394,14 @@ def serve_cmd(
     prep_threads: PrepThreadsOpt = settings.PREP_THREADS,
     max_queue: MaxQueueOpt = settings.MAX_QUEUE,
     request_timeout: RequestTimeoutOpt = settings.REQUEST_TIMEOUT,
+    result_cache_rows: ResultCacheRowsOpt = settings.RESULT_CACHE_ROWS,
     workers: WorkersOpt = settings.WORKERS,
     export_cache_dir: ExportCacheDirOpt = settings.EXPORT_CACHE_DIR,
     ssl_certfile: SslCertfileOpt = settings.SSL_CERTFILE,
     ssl_keyfile: SslKeyfileOpt = settings.SSL_KEYFILE,
     atol: AtolOpt = None,
     rtol: RtolOpt = None,
+    output_tol: OutputTolOpt = None,
     seed: SeedOpt = 0,
     vary: VaryOpt = None,
     pooling: PoolingOpt = None,
@@ -458,8 +473,10 @@ def serve_cmd(
             prep_threads=prep_threads,
             max_queue=max_queue,
             request_timeout=request_timeout,
+            result_cache_rows=result_cache_rows,
             atol=atol,
             rtol=rtol,
+            output_tol=_output_tol(output_tol),
             seed=seed,
             vary=vary,
             axis_max=_axis_max(axis_max),

@@ -74,6 +74,9 @@ def test_health_ready_metadata(mlp_client, mlp_state):
     assert meta["model"] == "tests.models.clean_mlp:make_model"
     assert meta["family"] == mlp_state.verdict.model_family
     assert meta["verdict"]["status"] == "CLEAN"
+    assert meta["verdict"]["row_independent"] is True
+    assert [o["name"] for o in meta["verdict"]["numerics"]["outputs"]] == ["output_0"]
+    assert meta["verdict"]["row_reason"] is None
     assert meta["backend"]["name"] == "onnxruntime"
     assert meta["input_names"] == ["x"]
     assert isinstance(meta["notes"], list)
@@ -105,6 +108,8 @@ def test_app_for_verifies_a_pre_built_onnx_against_a_reference(exported_mlp):
     client = TestClient(app_for(str(path), clean_mlp.make_inputs(), reference=model, warmup=1))
     meta = client.get("/metadata").json()
     assert meta["verdict"]["status"] == "CLEAN", meta["verdict"]["reason"]
+    assert meta["verdict"]["row_independent"] is True
+    assert meta["verdict"]["row_reason"] is None
     assert meta["backend"]["name"] == "onnxruntime"
 
 

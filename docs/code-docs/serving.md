@@ -41,6 +41,8 @@ class ServeOptions:
     request_timeout: float = DEFAULT_REQUEST_TIMEOUT  # 30.0
     atol: float | None = None
     rtol: float | None = None
+    output_tol: dict[str, tuple[float, float | None]] | None = None
+    result_cache_rows: int | None = None  # None: 100 for independent rows, else off
     seed: int = 0
     vary: str | None = None
     pooling: str | None = None
@@ -75,6 +77,8 @@ Every default comes from `downshift.settings`. The `DOWNSHIFT_*` environment var
 | `max_queue` | `int` | `64` | The number of additional predicts that can be admitted and wait beyond `max_concurrency`. |
 | `request_timeout` | `float` | `30.0` | The number of seconds that an admitted predict can wait in the queue. After this time, it gets a `503` and does not run. `0` turns the check off. |
 | `atol` / `rtol` | `float \| None` | `None` | The override of the tolerance. Downshift forwards it to the gate. `None` means "by dtype". |
+| `output_tol` | `dict[str, tuple[float, float \| None]] \| None` | `None` | `--output-tol`. The `(atol, rtol)` of named outputs (`output_0` and so on). An `rtol` of `None` keeps the base rtol. |
+| `result_cache_rows` | `int \| None` | `None` | `--result-cache-rows`. The number of rows in the result cache of each worker. `None` is `100` for a model with `verdict.row_independent` and off for other models. `0` is off. A number for a model that is not row-independent is a `ValueError` at boot. |
 | `seed` | `int` | `0` | The seed of the verification samples. Downshift forwards it to the gate. |
 | `vary` | `str \| None` | `None` | A `pkg.module:fn` that replaces the verification sampler of the adapter. |
 | `pooling` | `str \| None` | `None` | A `PoolingChoice` value (`mean`, `cls`, `max`, `mean_sqrt_len`, `lasttoken`, `weightedmean`, `none`). It overrides the embedding recipe of a Hugging Face repo. |
@@ -297,6 +301,8 @@ inference pool _infer: the backend call only
 - The encoding runs on the inference thread directly after the backend call. It therefore holds the inference slot. This saves one hop. The cost is lower throughput when the outputs are large and `--max-concurrency` is the bottleneck.
 - `--execution inline` runs both hops on the event loop for a JSON body with a Content-Length of up to 64 KiB (`INLINE_MAX_BODY_BYTES`). A `text` request still tokenizes in the prep pool. This mode helps only for models that infer in much less than one millisecond. It stalls `/health` and `/ready` for as long as one inference takes.
 - `_run_in` carries the contextvars of the request into the pool thread. It records the wait as `prep_wait` or `infer_wait`. `Server-Timing` (and `timings_ms` of the access log) lists `parse`, `prep_wait`, `prep`, `infer_wait`, `infer` and `encode`.
+- **Result cache** (`serve/result_cache.py`, `_run_cached` in `serve/predict.py`). If `ServingState.result_cache` is set, `/predict` takes this path. The prep hop makes one key for each row (`text_keys` before the tokenizer, `tensor_keys` from the arrays). It calls `ResultCache.lookup`. The lookup splits the rows into hits, rows that another request computes, and rows that this request computes (it claims them). Only the missed rows go to the tokenizer and to the model. After the inference, the same inference thread calls `ResultCache.complete` for each row, so that the waiters can go on. The request then waits for the rows of other requests. If the owner of such a row failed, the request computes that row itself. The prep pool joins the rows in the order of the request and encodes the response. A tensor request is checked as a whole before the lookup. `/predict/graph` does not use the cache.
+- `ServingState.result_cache` is `None` if the cache is off. `ServingState.cache_off_reason` says why the default turned it off.
 
 ## Backends (`serve/backends.py`)
 
