@@ -37,6 +37,7 @@ from downshift.core.shapes import (
 from downshift.core.verify import (
     NumericsReport,
     OnnxRuntimeError,
+    OutputTol,
     first_line,
     load_session,
     verify,
@@ -290,6 +291,7 @@ def build_verdict(
     verify_numerics: bool = True,
     atol: float | None = None,
     rtol: float | None = None,
+    output_tol: OutputTol | None = None,
     seed: int = 0,
     timings: dict[str, float] | None = None,
     _external_data_threshold: int | None = None,
@@ -378,6 +380,7 @@ def build_verdict(
             k=k,
             atol=atol,
             rtol=rtol,
+            output_tol=output_tol,
             seed=seed,
         )
         row_independent, row_reason = check_rows(prepared, numerics, session)
@@ -422,6 +425,7 @@ def check(
     verify_numerics: bool = True,
     atol: float | None = None,
     rtol: float | None = None,
+    output_tol: OutputTol | None = None,
     seed: int = 0,
     vary: VaryFn | str | None = None,
     axis_max: dict[str, int] | None = None,
@@ -458,6 +462,7 @@ def check(
             seed=seed,
             atol=atol,
             rtol=rtol,
+            output_tol=output_tol,
             vary=vary,
             axis_max=axis_max,
             fp16=fp16,
@@ -471,7 +476,13 @@ def check(
             )
     prepared = prepare_model(model, example_inputs, adapter, dynamic, vary=vary, axis_max=axis_max)
     verdict = build_verdict(
-        prepared, k=k, verify_numerics=verify_numerics, atol=atol, rtol=rtol, seed=seed
+        prepared,
+        k=k,
+        verify_numerics=verify_numerics,
+        atol=atol,
+        rtol=rtol,
+        output_tol=output_tol,
+        seed=seed,
     )
     if key is not None and verdict.status in memo.STORED_STATUSES:
         entry = memo.entry_from_verdict(verdict)

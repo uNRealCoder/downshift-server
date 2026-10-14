@@ -728,3 +728,10 @@ def test_serve_passes_result_cache_rows_and_it_survives_workers(monkeypatch):
     _serve_captured(monkeypatch, "--result-cache-rows", "12", "--workers", "2")
     args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
     assert args.options.result_cache_rows == 12
+
+
+def test_serve_passes_output_tol_and_it_survives_workers(monkeypatch):
+    _serve_captured(monkeypatch, "--output-tol", "output_0=1e-3:1e-2", "--workers", "2")
+
+    args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
+    assert args.options.output_tol == {"output_0": (1e-3, 1e-2)}

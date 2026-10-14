@@ -22,7 +22,7 @@ from downshift.core.verdict import (
     numerics_outcome,
     prepare_model,
 )
-from downshift.core.verify import OnnxRuntimeError, first_line, load_session, verify
+from downshift.core.verify import OnnxRuntimeError, OutputTol, first_line, load_session, verify
 from downshift.settings import DEFAULT_SAMPLES
 
 
@@ -43,6 +43,7 @@ def intake(
     dynamic: dict[str, list[int]] | None = None,
     atol: float | None = None,
     rtol: float | None = None,
+    output_tol: OutputTol | None = None,
     seed: int = 0,
     vary: VaryFn | str | None = None,
     axis_max: dict[str, int] | None = None,
@@ -83,6 +84,7 @@ def intake(
             k=k,
             atol=atol,
             rtol=rtol,
+            output_tol=output_tol,
             seed=seed,
         )
         row_independent, row_reason = check_rows(prepared, numerics, session)

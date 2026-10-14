@@ -60,6 +60,10 @@ class ServeOptions:
     result_cache_rows: int | None = settings.RESULT_CACHE_ROWS
     atol: float | None = None  # None means "by the floating dtype of the model"
     rtol: float | None = None
+    # --output-tol: {output name: (atol, rtol or None)}. DOWNSHIFT_OUTPUT_TOL, if you do not give it
+    output_tol: dict[str, tuple[float, float | None]] | None = field(
+        default_factory=lambda: dict(settings.OUTPUT_TOL) or None
+    )
     seed: int = 0  # makes the verification samples reproducible
     vary: str | None = None  # pkg.module:fn that replaces the vary_fn of the adapter
     pooling: str | None = None  # a PoolingChoice value. It overrides the repo recipe

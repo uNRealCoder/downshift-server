@@ -223,7 +223,8 @@ def _shape_text(verdict: ExportVerdict) -> str:
 
 
 def _add_numerics_rows(rows: _Rows, verdict: ExportVerdict) -> None:
-    """Tolerance, Worst and Samples: the three rows that explain the numbers of a verdict.
+    """Tolerance, Worst and Samples: the rows that explain the numbers of a verdict. A model with
+    more than one output also gets one row for each output.
 
     The report of `check` and the banner of `serve` show them in the same way. Downshift
     therefore builds them one time here. Nobody must keep two places in step by hand.
@@ -235,6 +236,14 @@ def _add_numerics_rows(rows: _Rows, verdict: ExportVerdict) -> None:
         worst = _worst_text(verdict)
         if worst is not None:
             rows.add("Worst", worst)
+    n = verdict.numerics
+    if n is not None and len(n.outputs) > 1:
+        for out in n.outputs:
+            source = "  (--output-tol)" if out.overridden else ""
+            rows.add(
+                out.name,
+                f"max abs {out.max_abs_err:.1e}  atol {out.atol:.0e}, rtol {out.rtol:.0e}{source}",
+            )
     samples = _samples_text(verdict)
     if samples is not None:
         rows.add("Samples", samples)

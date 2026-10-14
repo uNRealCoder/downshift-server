@@ -75,6 +75,7 @@ def test_health_ready_metadata(mlp_client, mlp_state):
     assert meta["family"] == mlp_state.verdict.model_family
     assert meta["verdict"]["status"] == "CLEAN"
     assert meta["verdict"]["row_independent"] is True
+    assert [o["name"] for o in meta["verdict"]["numerics"]["outputs"]] == ["output_0"]
     assert meta["verdict"]["row_reason"] is None
     assert meta["backend"]["name"] == "onnxruntime"
     assert meta["input_names"] == ["x"]

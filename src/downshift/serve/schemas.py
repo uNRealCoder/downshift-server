@@ -193,6 +193,18 @@ class WorstMismatchInfo(BaseModel):
     input_shapes: list[list[int]]
 
 
+class OutputNumericsInfo(BaseModel):
+    """The numbers of one output next to its bounds. `overridden`: --output-tol set the bounds."""
+
+    name: str
+    max_abs_err: float
+    max_rel_err: float
+    atol: float
+    rtol: float
+    failures: int
+    overridden: bool
+
+
 class NumericsInfo(BaseModel):
     samples_tested: int
     max_abs_err: float
@@ -208,6 +220,7 @@ class NumericsInfo(BaseModel):
     sample_shapes: list[list[list[int]]] = Field(default_factory=list)
     seed: int
     notes: list[str] = Field(default_factory=list)
+    outputs: list[OutputNumericsInfo] = Field(default_factory=list)
     passed: bool
 
 

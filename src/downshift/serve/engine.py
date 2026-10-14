@@ -213,6 +213,7 @@ def _verdict_for(
             dynamic=opts.dynamic,
             atol=opts.atol,
             rtol=opts.rtol,
+            output_tol=opts.output_tol,
             seed=opts.seed,
             vary=opts.vary,
             axis_max=opts.axis_max,
@@ -234,7 +235,13 @@ def _verdict_for(
             eager_output_axes(prepared),
         )
     verdict = build_verdict(
-        prepared, k=opts.k, atol=opts.atol, rtol=opts.rtol, seed=opts.seed, timings=timings
+        prepared,
+        k=opts.k,
+        atol=opts.atol,
+        rtol=opts.rtol,
+        output_tol=opts.output_tol,
+        seed=opts.seed,
+        timings=timings,
     )
     if verdict.status == Status.FAILED and not verdict.output_axes:
         # A failed export never reached the verification. Classify on the eager model that it uses instead.
