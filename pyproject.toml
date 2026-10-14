@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "downshift-server"
-version = "0.5.1"
+version = "0.6.0"
 description = "Serve PyTorch models over HTTP through ONNX Runtime. Downshift verifies each export against PyTorch before it serves, and it falls back to eager PyTorch."
 readme = "README.md"
 requires-python = ">=3.12,<3.15"

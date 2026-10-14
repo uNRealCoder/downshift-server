@@ -52,7 +52,7 @@ curl -s localhost:8000/schema -H "Authorization: Bearer $DOWNSHIFT_SERVER_API_KE
 This route always returns `200`, also while the model loads. It tells a client where to start. The response model is `IndexResponse`:
 
 ```json
-{"service": "downshift", "version": "0.5.1", "ready": true, "model": "clean_mlp",
+{"service": "downshift", "version": "0.6.0", "ready": true, "model": "clean_mlp",
  "routes": {"index": "GET /", "health": "GET /health", "ready": "GET /ready",
             "metadata": "GET /metadata", "schema": "GET /schema",
             "predict": "POST /predict", "predict_graph": "POST /predict/graph",
