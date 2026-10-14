@@ -26,6 +26,7 @@ from downshift.core.axes import AxisFact, axis_facts, classify_outputs
 from downshift.core.capture import capture
 from downshift.core.inputs import synthesize
 from downshift.core.phase import Phase, report
+from downshift.core.rows import check_rows
 from downshift.core.shapes import (
     apply_dynamic_override,
     dynamic_bounds,
@@ -83,6 +84,10 @@ class ExportVerdict:
     output_axes: list[str] = field(default_factory=list)  # PyG only: node/edge/fixed/unknown
     unsupported_ops: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    # Does each row give the same output when it runs with other rows? (core/rows.py) None if
+    # downshift did not check it. The result cache needs True.
+    row_independent: bool | None = None
+    row_reason: str | None = None
     onnx_path: Path | None = None
     onnx_program: object | None = field(default=None, repr=False)  # torch.onnx.ONNXProgram
     onnx_bytes: bytes = field(default=b"", repr=False)  # serialized once by capture()
@@ -110,6 +115,13 @@ class ExportVerdict:
     def exit_code(self) -> int:
         return EXIT_CODES[self.status]
 
+    @property
+    def rows_note(self) -> str | None:
+        """Why the rows are not known to be independent. None if they are."""
+        if self.row_independent:
+            return None
+        return self.row_reason or f"not checked: the verdict is {self.status}"
+
     def to_dict(self) -> dict:
         return {
             "status": self.status,
@@ -128,6 +140,8 @@ class ExportVerdict:
             "output_axes": list(self.output_axes),
             "unsupported_ops": self.unsupported_ops,
             "warnings": self.warnings,
+            "row_independent": self.row_independent,
+            "row_reason": self.rows_note,
             "onnx_path": str(self.onnx_path) if self.onnx_path else None,
         }
 
@@ -145,6 +159,8 @@ class ExportVerdict:
         data = self.to_dict()
         data["reason"] = hide_paths(data["reason"], paths)
         data["warnings"] = [hide_paths(w, paths) for w in data["warnings"]]
+        if data["row_reason"] is not None:
+            data["row_reason"] = hide_paths(data["row_reason"], paths)
         return data
 
     @classmethod
@@ -174,6 +190,8 @@ class ExportVerdict:
             output_axes=list(data.get("output_axes", [])),
             unsupported_ops=list(data.get("unsupported_ops", [])),
             warnings=list(data.get("warnings", [])),
+            row_independent=data.get("row_independent"),
+            row_reason=data.get("row_reason"),
             onnx_path=Path(onnx_path) if onnx_path else None,
         )
 
@@ -362,6 +380,7 @@ def build_verdict(
             rtol=rtol,
             seed=seed,
         )
+        row_independent, row_reason = check_rows(prepared, numerics, session)
     except OnnxRuntimeError as exc:
         message = first_line(exc)
         verdict.reason = (
@@ -375,6 +394,7 @@ def build_verdict(
             timings[Phase.verify] = time.perf_counter() - verify_start
 
     verdict.numerics = numerics
+    verdict.row_independent, verdict.row_reason = row_independent, row_reason
     verdict._session = session
     verdict.axes = axes_for(prepared, numerics)
     if prepared.family == Family.pyg:

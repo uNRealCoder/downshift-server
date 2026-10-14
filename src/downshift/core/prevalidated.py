@@ -13,6 +13,7 @@ import torch
 from downshift.adapters.base import Adapter, VaryFn
 from downshift.core.capture import op_type_histogram
 from downshift.core.phase import Phase, report
+from downshift.core.rows import check_rows
 from downshift.core.verdict import (
     BackendName,
     ExportVerdict,
@@ -84,6 +85,7 @@ def intake(
             rtol=rtol,
             seed=seed,
         )
+        row_independent, row_reason = check_rows(prepared, numerics, session)
     except OnnxRuntimeError as exc:
         message = first_line(exc)
         return ExportVerdict(
@@ -121,6 +123,8 @@ def intake(
         input_names=prepared.input_names,
         dynamic_dims=prepared.dynamic_dims,
         axes=axes_for(prepared, numerics),
+        row_independent=row_independent,
+        row_reason=row_reason,
         onnx_path=onnx_path,
         prepared=prepared,
         _session=session,

@@ -232,6 +232,13 @@ def _add_numerics_rows(rows: _Rows, verdict: ExportVerdict) -> None:
         rows.add("Samples", samples)
 
 
+def _rows_text(verdict: ExportVerdict) -> str:
+    if verdict.row_independent:
+        return "independent"
+    kind = "dependent" if verdict.row_independent is False else "not checked"
+    return f"{kind} ({str(verdict.rows_note).removeprefix('not checked: ')})"
+
+
 def print_verdict(verdict: ExportVerdict, model_name: str) -> None:
     rows = _Rows()
     rows.add("Model", model_name)
@@ -239,6 +246,8 @@ def print_verdict(verdict: ExportVerdict, model_name: str) -> None:
     rows.add("Export", _status_text(verdict))
     rows.add("Numerics", _numerics_text(verdict))
     _add_numerics_rows(rows, verdict)
+    if verdict.numerics is not None:
+        rows.add("Rows", _rows_text(verdict))
     rows.add("Shape-general", _shape_text(verdict))
     rows.add("Dynamic dims", _axes_text(verdict))
     if verdict.unsupported_ops:
@@ -359,6 +368,8 @@ def print_banner(
             rows.add("Override", "--force-onnx to serve the ONNX graph anyway")
 
     _add_numerics_rows(rows, verdict)
+    if verdict.numerics is not None:
+        rows.add("Rows", _rows_text(verdict))
     warmup_text = _warmup_text(state)
     if warmup_text is not None:
         rows.add("Warmup", warmup_text)

@@ -596,3 +596,31 @@ def test_print_banner_inline_execution_warns(caplog):
     assert "inline for small JSON bodies" in out
     assert "under ~1 ms" in out
     assert "/health and /ready" in out
+
+
+@pytest.mark.parametrize(
+    ("independent", "reason", "expected"),
+    [
+        (True, None, "independent"),
+        (False, "output_0 axis 1 changes", "dependent (output_0 axis 1 changes)"),
+        (None, "not checked: no two rows", "not checked (no two rows)"),
+    ],
+)
+def test_print_verdict_shows_the_rows_row(caplog, independent, reason, expected):
+    render.print_verdict(_verdict(row_independent=independent, row_reason=reason), "model")
+
+    assert expected in caplog.text
+
+
+def test_print_verdict_has_no_rows_row_without_numerics(caplog):
+    render.print_verdict(_verdict(status="FAILED", numerics=None), "model")
+
+    assert "Rows" not in caplog.text
+
+
+def test_print_banner_shows_the_rows_row(caplog):
+    state = _serving_state(_verdict(row_independent=True))
+
+    render.print_banner(state, "127.0.0.1", 8000)
+
+    assert "independent" in caplog.text

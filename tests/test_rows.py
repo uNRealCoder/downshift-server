@@ -101,3 +101,49 @@ def test_generic_rows_need_one_row_shape():
     prepared.vary_fn = lambda i: (torch.zeros(2, 16),) if i == 0 else (torch.zeros(2, 5),)
 
     assert rows.two_row_sample(prepared) == "no two samples with the same row shape"
+
+
+def test_the_verdict_carries_the_row_facts_through_a_round_trip():
+    import downshift
+    from downshift.core.verdict import ExportVerdict
+
+    clean = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(2), k=3)
+    mixed = downshift.check(cross_row.make_model(), cross_row.make_inputs(), k=3)
+
+    assert (clean.row_independent, clean.to_dict()["row_reason"]) == (True, None)
+    assert mixed.row_independent is False
+    rebuilt = ExportVerdict.from_dict(mixed.to_dict())
+    assert (rebuilt.row_independent, rebuilt.row_reason) == (False, mixed.row_reason)
+
+
+def test_a_verdict_without_numerics_says_that_the_rows_were_not_checked():
+    import downshift
+
+    skipped = downshift.check(
+        clean_mlp.make_model(), clean_mlp.make_inputs(2), verify_numerics=False
+    )
+
+    assert skipped.row_independent is None
+    assert skipped.to_dict()["row_reason"] == "not checked: the verdict is UNVERIFIED"
+
+
+def test_a_verdict_from_0_5_reads_as_not_independent():
+    import downshift
+    from downshift.core.verdict import ExportVerdict
+
+    data = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(2), k=3).to_dict()
+    del data["row_independent"], data["row_reason"]
+
+    old = ExportVerdict.from_dict(data)
+
+    assert old.row_independent is None, "an old entry must never read as independent"
+
+
+def test_the_row_reason_hides_the_paths_of_a_redacted_verdict():
+    import downshift
+
+    verdict = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(2), k=3)
+    verdict.row_independent = None
+    verdict.row_reason = "not checked: cannot read /secret/dir/model.onnx"
+
+    assert "/secret/dir" not in verdict.redacted_dict(["/secret/dir/model.onnx"])["row_reason"]

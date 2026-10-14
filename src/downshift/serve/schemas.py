@@ -228,6 +228,9 @@ class VerdictInfo(BaseModel):
     dynamic_dims: dict[str, list[int]]
     unsupported_ops: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    # Does each row give the same output with other rows? None: not checked (row_reason says why).
+    row_independent: bool | None = None
+    row_reason: str | None = None
     # No onnx_path. to_dict() has one, but it is a location on the disk of the server.
 
 
