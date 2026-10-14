@@ -267,6 +267,7 @@ These options change what downshift serves:
 - `--max-concurrency N` (env `DOWNSHIFT_MAX_CONCURRENCY`, default 4) sets the number of inferences that run at the same time in each worker process. A dedicated thread pool of this size runs them. Other requests wait in a queue. They do not run inline.
 - `--max-queue N` (env `DOWNSHIFT_MAX_QUEUE`, default 64) sets the number of predicts that can wait beyond `--max-concurrency`. When `max-concurrency + max-queue` requests are admitted, a new request gets an immediate `503` with `Retry-After: 1`. It does not join the queue.
 - `--request-timeout SECONDS` (env `DOWNSHIFT_REQUEST_TIMEOUT`, default 30, `0` turns it off) sets how long an admitted predict can wait in the queue for its turn. After this time, it gets a `503` and no inference. The server never interrupts a request that is already running.
+- `--result-cache-rows N` (env `DOWNSHIFT_RESULT_CACHE_ROWS`, default 100, `0` turns it off) sets the number of rows that the result cache keeps in each worker. A row that arrives a second time skips the model. The cache needs a model with independent rows. For other models, it is off. Each response says `X-Downshift-Cache: hit`, `partial` or `miss`. The cache counts rows and not bytes. Refer to [Result cache](docs/production.md#result-cache), and read its warning for servers with more than one tenant.
 - `--workers N` (env `DOWNSHIFT_WORKERS`, default 1) starts N uvicorn worker processes. The parent exports and verifies once. Each worker builds its own ONNX Runtime session over that graph, or reloads the model if torch serves it. Each worker then warms up. Memory use and startup time increase with `N`. The parent frees its copy of the model before the workers start.
 - `--execution threadpool|inline` (env `DOWNSHIFT_EXECUTION`, default `threadpool`). `threadpool` parses and prepares each request in the prep pool. It runs inference and encoding on an inference thread. This makes two thread hops, and the event loop never blocks. `inline` runs small JSON bodies (Content-Length up to 64 KiB, no `text`) on the event loop, with no hop. Use `inline` only for models that infer in much less than one millisecond. A slower model stalls `/health` and `/ready`.
 - `--prep-threads N` (env `DOWNSHIFT_PREP_THREADS`, default `min(4, CPUs)`) sets the size of the prep pool. The prep pool parses, validates and converts request bodies. It is separate from the inference threads.
@@ -299,7 +300,7 @@ A `500` body includes the same `request_id`. Every log line written while the se
 
 The server admits a predict, or refuses it with a `503`, before it reads the body. An overloaded server does not buffer or parse a request that it will refuse.
 
-`serve` runs the same gate as `check`. It also accepts `-k/--samples`, `--dynamic`, `--adapter`, `--inputs`, `--model-class`, `--unsafe-load`, `--atol`/`--rtol`, `--seed` and `--vary`. The sections below describe them.
+`serve` runs the same gate as `check`. It also accepts `-k/--samples`, `--dynamic`, `--adapter`, `--inputs`, `--model-class`, `--unsafe-load`, `--atol`/`--rtol`, `--output-tol`, `--seed` and `--vary`. The sections below describe them.
 
 ### Logging
 
@@ -341,7 +342,7 @@ The default tolerances depend on the narrowest floating dtype in the parameters 
 2. float64 wins only if it is the only floating dtype. A model that mixes float32 and float64 has the precision of float32.
 3. Otherwise, float32 is the default.
 
-To change the tolerance for one dtype, set a variable such as `DOWNSHIFT_TOL_FLOAT32_ATOL=1e-3` or `DOWNSHIFT_TOL_FLOAT16_RTOL=0.05`. To change it for one run, use `--atol` and `--rtol` on `check`, `export` and `serve`. The `Tolerance` row of the `check` report shows the dtype that selected the default. If a flag overrides it, the row shows `(--atol/--rtol)`.
+To change the tolerance for one dtype, set a variable such as `DOWNSHIFT_TOL_FLOAT32_ATOL=1e-3` or `DOWNSHIFT_TOL_FLOAT16_RTOL=0.05`. To change it for one run, use `--atol` and `--rtol` on `check`, `export` and `serve`. To use other bounds for one output, use `--output-tol output_1=1e-3:1e-2`. The default samples are synthetic: random values at the edge shapes of the model. To verify on inputs like your real traffic, use `--vary`. The `Tolerance` row of the `check` report shows the dtype that selected the default. If a flag overrides it, the row shows `(--atol/--rtol)`.
 
 The gate can also run alone. Use it to gate CI and to write artifacts.
 
@@ -404,7 +405,7 @@ Useful options:
 - `--dynamic "x:0,edge_index:1"` sets the dynamic axes. The default is axis 0 of every input.
 - `--adapter generic|pyg|hf` skips the detection of the adapter.
 - `--inputs pkg.module:fn` supplies example inputs.
-- `--atol` and `--rtol` override the tolerance.
+- `--atol` and `--rtol` override the tolerance. `--output-tol NAME=ATOL[:RTOL]` (repeatable) sets the bounds of one output.
 - `--seed N` (default 0) makes the verification samples reproducible.
 - `--vary pkg.module:fn` supplies your own `fn(i) -> inputs` instead of the sampler of downshift. `fn(0)` must return the example inputs.
 

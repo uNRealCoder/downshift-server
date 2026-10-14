@@ -71,7 +71,9 @@ def median(values):
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--out", type=Path, default=Path("bench/results/v0.6.0/cache_acceptance.json"))
+    parser.add_argument(
+        "--out", type=Path, default=Path("bench/results/v0.6.0/cache_acceptance.json")
+    )
     parser.add_argument("--repeats", type=int, default=60)
     args = parser.parse_args()
 
@@ -100,9 +102,16 @@ def main() -> None:
     result = {
         "model": MODEL.name,
         "repeats": args.repeats,
-        "a_repeated_query_server_ms": {"hit_median": median(hit), "hit_max": max(hit), "no_cache_median": median(miss_off)},
+        "a_repeated_query_server_ms": {
+            "hit_median": median(hit),
+            "hit_max": max(hit),
+            "no_cache_median": median(miss_off),
+        },
         "b_batch_32_with_30_known": {"rows_in_the_model_call": rows_computed},
-        "c_unique_queries_server_ms": {"cache_on_median": median(unique_on), "cache_off_median": median(unique_off)},
+        "c_unique_queries_server_ms": {
+            "cache_on_median": median(unique_on),
+            "cache_off_median": median(unique_off),
+        },
         "when": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     result["accepted"] = {

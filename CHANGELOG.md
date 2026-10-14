@@ -7,7 +7,16 @@ All notable changes to this project are documented here. Format follows
 
 ### Added
 
+- A result cache. A row that arrives a second time skips the model. It is on by default and keeps 100 rows in each worker. `--result-cache-rows N` (or `DOWNSHIFT_RESULT_CACHE_ROWS`) sets the number of rows. `0` turns it off. The cache counts rows and not bytes. A row enters the cache on its second arrival. Two requests for the same new row run the model one time. A request in which all rows hit makes no inference. A request with some hits runs only the other rows. Each `/predict` response has `X-Downshift-Cache: hit | partial | miss`. `Server-Timing` has a `cache` stage. `Cache-Control: no-cache` skips the lookup. `/metadata` has a `cache` block. `/predict/graph` does not use the cache. Refer to "Result cache" in `docs/production.md`. Read its warning for servers with more than one tenant: a hit is faster than a miss.
+- A row check. At export, downshift runs two different rows alone and together, on ONNX Runtime and on torch. The verdict has `row_independent` and `row_reason`. The `Rows` row of the banner and of the `check` report shows them. `/metadata` and `check --json` have them too. A model whose rows depend on each other (for example `x - x.mean(0)`, or token-level outputs) is not independent. The check also covers padding for text models: a left-padded BERT row changes in a mixed batch, and the check finds this.
+- `--output-tol NAME=ATOL[:RTOL]` (repeatable, or `DOWNSHIFT_OUTPUT_TOL`) on `check`, `export` and `serve`. It sets other bounds for one output (`output_0`, `output_1` and so on). The verdict compares each output with its own bounds. The report, the banner (for a model with more than one output), `/metadata` and `check --json` show the error and the bounds of each output (`numerics.outputs`). A name that the model does not have is a usage error (exit code `4`). The python functions `check()`, `export()` and `intake()` take `output_tol=`.
+- The docs say that the default verification samples are synthetic (random values at the edge shapes). To verify on inputs like real traffic, use `--vary`.
+
 ### Changed
+
+- The export cache of 0.5.x exports again one time. The version of downshift is part of its key, and 0.6.0 adds the row check to the verdict.
+- A bare `serve` or `app_for` on a model with independent rows now has the result cache on. To keep the old behavior, set `--result-cache-rows 0`.
+- `/predict` with the cache on does the encoding on a prep thread and not on an inference thread.
 
 ### Fixed
 
