@@ -34,6 +34,7 @@ from downshift.serve.graphs import (
     split_outputs,
     split_refusal,
 )
+from downshift.serve.result_cache import Lookup, ResultCache, Row, tensor_keys, text_keys
 from downshift.serve.schemas import (
     GraphPredictRequest,
     OutputEncoding,
@@ -554,6 +555,184 @@ async def _run_in(
     return await loop.run_in_executor(executor, contextvars.copy_context().run, call)
 
 
+@dataclass
+class _CachePlan:
+    """What the prep hop of a cached request found: the rows that hit, the rows that another
+    request computes, and the feeds of the rows that this request must compute."""
+
+    request: _Request
+    arrays: dict[str, np.ndarray] | None  # the full input arrays of a tensor request
+    keys: list[bytes]
+    found: Lookup
+    feeds: dict[str, np.ndarray] | None  # for the missing rows only. None if there are none
+    passthrough: bool = False  # an empty batch: run the model once and skip the cache
+
+
+def _row_count_violation(state: ServingState, rows: int) -> str | None:
+    """The bound on the batch axis, for a text request. The tokenizer makes no arrays for the
+    rows that hit, so _bound_violation cannot see the whole batch."""
+    for name, bounds in state.axis_bounds.items():
+        bound = bounds.get(0)
+        if bound is not None and not (bound.min <= rows <= bound.max):
+            return _bound_message(name, 0, rows, bound)
+    return None
+
+
+def _subset(request: _Request, arrays: dict[str, np.ndarray] | None, rows: list[int]) -> _Request:
+    """A request with only `rows` of the batch."""
+    if request.text is not None:
+        return _Request(text=[request.text[i] for i in rows], prompt=request.prompt)
+    assert arrays is not None
+    return _Request(tensors={n: a[rows] for n, a in arrays.items()})
+
+
+def _cache_prepare(
+    state: ServingState, cache: ResultCache, request: _Request, timings_ms: dict[str, float]
+) -> _CachePlan:
+    """Prep hop of a cached request: the row keys, the lookup, and the feeds of the rows that
+    missed. A tensor request is checked as a whole before the lookup, so a hit never hides a
+    client error. A text request is checked row by row, and only the rows that missed go to
+    the tokenizer. Downshift claims the missed rows in the lookup. If the rest of this hop
+    fails, it releases them."""
+    start = time.perf_counter()
+    arrays: dict[str, np.ndarray] | None = None
+    try:
+        if request.text is not None:
+            keys = text_keys(request.prompt, request.text)
+            violation = _row_count_violation(state, len(keys))
+        else:
+            declared = state.declared_dtypes
+            if request.tensors is not None:
+                arrays = _binary_feeds(state, request.tensors, declared)
+            else:
+                max_bytes = state.options.max_input_bytes
+                arrays = {
+                    n: to_numpy(n, request.inputs[n], declared.get(n), max_bytes=max_bytes)
+                    for n in state.input_names
+                }
+            counts = {a.shape[0] if a.ndim else -1 for a in arrays.values()}
+            if len(counts) != 1 or -1 in counts:
+                raise ValueError("each input needs the same number of rows on axis 0")
+            keys = tensor_keys(arrays, counts.pop())
+            violation = (
+                _vocab_violation(state, arrays)
+                or _shape_violation(state, arrays)
+                or _bound_violation(state, arrays)
+            )
+    except (ValueError, TypeError, KeyError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if violation is not None:
+        raise HTTPException(400, violation)
+
+    if not keys:
+        whole, _, _ = _prepare_feeds(state, request)
+        return _CachePlan(request, arrays, keys, Lookup(), whole, passthrough=True)
+    found = cache.lookup(keys)
+    claimed = [keys[i] for i in found.missing]
+    try:
+        feeds: dict[str, np.ndarray] | None = None
+        if found.missing:
+            if arrays is not None and len(found.missing) == len(keys):
+                feeds = arrays
+            else:
+                feeds, _, _ = _prepare_feeds(state, _subset(request, arrays, found.missing))
+    except BaseException as exc:
+        cache.fail(claimed, exc)
+        raise
+    timings_ms["prep"] = round((time.perf_counter() - start) * 1000, 2)
+    return _CachePlan(request, arrays, keys, found, feeds)
+
+
+async def _run_cached(
+    state: ServingState,
+    cache: ResultCache,
+    body: bytes,
+    parsed: _Request | None,
+    *,
+    binary: bool,
+    run_here: bool,
+    admitted_at: float,
+    timings_ms: dict[str, float],
+    accept_safetensors: bool,
+) -> Response:
+    """run_predict with the result cache. The model sees only the rows that missed. The rows
+    that hit, the rows of other requests that are in flight, and the new rows are joined in the
+    order of the request. The encoding runs in the prep pool, and it does not hold an inference
+    slot. A request in which every row hits makes no hop to the inference pool."""
+    pool = None if run_here else state.prep_executor
+
+    def prepare() -> _CachePlan:
+        request = parsed or _parse(state, body, False, binary, timings_ms)
+        return _cache_prepare(state, cache, request, timings_ms)
+
+    plan: _CachePlan = await _run_in(pool, "prep_wait", timings_ms, prepare)
+    owned = [plan.keys[i] for i in plan.found.missing]
+    rows: dict[int, Row] = dict(plan.found.hits)
+
+    async def compute(feeds: dict[str, np.ndarray], indexes: list[int]) -> Response | None:
+        """Run the model on `feeds` (the rows `indexes`) and give each row to the cache."""
+
+        def infer_rows() -> Response | None:
+            _check_timeout(state, admitted_at)
+            outputs, infer_ms = _infer(state, feeds)
+            timings_ms["infer"] = round(infer_ms, 2)
+            by_row = all(o.ndim and o.shape[0] == len(indexes) for o in outputs.values())
+            if plan.passthrough or (not by_row and len(indexes) == len(plan.keys)):
+                # An empty batch, or an output that has no row axis (a backend that does not
+                # keep the contract). Nothing can be joined with it, so nothing is cached.
+                return _encode_response(
+                    state, outputs, plan.request.encoding, timings_ms, accept_safetensors
+                )
+            if not by_row:
+                raise RuntimeError("an output of the model does not follow the batch size")
+            for n, i in enumerate(indexes):
+                rows[i] = {name: out[n] for name, out in outputs.items()}
+                cache.complete(plan.keys[i], rows[i])
+            return None
+
+        done: Response | None = await _run_in(
+            None if run_here else state.executor, "infer_wait", timings_ms, infer_rows
+        )
+        return done
+
+    try:
+        _check_timeout(state, admitted_at)
+        if plan.feeds is not None:
+            done = await compute(plan.feeds, plan.found.missing)
+            if done is not None:
+                return done
+        # An owner that failed (or that the client dropped) gives an error to its waiters. A
+        # waiter does not inherit it: it computes the row itself.
+        retry: list[int] = []
+        for i, future in plan.found.pending.items():
+            try:
+                rows[i] = await asyncio.wrap_future(future)
+            except Exception:  # noqa: BLE001 - any failure of the owner means "compute it here"
+                retry.append(i)
+        if retry:
+            subset = _subset(plan.request, plan.arrays, retry)
+            feeds = await _run_in(
+                pool, "prep_wait", timings_ms, lambda: _prepare_feeds(state, subset)[0]
+            )
+            await compute(feeds, retry)
+    except BaseException as exc:
+        cache.fail(
+            owned,
+            exc if isinstance(exc, Exception) else RuntimeError("the request did not finish"),
+        )
+        raise
+
+    def finish() -> Response:
+        names = list(rows[0])
+        arrays = {n: np.stack([rows[i][n] for i in range(len(plan.keys))]) for n in names}
+        return _encode_response(
+            state, arrays, plan.request.encoding, timings_ms, accept_safetensors
+        )
+
+    response: Response = await _run_in(pool, "encode_wait", timings_ms, finish)
+    return response
+
+
 async def run_predict(
     state: ServingState,
     body: bytes,
@@ -586,6 +765,18 @@ async def run_predict(
     """
     parsed = _parse(state, body, graph, binary, timings_ms) if inline else None
     run_here = parsed is not None and parsed.text is None
+    if state.result_cache is not None and not graph:
+        return await _run_cached(
+            state,
+            state.result_cache,
+            body,
+            parsed,
+            binary=binary,
+            run_here=run_here,
+            admitted_at=admitted_at,
+            timings_ms=timings_ms,
+            accept_safetensors=accept_safetensors,
+        )
 
     def prepare() -> tuple[Any, dict[str, np.ndarray], GraphLayout | None]:
         # Only the encoding stays after this. Downshift frees the parsed body before the inference.
