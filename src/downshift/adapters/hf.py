@@ -1,12 +1,6 @@
-"""The Hugging Face adapter, for encoder-only models.
-
-It builds input_ids and attention_mask directly from the model config. It does not import
-optimum. The export shim unwraps the ModelOutput, so torch.export sees a plain tensor. The
-tensor is last_hidden_state for base models. For a sequence-classification or
-token-classification head, it is the logits. hf_repo.load_pretrained selects this from
-config.architectures.
-
-Downshift imports it only if transformers is installed.
+"""The Hugging Face adapter: input_ids and attention_mask from the config, and a shim that
+exports the first output (last_hidden_state, or a head's logits), pooled if the repo has a
+recipe. Imported only if transformers is installed.
 """
 
 import torch
@@ -29,9 +23,7 @@ _GUESS_SEQ = 8
 
 
 class _FirstOutputShim(nn.Module):
-    """The first output of the model. If the repo has a recipe, it is pooled into one embedding
-    for each text (see adapters/embedding.py). The pooling is part of the graph that downshift
-    exports."""
+    """The first output of the model, pooled into one vector per text if there is a recipe."""
 
     def __init__(self, model: nn.Module, recipe: EmbeddingRecipe | None = None) -> None:
         super().__init__()
@@ -62,11 +54,9 @@ class HFAdapter:
         self, model: nn.Module, example_inputs: tuple, axis_max: dict[str, int] | None = None
     ) -> Prepared:
         input_ids, attention_mask = example_inputs
-        # Use getattr and not model.config. The typeshed of nn.Module makes attribute access
-        # resolve to Tensor | Module. That loses the real PretrainedConfig type. getattr(..., str)
-        # keeps it as Any.
+        # getattr keeps the type Any; nn.Module attribute access types it as Tensor | Module.
         config = getattr(model, "config")  # noqa: B009
-        # The position embeddings limit the sequence length. A looser bound trips the guards of the export.
+        # The position embeddings bound the sequence; a looser bound trips export guards.
         longest = position_limit(config)
         max_seq = longest or 1 << 12
         batch = torch.export.Dim("batch", min=1, max=1 << 12)
@@ -100,19 +90,12 @@ def make_vary_fn(
     axis_max: dict[str, int] | None = None,
     padding_side: str = "right",
 ) -> VaryFn:
-    """The verification samples after the first one. They vary the batch size and the sequence
-    length, and they pad. Each row gets its own random length in [1, s]. The mask is zero
-    beyond that length (and at least one position is attended). Padding is then tested for real
-    and not only with masks that are always full. With `padding_side` "left", the zeros are at
-    the start of each row. The tokenizer of a decoder embedder pads in this way at serve time.
+    """Samples that vary batch and sequence length, with real padding: each row has its own
+    length, padded on `padding_side`.
 
-    `longest` is the longest sequence that the model itself declares (its position
-    embeddings). If it is set, sample 1 is one row of full length, at exactly that length. A
-    graph that diverges only at long sequences then cannot pass with short samples alone. The
-    other sizes stay near the example and cannot guarantee that.
-
-    `axis_max` is --axis-max. It limits the sampled sizes. A pinned `seq` (or `batch`) puts
-    sample 1 exactly at that size instead. It then takes the slot of the full-length sample.
+    Sample 1 is one row at `longest` (the position limit), so a graph that fails only on long
+    sequences cannot pass. With --axis-max, sample 1 is at the pinned sizes instead, and the
+    other samples stay within them.
     """
     input_ids, _ = base_inputs
     base_batch, base_seq = input_ids.shape

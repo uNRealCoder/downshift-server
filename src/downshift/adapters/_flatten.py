@@ -1,7 +1,5 @@
-"""A shim that wraps a model that takes a container argument (a dataclass, a PyG Data, ...). The
-shim lets torch.export see a plain tensor signature with a fixed number of arguments. Export the
-shim and not the model.
-"""
+"""A shim for a model that takes a container argument (a dataclass, a PyG Data): it gives
+torch.export a flat tensor signature."""
 
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
@@ -28,13 +26,8 @@ class FlattenShimBase(nn.Module):
 
 
 def build_shim_class(field_names: Sequence[str]) -> type[FlattenShimBase]:
-    """Generate a subclass whose forward() has one named positional parameter for each field.
-
-    A `def forward(self, *tensors)` would bind everything into one VAR_POSITIONAL argument.
-    torch.export would then see one tuple input. This does not match a dynamic_shapes tuple
-    with one entry for each input. The parameter names also become the input names of the ONNX
-    graph.
-    """
+    """A subclass whose forward() has one named parameter for each field. (*tensors would be
+    one tuple input to torch.export.) The names become the ONNX input names."""
     params = ", ".join(n if n.isidentifier() else f"t{i}" for i, n in enumerate(field_names))
     src = f"def forward(self, {params}):\n    return self._call(({params},))\n"
     namespace: dict[str, Any] = {}

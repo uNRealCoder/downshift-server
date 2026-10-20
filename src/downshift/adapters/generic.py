@@ -1,9 +1,6 @@
-"""The generic adapter: any nn.Module.
-
-It does two jobs. It flattens a single positional dataclass argument into plain tensors.
-(torch.export rejects dataclasses that are not registered.) If you give no example inputs, it
-guesses a shape from the first Linear or Conv layer. This is enough for the single-tensor case
-of the torchvision style.
+"""The generic adapter, for any nn.Module. It flattens a single dataclass argument (which
+torch.export rejects), and without example inputs it guesses one tensor from the first Linear
+or Conv layer.
 """
 
 import dataclasses

@@ -1,9 +1,6 @@
-"""What an adapter is.
-
-An adapter knows one model family. It does two jobs. (a) It builds example inputs if the user
-gave none. (b) It turns the model and the inputs into something that torch.export can trace: a
-module with a flat tensor signature with a fixed number of arguments. It also gives the spec
-for the dynamic shapes and a way to generate more samples for the verification.
+"""The Adapter protocol. An adapter knows one model family: it guesses example inputs, and it
+turns the model into a module with a flat tensor signature, with dynamic shapes and a sampler
+for verification.
 """
 
 from collections.abc import Callable
@@ -55,8 +52,7 @@ class Adapter(Protocol):
     def prepare(
         self, model: nn.Module, example_inputs: tuple, axis_max: dict[str, int] | None = None
     ) -> Prepared:
-        """`axis_max` is --axis-max: {Dim name: largest size to serve}. Lower the maximum of the
-        named Dims (core.shapes.lower_axis_max validates the names and the ceilings). Make
-        verification sample 1 exactly at those sizes (core.shapes.pin_vary_fn for the generic
-        case)."""
+        """`axis_max` is --axis-max: {Dim name: largest size to serve}. Lower those Dims
+        (core.shapes.lower_axis_max) and make verification sample 1 exactly those sizes
+        (core.shapes.pin_vary_fn)."""
         ...

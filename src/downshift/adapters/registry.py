@@ -1,7 +1,5 @@
-"""Adapter lookup: the built-in adapters, all adapters that are registered under the
-`downshift.adapters` entry-point group, and one-off adapters that downshift loads directly from
-a .py file of the user. Downshift skips an adapter without a message if its optional dependency
-is missing, or if nothing has imported its family yet.
+"""Adapter lookup: the built-ins, the `downshift.adapters` entry points, and an adapter .py
+file of the user. A built-in is skipped while its optional dependency is not imported.
 """
 
 import importlib.util
@@ -19,20 +17,15 @@ from downshift.adapters.base import Adapter, Family
 ENTRY_POINT_GROUP = "downshift.adapters"
 
 
-# The most specific first. generic is last, so it wins only if nothing else matches. Each spec
-# names an adapter class, and the registry creates an instance of it. The third element is the
-# module whose presence in sys.modules means that the family is in use. (Discovery therefore
-# never imports transformers or torch_geometric for them.) It is None for generic, which has no
-# optional dependency to gate on.
+# Most specific first. The third element is the module whose presence in sys.modules means the
+# family is in use, so discovery never imports transformers or torch_geometric itself.
 _BUILTIN_SPECS = (
     (Family.hf, "downshift.adapters.hf:HFAdapter", "transformers"),
     (Family.pyg, "downshift.adapters.pyg:PyGAdapter", "torch_geometric"),
     (Family.generic, "downshift.adapters.generic:GenericAdapter", None),
 )
 
-# The cache of available(). The key is the set of built-in adapters that are in use. The imports
-# of a plugin (or of a custom adapter) can only add entries. They never remove an entry that is
-# already in the cache of this process.
+# available(), keyed by the set of built-in families in use.
 _cache: dict[frozenset[str], dict[str, Adapter]] = {}
 
 
@@ -51,12 +44,8 @@ def _load_spec(spec: str) -> Adapter | None:
 
 
 def load_from_file(path_str: str, attr: str = "ADAPTER") -> Adapter:
-    """Load the adapter of a user from a standalone .py file, outside all installed packages.
-
-    `attr` names the adapter class, and downshift creates an instance with no arguments
-    (`ADAPTER = MyAdapter`, or `--adapter file.py:MyAdapter`). It can also name an instance of
-    the right shape for an `Adapter` that is already built.
-    """
+    """The adapter in a standalone .py file: `attr` names a class (built with no arguments)
+    or an instance (`ADAPTER = MyAdapter`, or `--adapter file.py:MyAdapter`)."""
     path = Path(path_str)
     if not path.is_file():
         raise LoadError(

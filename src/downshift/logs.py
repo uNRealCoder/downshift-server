@@ -1,10 +1,5 @@
-"""The one logging sink: plain text, on stdout, no colours.
-
-All output of the CLI and the server goes through `logging` to the one handler that
-`setup_logging` installs. This includes the loggers of downshift, the loggers of uvicorn
-(which downshift routes here), `warnings` (captured), the boot banner, and the `check` and
-`export` reports. This module uses only the standard library. An import costs nothing, and
-`--help` stays fast.
+"""The one logging sink: plain text on stdout, no colours. Downshift, uvicorn, `warnings`,
+the banner and the reports all go through it.
 """
 
 from __future__ import annotations
@@ -14,16 +9,12 @@ import sys
 from contextvars import ContextVar
 from typing import TextIO
 
-# The ASGI request-id middleware sets it for the life of one request. RequestIdFilter copies it
-# to each record that is logged in that time. An operator can then find all lines of the request
-# whose ID a client quotes from the X-Request-ID response header.
+# Set for each request by RequestIdMiddleware; RequestIdFilter adds it to each record.
 request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
 
 _UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
 
-# The boot banner and the check and export reports. They are the output of the command itself and
-# not diagnostics. They therefore print at all values of --log-level. (The default, warning,
-# would hide them otherwise.)
+# The banner and the reports: command output, printed at every --log-level.
 REPORT_LOGGER = "downshift.report"
 
 

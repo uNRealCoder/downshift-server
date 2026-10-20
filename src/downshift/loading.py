@@ -1,26 +1,11 @@
-"""Turn a CLI model argument into something that the export layer can use.
+"""Resolve a MODEL argument. Only local forms, never the network:
 
-Downshift serves only models that are already downloaded to this machine. It accepts three
-kinds of artifact on disk:
-
-  model.onnx                a downloaded or already exported ONNX file, served as it is
-                            (UNVERIFIED without --reference)
-  weights.pt                a downloaded PyTorch checkpoint (state dict). It needs
-                            --model-class pkg.module:Class. Downshift loads it with
-                            weights_only=True. A pickled full module needs --unsafe-load.
-                            The extensions .pth, .bin and .ckpt also work.
-  path/to/repo/dir          a downloaded Hugging Face repo: a directory with a config.json.
-                            This file identifies the repo (needs the [hf] extra)
-
-There is also one form that names a model that this process can already import. It is not a
-file:
-
-  pkg.module:attr           an import spec. attr is an nn.Module instance or a factory with no
-                            arguments. If a `make_inputs` function is in the same module,
-                            downshift uses it automatically.
-
-This module never uses the network. It does not accept Hugging Face hub ids. Download the repo
-yourself (huggingface-cli download, git clone) and pass the directory where it is.
+model.onnx           served as it is (UNVERIFIED without --reference)
+weights.pt           a state dict (.pt/.pth/.bin/.ckpt) for --model-class, loaded with
+                     weights_only=True. A pickled module needs --unsafe-load.
+path/to/repo/        a downloaded Hugging Face repo directory with a config.json ([hf])
+pkg.module:attr      an nn.Module or a factory. A `make_inputs` in the same module gives
+                     the example inputs.
 """
 
 import re
@@ -32,15 +17,12 @@ from typing import Any
 import torch
 from torch import nn
 
-# The import-spec resolution and its error type are leaf helpers without torch.
 from downshift._imports import (
     LoadError,
     import_object,
     is_import_spec,
 )
 from downshift.adapters.base import Family
-
-# What a model argument is. It is defined without torch in downshift.sources.
 from downshift.sources import (
     HF_REPO_DIR,
     IMPORT_SPEC,
@@ -50,12 +32,10 @@ from downshift.sources import (
 )
 
 _STATE_DICT_SUFFIXES = {".pt", ".pth", ".bin", ".ckpt"}
-# The form of a hub id: "bert-base-uncased" or "owner/name", never a path. A spec that looks
-# like one but does not exist gets a clear error and not only "does not exist".
+# A hub id ("bert-base-uncased", "owner/name") gets its own error that says to download it.
 _HUB_ID = re.compile(r"^[\w-][\w.-]*(/[\w.-]+)?$")
 
 
-# The one-line summary of what downshift accepts. Each error that must say this reuses it.
 ACCEPTED = (
     "downshift only serves models already downloaded onto this machine: a .onnx file, a "
     "PyTorch checkpoint (.pt/.pth/.bin/.ckpt), a Hugging Face repo directory (one holding "
@@ -65,8 +45,7 @@ ACCEPTED = (
 
 @dataclass(frozen=True)
 class LoadSpec:
-    """Everything that load_model needs to resolve one MODEL argument. pooling and normalize
-    have a meaning only for a Hugging Face encoder repo (see the module docstring)."""
+    """One MODEL argument and its flags. pooling and normalize apply to HF repos only."""
 
     model: str
     inputs: str | None = None
@@ -83,7 +62,7 @@ class LoadedModel:
     onnx_path: Path | None = None
     example_inputs: tuple | None = None
     adapter_hint: str | None = None
-    # The accepted form that `source` is. See the module docstring.
+    # The accepted form of `source` (downshift.sources).
     kind: str = UNKNOWN_SOURCE
 
     @property
@@ -190,8 +169,8 @@ def load_model(spec: LoadSpec) -> LoadedModel:
 
 
 def hf_repo_dir(model: str) -> str | None:
-    """`model` itself if load_model reads it as a Hugging Face repo directory (the same checks,
-    in the same order, as load_model). Otherwise None. It does not touch the weights."""
+    """`model` if load_model would read it as an HF repo directory, else None. It loads
+    nothing."""
     path = Path(model)
     if path.suffix == ".onnx" or (path.exists() and path.suffix in _STATE_DICT_SUFFIXES):
         return None
@@ -201,8 +180,7 @@ def hf_repo_dir(model: str) -> str | None:
 
 
 def resolve_tokenizer_source(spec: str) -> str:
-    """Check that --tokenizer-from names a downloaded Hugging Face repo directory. Return it as
-    a string. serve.engine.attach_hf_metadata reads the repo later."""
+    """--tokenizer-from, checked to be a downloaded HF repo directory."""
     path = Path(spec)
     if not (path / "config.json").is_file():
         raise LoadError(
@@ -230,7 +208,7 @@ def _load_hf(
         RecipeError,
         hf_repo.RemoteCodeError,
         hf_repo.TextGenerationModelError,
-    ) as exc:  # about the flags, the recipe or the kind of repo, and not about the download
+    ) as exc:  # the flags, the recipe or the kind of repo: not the download
         raise LoadError(f"{spec}: {exc}") from exc
     except (OSError, ValueError) as exc:  # a bad or incomplete download shows as one of them
         raise LoadError(

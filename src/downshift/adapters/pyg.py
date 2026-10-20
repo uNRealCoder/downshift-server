@@ -1,11 +1,5 @@
-"""The PyG adapter. It flattens torch_geometric.data.Data into (x, edge_index[, edge_attr]).
-
-The node count N and the edge count E are independent dynamic dimensions. If you tie them to
-one Dim, the GNN export works on the example graph and raises INVALID_ARGUMENT on the next
-graph. This is the typical fault.
-
-Downshift imports it only when a PyG Data input appears. torch_geometric therefore stays
-optional.
+"""The PyG adapter: Data becomes (x, edge_index[, edge_attr]), with independent node and edge
+counts. (One shared Dim works on the example graph and fails on the next.)
 """
 
 import torch
@@ -89,13 +83,8 @@ def make_vary_fn(
     dynamic_shapes: tuple | None = None,
     axis_max: dict[str, int] | None = None,
 ) -> VaryFn:
-    """Generate (x, edge_index[, edge_attr]) again, with N and E varied independently.
-
-    Downshift draws edge_index again for the node count of the sample. It does not use the
-    value range of the original tensor. A graph that is smaller then never references nodes
-    that it does not have. With --axis-max, sample 1 is exactly at the pinned `num_nodes` and
-    `num_edges` (the other one keeps the size of the example).
-    """
+    """Samples with independent node and edge counts. edge_index is drawn for each sample's
+    node count. With --axis-max, sample 1 is at the pinned num_nodes and num_edges."""
     x_idx = field_names.index("x")
     ei_idx = field_names.index("edge_index")
     ea_idx = field_names.index("edge_attr") if "edge_attr" in field_names else None

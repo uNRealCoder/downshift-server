@@ -1,10 +1,6 @@
-"""Defaults for the CLI and for library serving (ServeOptions and app_for()). The DOWNSHIFT_*
-environment variables override them.
-
-Each value here is only a fallback. A CLI flag or a function keyword argument has priority over
-the environment. The environment has priority over the default below. Downshift reads the
-variables one time, at import. To change a variable, restart the process (or the CLI call)
-that reads it.
+"""The defaults for the CLI and library serving, and the DOWNSHIFT_* variables that override
+them. A flag or keyword argument wins over the environment, which wins over the default. The
+variables are read once, at import.
 """
 
 import math
@@ -25,8 +21,8 @@ _CGROUP_CPU_MAX = "/sys/fs/cgroup/cpu.max"
 
 
 def usable_cpus() -> int:
-    """The CPUs that this process can use. The order is: a cgroup v2 quota (the --cpus of a
-    container), then the scheduler affinity mask, then the logical count of the machine."""
+    """The CPUs this process can use: the cgroup v2 quota, else the affinity mask, else the
+    machine's count."""
     try:
         with open(_CGROUP_CPU_MAX) as f:
             quota, period = f.read().split()[:2]
@@ -74,8 +70,7 @@ def _env_choice(name: str, default: str, choices: tuple[str, ...], type_name: st
 
 
 def parse_axis_max(items: Iterable[str]) -> dict[str, int]:
-    """Turn "seq=4096,num_nodes=500" (or one NAME=N for each item, as --axis-max repeats) into
-    {name: N}. Any other input raises ValueError, so the CLI reports a usage error."""
+    """ "seq=4096,num_nodes=500" (or one NAME=N per item) -> {name: N}, else ValueError."""
     result: dict[str, int] = {}
     for item in items:
         for entry in filter(None, (e.strip() for e in item.split(","))):

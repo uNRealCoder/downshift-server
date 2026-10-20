@@ -1,11 +1,6 @@
-"""Everything that the CLI reports, as plain text through `logging`. The commands give objects
-to this module. It builds the text and logs it. Reports, warnings and errors therefore share the
-one sink that `downshift.logs.setup_logging` installs (plain text on stdout, no colours).
-
-A report (verdict, banner or artifacts) is one INFO record on `downshift.report`. It is a
-block of lines in the form `Label   value`. It is one record and not one record for each row.
-A log collector therefore keeps a report together. That logger is forced to INFO, so reports
-print at all values of `--log-level`.
+"""Everything the CLI reports, as plain text through `logging`. Each report (verdict, banner,
+artifacts) is one multi-line INFO record on `downshift.report`, so a log collector keeps it
+together.
 """
 
 from __future__ import annotations
@@ -223,11 +218,7 @@ def _shape_text(verdict: ExportVerdict) -> str:
 
 
 def _add_numerics_rows(rows: _Rows, verdict: ExportVerdict) -> None:
-    """Tolerance, Worst and Samples: the three rows that explain the numbers of a verdict.
-
-    The report of `check` and the banner of `serve` show them in the same way. Downshift
-    therefore builds them one time here. Nobody must keep two places in step by hand.
-    """
+    """Tolerance, Worst and Samples: shared by the `check` report and the `serve` banner."""
     tolerance = _tolerance_text(verdict)
     if tolerance is not None:
         rows.add("Tolerance", tolerance)
@@ -439,11 +430,8 @@ def print_config(
     middleware: Sequence[str] = (),
     api_key_set: bool,
 ) -> None:
-    """Every setting that the server runs with, as one `name = value` line for each setting. It
-    logs at INFO (only `--log-level info` or lower shows it), directly before `ready`. The
-    whole of ServeOptions goes out as it is. A new option therefore shows here without a
-    change to this function. It shows names only. The model is its file name. The API key is
-    `set` or `unset` and never its value."""
+    """Every setting of the server, one `name = value` line each, at INFO before `ready`. All
+    of ServeOptions appears. The API key shows only as `set` or `unset`."""
     values = {
         "model": display_source(state.source, state.source_kind),
         "host": host,

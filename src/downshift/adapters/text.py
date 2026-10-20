@@ -1,15 +1,6 @@
-"""Text in, class probabilities out, for a downloaded Hugging Face repo.
-
-`/predict` normally takes tensors. If the served directory also has tokenizer files, it
-accepts `{"text": ...}` too. The server tokenizes and pads the batch (it refuses a row that is
-longer than the limit that the model sets). It then gives the batch to the same graph as the
-tensor path. A sequence classifier also gets a `predictions` block (softmax, or sigmoid for a
-multi-label config) next to the raw logits. This module does not import transformers. The
-tokenizer is the object that the hf adapter loaded. Downshift uses it through its call
-signature.
-
-This is the contract between the hf adapter, which builds a TextIO, and the server, which uses
-it. It is in the adapters package, so the adapters do not depend on the serve package.
+"""`{"text": ...}` on /predict: tokenize and pad the batch for the graph, and turn a
+classifier's logits into `predictions` (softmax, or sigmoid for multi-label). No transformers
+import: the tokenizer comes from hf_repo.
 """
 
 from dataclasses import dataclass
@@ -29,11 +20,8 @@ class TextIO:
     activation: str | None = None  # SOFTMAX or SIGMOID. None if the output is not a class score
 
     def encode(self, text: list[str]) -> dict[str, np.ndarray]:
-        """The tokenizer outputs for a batch of texts, padded to the longest row. The caller
-        selects the outputs that the graph takes. If a row is longer than the model can read,
-        this raises a ValueError. It never cuts the row. The only limit on the input size is the
-        limit on the request body.
-        """
+        """The tokenizer outputs for a batch, padded to the longest row. A row longer than the
+        model reads is a ValueError: it is never cut."""
         encoded = self.tokenizer(text)
         lengths = [len(ids) for ids in encoded["input_ids"]]
         over = {i: n for i, n in enumerate(lengths) if n > self.max_length}
@@ -48,8 +36,8 @@ class TextIO:
         return {name: np.asarray(value) for name, value in padded.items()}
 
     def predictions(self, logits: np.ndarray) -> list[dict[str, Any]] | None:
-        """One {label, score, probabilities} for each row. None if this is not an output of a
-        classifier ([batch, num_labels] with labels to name)."""
+        """One {label, score, probabilities} for each row, or None if this is not a classifier
+        output ([batch, num_labels])."""
         if self.activation is None or self.id2label is None:
             return None
         if logits.ndim != 2 or logits.shape[1] != len(self.id2label):

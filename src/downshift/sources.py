@@ -1,22 +1,15 @@
-"""What a model argument can be. This module uses only the standard library. The banner of the
-CLI can therefore name the kinds without an import of torch. (downshift.loading decides the
-kind, and it imports torch.)
-
-It also gives the name of a source for people who are not the operator: the HTTP routes and
-the manifest that goes with an exported file. They get the file name or directory name. They
-never get the directory layout of the machine that loaded the model."""
+"""The kinds of model source (no torch, for the CLI), and how to name a source for clients and
+manifests: the file or directory name, never the local directory layout."""
 
 import os
 import re
 from collections.abc import Iterable
 
-# /schema reports these to clients. The first three are the forms of a downloaded artifact.
-# "import-spec" names a model that this process can already import.
 ONNX_FILE = "onnx-file"
 TORCH_CHECKPOINT = "torch-checkpoint"
 HF_REPO_DIR = "hf-repo-dir"
 IMPORT_SPEC = "import-spec"
-# The CLI cannot reach this kind. app_for() takes an nn.Module that the host process already built.
+# app_for() only: an nn.Module that the host process built.
 IN_PROCESS_MODULE = "in-process-module"
 UNKNOWN_SOURCE = "unknown"
 
@@ -29,14 +22,13 @@ SOURCE_KIND_HELP = {
     UNKNOWN_SOURCE: "not one of the accepted local forms",
 }
 
-# These two are names and not locations. Every other kind (also an unknown one) is a path.
+# Kinds whose source is a name, not a path.
 LABEL_KINDS = frozenset({IMPORT_SPEC, IN_PROCESS_MODULE})
 
 
 def path_basename(path: str) -> str:
-    """The last component of `path`. Downshift splits on both separators. A Windows path is
-    therefore cut correctly when the server runs on POSIX (and the reverse). "." and ".." name
-    the directory that they point to."""
+    """The last component of `path`, split on both separators. "." and ".." name the
+    directory that they point to."""
     parts = [part for part in re.split(r"[\\/]+", path) if part]
     name = parts[-1] if parts else ""
     if name in ("", ".", ".."):
@@ -45,15 +37,13 @@ def path_basename(path: str) -> str:
 
 
 def display_source(source: str, kind: str) -> str:
-    """`source` as a client or a manifest reader must see it: the file name or directory name
-    for a path. An import spec or an in-process label does not change."""
+    """`source` as a client sees it: the base name of a path; a label as it is."""
     return source if kind in LABEL_KINDS else path_basename(source)
 
 
 def hide_paths(text: str, paths: Iterable[str | os.PathLike[str] | None]) -> str:
-    """`text` with each of `paths` (as given, absolute, and in both separator styles) replaced
-    by its basename. Use it for free-form messages that an exception or a note carries. They
-    quote the path that they received."""
+    """`text` with each of `paths` (as given, absolute, both separator styles) reduced to its
+    base name. For free text that quotes a path, such as an exception message."""
     spellings: set[str] = set()
     for path in paths:
         if not path:
@@ -61,9 +51,8 @@ def hide_paths(text: str, paths: Iterable[str | os.PathLike[str] | None]) -> str
         given = os.fspath(path)
         for spelling in (given, os.path.abspath(given)):
             spellings.update((spelling, spelling.replace("\\", "/"), spelling.replace("/", "\\")))
-    # The longest first. A path is then never half replaced by one of its own prefixes. A
-    # spelling that is only dots and separators ("." for the current directory) would match
-    # everywhere in normal text. A spelling that is already a bare name has nothing to hide.
+    # Longest first, so no path is half replaced through its prefix. Skip spellings that are
+    # only dots and separators (they match everywhere) and bare names (nothing to hide).
     for spelling in sorted(spellings, key=len, reverse=True):
         if not spelling.strip("./\\") or path_basename(spelling) == spelling:
             continue
