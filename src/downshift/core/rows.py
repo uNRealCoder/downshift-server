@@ -144,11 +144,17 @@ def check_rows(
     prepared: Prepared, numerics: NumericsReport, session
 ) -> tuple[bool | None, str | None]:
     """`(row_independent, reason)`. True and None if the rows agree on both backends. False and
-    the reason if they do not. None and the reason if downshift could not check it."""
-    reason = batch_axis(prepared, numerics)
-    if reason is not None:
-        return False, reason
+    the reason if they do not. None and the reason if downshift could not check it.
+
+    The check runs two rows. It finds a model whose rows change each other by more than the
+    tolerance. It cannot prove the absence of a small effect. If the numerics failed, the model
+    is not served, and the check does not run."""
+    if not numerics.passed:
+        return None, "not checked: the numerics check failed"
     try:
+        reason = batch_axis(prepared, numerics)
+        if reason is not None:
+            return False, reason
         sample = two_row_sample(prepared)
         if isinstance(sample, str):
             return None, f"not checked: {sample}"

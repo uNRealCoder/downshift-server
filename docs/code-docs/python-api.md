@@ -262,7 +262,7 @@ All other code reads this one object. `check`, `export`, `intake` and `build_ver
 | `unsupported_ops` | `list[str]` | The `aten::*` operation names that downshift found in the exception messages of a `FAILED` capture. |
 | `warnings` | `list[str]` | Notices that are not fatal: tied weights, the switch to training mode, and the message of an ONNX Runtime load failure. |
 | `row_independent` | `bool \| None` | `True` if each row gives the same output with other rows. Downshift checks it on ONNX Runtime and on torch. `False` if not. `None` if downshift did not check it (the verdict is `FAILED` or `UNVERIFIED`, or a model from 0.5 in the export cache). The result cache needs `True`. |
-| `row_reason` | `str \| None` | Why `row_independent` is not `True`. |
+| `row_reason` | `str \| None` | Why `row_independent` is not `True`. If the numerics check failed, `row_independent` is `None` and the reason is "not checked: the numerics check failed". |
 | `onnx_path` | `Path \| None` | `export()` sets it after it writes the artifact. `intake()` or the serving of a pre-built `.onnx` file also sets it. |
 | `onnx_program` | `object \| None` | The live `torch.onnx.ONNXProgram`, if the capture made one. It is not JSON-able. |
 | `onnx_bytes` | `bytes` | The serialized graph. `capture()` builds it once. It is not JSON-able. |

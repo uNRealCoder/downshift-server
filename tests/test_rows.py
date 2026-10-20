@@ -78,6 +78,26 @@ def test_a_failure_of_the_check_is_not_checked_and_not_a_crash():
     assert reason is not None and reason.startswith("not checked: ")
 
 
+def test_the_rows_are_not_checked_when_the_numerics_failed():
+    prepared, numerics, session = _rows_of(cross_row.make_model(), cross_row.make_inputs())
+    numerics.failures = 1
+
+    assert rows.check_rows(prepared, numerics, session) == (
+        None,
+        "not checked: the numerics check failed",
+    )
+
+
+def test_an_adapter_with_mismatched_axis_specs_is_not_checked_and_not_a_crash():
+    prepared, numerics, session = _rows_of(clean_mlp.make_model(), clean_mlp.make_inputs(2))
+    prepared.dynamic_shapes = ()  # one spec fewer than the inputs
+
+    independent, reason = rows.check_rows(prepared, numerics, session)
+
+    assert independent is None
+    assert reason is not None and reason.startswith("not checked: ValueError")
+
+
 def test_rows_agree_names_the_first_difference():
     def run(feeds):
         out = feeds[0].numpy().copy()
