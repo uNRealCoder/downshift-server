@@ -1,12 +1,12 @@
-"""Each fixture in tests/models/ must construct and run a forward pass.
+"""The models of tests/models/ and examples/ build and run a forward pass."""
 
-There is no export here. This test only makes sure that the fixtures are valid PyTorch models.
-A failure in test_export is then about the exporter and not about the fixture.
-"""
+import importlib
 
 import pytest
 import torch
+from typer.testing import CliRunner
 
+from downshift.cli.main import app
 from tests.models import (
     bf16_weights,
     clean_mlp,
@@ -43,3 +43,27 @@ def test_fixture_forward_pass(module) -> None:
     assert isinstance(output, torch.Tensor)
     assert output.numel() > 0
     assert torch.isfinite(output).all()
+
+
+@pytest.mark.parametrize(
+    ("name", "shape"),
+    [
+        ("clean_mlp", (1, 4)),
+        ("scatter_include_self_false", (4, 8)),
+        ("data_dependent_branch", (1, 8)),
+    ],
+)
+def test_example_forward_pass(name, shape):
+    module = importlib.import_module(f"examples.{name}")
+    assert module.make_model()(*module.make_inputs()).shape == shape
+
+
+def test_data_dependent_branch_both_branches():
+    model = importlib.import_module("examples.data_dependent_branch").make_model()
+    assert model(torch.ones(1, 8)).shape == (1, 8)
+    assert model(-torch.ones(1, 8)).shape == (1, 8)
+
+
+def test_check_examples_clean_mlp_via_cli():
+    result = CliRunner().invoke(app, ["check", "examples.clean_mlp:make_model", "--json"])
+    assert result.exit_code == 0, result.output

@@ -7,6 +7,7 @@ construct.
 """
 
 import logging
+from types import SimpleNamespace
 
 import pytest
 
@@ -644,3 +645,56 @@ def test_print_banner_shows_the_cache_row(caplog):
     state.cache_off_reason = None
     render.print_banner(state, "127.0.0.1", 8000)
     assert "--result-cache-rows 0" in caplog.text
+
+
+def _report_messages(caplog: pytest.LogCaptureFixture) -> list[str]:
+    records = [r for r in caplog.records if r.name == "downshift.report"]
+    assert all(r.levelno == logging.INFO for r in records)
+    return [r.getMessage() for r in records]
+
+
+def _plain_ascii(text: str) -> bool:
+    return "\x1b" not in text and all(ord(c) < 128 for c in text)
+
+
+def test_print_ready_reports_the_boot_time_on_the_report_logger(caplog):
+    with caplog.at_level(logging.INFO, logger="downshift.report"):
+        render.print_ready(SimpleNamespace(timings={"load": 0.5, "export": 1.0, "warmup": 1.5}))
+        render.print_ready(SimpleNamespace(timings={}))
+
+    assert _report_messages(caplog) == ["ready in 3.0 s", "ready"]
+
+
+def test_print_banner_is_one_plain_ascii_report_record(mlp_state, caplog):
+    with caplog.at_level(logging.INFO, logger="downshift.report"):
+        render.print_banner(mlp_state, "0.0.0.0", 8123)
+
+    (banner,) = _report_messages(caplog)
+    assert _plain_ascii(banner)
+    rows = {
+        line.split()[0] for line in banner.splitlines() if line.startswith("  ") and line[2] != " "
+    }
+    assert {"Model", "Capacity", "Endpoint"} <= rows
+    (endpoint,) = [line for line in banner.splitlines() if line.strip().startswith("Endpoint")]
+    assert "http://localhost:8123" in endpoint
+    assert "0.0.0.0:8123" not in endpoint
+
+
+def test_print_banner_names_a_specific_host_as_is(mlp_state, caplog):
+    with caplog.at_level(logging.INFO, logger="downshift.report"):
+        render.print_banner(mlp_state, "10.1.2.3", 9000)
+
+    (banner,) = _report_messages(caplog)
+    (endpoint,) = [line for line in banner.splitlines() if line.strip().startswith("Endpoint")]
+    assert "http://10.1.2.3:9000" in endpoint
+    assert "localhost" not in endpoint
+
+
+def test_print_booting_is_plain_ascii(caplog):
+    with caplog.at_level(logging.INFO, logger="downshift.report"):
+        render.print_booting("some/model", "::", 8000)
+
+    messages = _report_messages(caplog)
+    assert len(messages) == 2
+    assert all(_plain_ascii(m) for m in messages)
+    assert "http://localhost:8000" in messages[1]

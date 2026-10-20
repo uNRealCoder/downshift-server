@@ -87,6 +87,9 @@ ignore = [
     "B008",  # typer's API requires call-in-default for Option()/Argument()
 ]
 
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]  # imports after pytest.importorskip
+
 [tool.ruff.lint.isort]
 known-first-party = ["downshift"]
 

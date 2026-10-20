@@ -1,10 +1,12 @@
-"""intake(): a .onnx file that someone else made, with and without a reference model."""
+"""core/verdict.py: prepare_model, and intake() of a .onnx file with and without a reference."""
+
+import pytest
 
 import downshift
 from downshift.core import verify as verify_mod
-from downshift.core.verdict import intake
+from downshift.core.verdict import intake, prepare_model
 from downshift.sources import ONNX_FILE
-from tests.models import clean_mlp
+from tests.models import clean_mlp, scatter_include_self_false
 
 
 def test_intake_without_reference_is_unverified(exported_mlp):
@@ -88,3 +90,9 @@ def test_intake_serves_an_onnx_with_an_external_data_file(tmp_path, monkeypatch)
     opts = ServeOptions(k=1, device="cpu", warmup=1)
     state = state_from_entry(entry, None, opts, None, source=str(path), kind=ONNX_FILE)
     assert state.backend.name == "onnxruntime"
+
+
+def test_prepare_model_raises_when_nothing_can_guess_inputs():
+    model = scatter_include_self_false.make_model()
+    with pytest.raises(ValueError, match="Cannot find example inputs"):
+        prepare_model(model, None, "generic")

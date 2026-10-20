@@ -2,6 +2,8 @@
 
 import dataclasses
 import inspect
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +15,7 @@ import downshift
 from downshift.adapters import _flatten, generic, hf, pyg, registry
 from downshift.core.verdict import prepare_model
 from downshift.loading import LoadError
+from tests.conftest import REPO_ROOT, subprocess_env
 from tests.models import (
     clean_mlp,
     dict_input,
@@ -491,3 +494,48 @@ def test_hf_vary_fn_without_a_declared_limit_never_samples_at_the_cap():
     vary = hf.make_vary_fn(base, vocab_size=100, max_seq=4096)
 
     assert all(vary(i)[0].shape[1] <= 8 for i in range(1, 21))
+
+
+def _run(script: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+        env=subprocess_env(REPO_ROOT),
+    )
+
+
+def test_prepare_serving_on_clean_mlp_does_not_import_optional_families() -> None:
+    script = """
+import sys
+
+from tests.models import clean_mlp
+from downshift.loading import LoadedModel
+from downshift.serve.engine import prepare_serving
+
+loaded = LoadedModel(source="tests.models.clean_mlp", model=clean_mlp.make_model(),
+                      example_inputs=clean_mlp.make_inputs())
+state = prepare_serving(loaded)
+assert state.verdict.status == "CLEAN", state.verdict.reason
+assert "transformers" not in sys.modules
+assert "torch_geometric" not in sys.modules
+print("OK")
+"""
+    result = _run(script)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "OK" in result.stdout
+
+
+def test_detect_on_tiny_bert_still_returns_hf() -> None:
+    script = """
+from downshift.adapters import registry
+from tests.models import tiny_bert
+
+adapter = registry.detect(tiny_bert.make_model(), tiny_bert.make_inputs())
+assert adapter.name == "hf", adapter.name
+print("OK")
+"""
+    result = _run(script)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "OK" in result.stdout

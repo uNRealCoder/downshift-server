@@ -3,10 +3,14 @@ reload the module around each case. They do not import the constants one time at
 """
 
 import importlib
+import json
+import subprocess
+import sys
 
 import pytest
 
 from downshift import settings
+from tests.conftest import subprocess_env
 
 
 @pytest.fixture(autouse=True)
@@ -156,3 +160,39 @@ def test_result_cache_rows_is_unset_by_default_and_read_from_the_env(
 
     monkeypatch.setenv("DOWNSHIFT_RESULT_CACHE_ROWS", "250")
     assert importlib.reload(settings).RESULT_CACHE_ROWS == 250
+
+
+def test_the_body_and_timeout_defaults():
+    assert settings.DEFAULT_MAX_BODY_BYTES == 32 * 1024 * 1024
+    assert settings.DEFAULT_REQUEST_TIMEOUT == 30.0
+
+
+def _serve_options_in_a_child(**env: str) -> dict:
+    """ServeOptions() as a new interpreter sees it. Downshift reads its defaults from settings
+    when downshift.serve.options is first imported. A reload in the same process cannot show
+    them."""
+    code = (
+        "import json; from downshift.serve.options import ServeOptions; o = ServeOptions(); "
+        "print(json.dumps({'max_body_bytes': o.max_body_bytes, 'request_timeout': o.request_timeout}))"
+    )
+    child_env = {k: v for k, v in subprocess_env().items() if not k.startswith("DOWNSHIFT_")}
+    child_env.update(env)
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, env=child_env
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout.strip().splitlines()[-1])
+
+
+def test_serve_options_pick_up_the_new_defaults():
+    assert _serve_options_in_a_child() == {
+        "max_body_bytes": 32 * 1024 * 1024,
+        "request_timeout": 30.0,
+    }
+
+
+def test_the_environment_overrides_reach_serve_options():
+    options = _serve_options_in_a_child(
+        DOWNSHIFT_MAX_BODY_BYTES="4096", DOWNSHIFT_REQUEST_TIMEOUT="2.5"
+    )
+    assert options == {"max_body_bytes": 4096, "request_timeout": 2.5}

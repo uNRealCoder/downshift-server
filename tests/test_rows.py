@@ -4,14 +4,10 @@ import pytest
 
 pytest.importorskip("transformers")
 
-from downshift.adapters.embedding import (  # noqa: E402
-    EMBEDDING_ATTR,
-    PADDING_SIDE_ATTR,
-    EmbeddingRecipe,
-)
-from downshift.core import rows  # noqa: E402
-from downshift.core.verdict import build_verdict, prepare_model  # noqa: E402
-from tests.models import clean_mlp, cross_row, tiny_bert  # noqa: E402
+from downshift.adapters.embedding import EMBEDDING_ATTR, PADDING_SIDE_ATTR, EmbeddingRecipe
+from downshift.core import rows
+from downshift.core.verdict import build_verdict, prepare_model
+from tests.models import clean_mlp, cross_row, tiny_bert
 
 
 def _rows_of(model, example=None):

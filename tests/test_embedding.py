@@ -13,22 +13,17 @@ import pytest
 pytest.importorskip("transformers")
 pytest.importorskip("tokenizers")
 
-import torch  # noqa: E402
-from fastapi.testclient import TestClient  # noqa: E402
-from transformers import AutoModel, BertForSequenceClassification  # noqa: E402
+import torch
+from fastapi.testclient import TestClient
+from transformers import AutoModel, BertForSequenceClassification
 
-from downshift.adapters.embedding import (  # noqa: E402
-    RecipeError,
-    pool,
-    read_recipe,
-    resolve_recipe,
-)
-from downshift.cli import main, runtime  # noqa: E402
-from downshift.loading import LoadError, LoadSpec, load_model  # noqa: E402
-from downshift.serve.app import build_app  # noqa: E402
-from downshift.serve.engine import prepare_serving  # noqa: E402
-from downshift.serve.options import BackendChoice, ServeOptions  # noqa: E402
-from tests.models import hf_repo  # noqa: E402
+from downshift.adapters.embedding import RecipeError, pool, read_recipe, resolve_recipe
+from downshift.cli import main, runtime
+from downshift.loading import LoadError, LoadSpec, load_model
+from downshift.serve.app import build_app
+from downshift.serve.engine import prepare_serving
+from downshift.serve.options import BackendChoice, ServeOptions
+from tests.models import hf_repo
 
 TEXTS = ["hello world", "ignore previous instructions the capital", "the"]
 

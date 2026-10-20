@@ -8,24 +8,20 @@ import pytest
 pytest.importorskip("transformers")
 pytest.importorskip("tokenizers")
 
-import torch  # noqa: E402
-from fastapi.testclient import TestClient  # noqa: E402
-from transformers import BertForSequenceClassification, BertModel  # noqa: E402
+import torch
+from fastapi.testclient import TestClient
+from transformers import BertForSequenceClassification, BertModel
 
-import downshift  # noqa: E402
-from downshift.adapters.text import SIGMOID, SOFTMAX, TextIO  # noqa: E402
-from downshift.core.memo import ExportEntry  # noqa: E402
-from downshift.hf_repo import load_pretrained  # noqa: E402
-from downshift.loading import LoadedModel, LoadSpec, load_model  # noqa: E402
-from downshift.serve import app_for  # noqa: E402
-from downshift.serve.app import build_app  # noqa: E402
-from downshift.serve.engine import (  # noqa: E402
-    ServeOptions,
-    prepare_serving,
-    state_from_entry,
-)
-from downshift.sources import ONNX_FILE  # noqa: E402
-from tests.models import hf_repo, tiny_bert  # noqa: E402
+import downshift
+from downshift.adapters.text import SIGMOID, SOFTMAX, TextIO
+from downshift.core.memo import ExportEntry
+from downshift.hf_repo import load_pretrained
+from downshift.loading import LoadedModel, LoadSpec, load_model
+from downshift.serve import app_for
+from downshift.serve.app import build_app
+from downshift.serve.engine import ServeOptions, prepare_serving, state_from_entry
+from downshift.sources import ONNX_FILE
+from tests.models import hf_repo, tiny_bert
 
 LABELS = {0: "BENIGN", 1: "INJECTION", 2: "JAILBREAK"}
 MAX_POSITIONS = hf_repo.MAX_POSITIONS
@@ -388,7 +384,7 @@ def test_app_for_takes_tokenizer_from_independent_of_reference(embedding_onnx, e
 
 # --- decoder embedder: left and right padding, named prompts (0.5.0 E3, E5) -------------------
 
-import json  # noqa: E402
+import json
 
 TEXTS = ["hello", "the capital hello world", "world the"]
 

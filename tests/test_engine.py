@@ -2,6 +2,7 @@
 backends."""
 
 import dataclasses
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import pytest
 import torch
 
 import downshift
+from downshift.core.phase import CURRENT_PROGRESS, LoadProgress, Phase, report
 from downshift.core.verdict import ExportVerdict, prepare_model
 from downshift.loading import LoadedModel, LoadSpec, load_model
 from downshift.serve import backends as backends_mod
@@ -467,7 +469,6 @@ def test_check_leaves_global_rng_alone():
 
 
 def test_verify_logs_one_progress_line_per_sample_with_every_input_shape(caplog):
-    import logging
 
     from downshift.logs import REPORT_LOGGER
 
@@ -479,3 +480,24 @@ def test_verify_logs_one_progress_line_per_sample_with_every_input_shape(caplog)
     assert len(lines) == 3
     for i, line in enumerate(lines, start=1):
         assert line.startswith(f"verify: sample {i}/3, x [")
+
+
+def test_report_is_a_no_op_when_nothing_is_listening():
+    token = CURRENT_PROGRESS.set(None)
+    try:
+        report(Phase.export)
+    finally:
+        CURRENT_PROGRESS.reset(token)
+
+
+def test_report_updates_the_current_progress():
+    progress = LoadProgress()
+    assert progress.phase == Phase.load
+    token = CURRENT_PROGRESS.set(progress)
+    try:
+        report(Phase.export)
+        assert progress.phase == Phase.export
+        report(Phase.warmup)
+        assert progress.phase == "warmup"
+    finally:
+        CURRENT_PROGRESS.reset(token)

@@ -1,9 +1,18 @@
 """AxisFact: sampled vs served ranges per dynamic axis (core/axes.py)."""
 
+import json
+
 import pytest
 
 import downshift
-from downshift.core.axes import AxisFact, axis_facts, classify_outputs
+from downshift.core.axes import (
+    AxisFact,
+    DimBound,
+    axis_bounds_from_json,
+    axis_bounds_to_json,
+    axis_facts,
+    classify_outputs,
+)
 from downshift.core.verdict import ExportVerdict
 from tests.models import clean_mlp, gnn_gcn, tiny_bert
 
@@ -111,3 +120,22 @@ def test_classify_outputs_unknown_for_scalar_or_unrelated_sizes() -> None:
 
 def test_classify_outputs_without_output_shapes_is_empty() -> None:
     assert classify_outputs([[(6, 8), (2, 10)]], [], 0, 1) == []
+
+
+BOUNDS = {
+    "input_ids": {0: DimBound("batch", 1, 4096), 1: DimBound("seq", 1, 510)},
+    "attention_mask": {0: DimBound("batch", 1, 4096), 1: DimBound("seq", 1, 510)},
+}
+
+
+def test_axis_bounds_round_trip_through_json():
+    encoded = axis_bounds_to_json(BOUNDS)
+
+    assert encoded["input_ids"] == [[0, "batch", 1, 4096], [1, "seq", 1, 510]]
+    restored = axis_bounds_from_json(json.loads(json.dumps(encoded)))
+    assert restored == BOUNDS
+    assert all(isinstance(axis, int) for axes in restored.values() for axis in axes)
+
+
+def test_axis_bounds_round_trip_of_nothing():
+    assert axis_bounds_from_json(axis_bounds_to_json({})) == {}

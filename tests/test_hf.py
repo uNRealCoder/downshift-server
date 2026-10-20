@@ -4,8 +4,16 @@ import pytest
 
 pytest.importorskip("transformers")
 
-import downshift  # noqa: E402
-from tests.models import tiny_bert  # noqa: E402
+import json
+import pickle
+from pathlib import Path
+from types import SimpleNamespace
+
+import downshift
+from downshift.cli import main
+from downshift.loading import LoadError, LoadSpec, load_model
+from downshift.serve.engine import ServeOptions, prepare_serving
+from tests.models import hf_repo, tiny_bert
 
 
 @pytest.fixture(scope="module")
@@ -55,7 +63,6 @@ def test_bert_at_max_position_embeddings_is_clean():
 @pytest.mark.needs_torch_26
 def test_bert_at_max_position_embeddings_serves():
     from downshift.loading import LoadedModel
-    from downshift.serve.engine import prepare_serving
 
     model = tiny_bert.make_model()
     inputs = tiny_bert.make_inputs(batch=1, seq=64)
@@ -84,15 +91,7 @@ def test_axis_max_above_the_position_limit_is_a_value_error():
         downshift.check(tiny_bert.make_model(), tiny_bert.make_inputs(), axis_max={"seq": 65})
 
 
-# --- refusals (0.5.0 E2) ---
-
-import json  # noqa: E402
-import pickle  # noqa: E402
-from pathlib import Path  # noqa: E402
-
-from downshift.cli import main  # noqa: E402
-from downshift.loading import LoadError, LoadSpec, load_model  # noqa: E402
-from tests.models import hf_repo  # noqa: E402
+# --- refusals ---
 
 
 def _cli(*args: str):
@@ -228,8 +227,6 @@ def test_the_torch_model_is_released_after_a_clean_onnx_verdict(tmp_path):
     import gc
     import weakref
 
-    from downshift.serve.engine import prepare_serving
-
     path = hf_repo.write_decoder_repo(tmp_path, recipe="lasttoken")
     loaded = load_model(LoadSpec(path))
     ref = weakref.ref(loaded.model)
@@ -246,7 +243,6 @@ def test_the_torch_model_is_released_after_a_clean_onnx_verdict(tmp_path):
 
 
 def test_the_torch_backend_keeps_its_model(tmp_path):
-    from downshift.serve.engine import ServeOptions, prepare_serving
 
     path = hf_repo.write_decoder_repo(tmp_path, recipe="lasttoken")
 
@@ -254,3 +250,54 @@ def test_the_torch_backend_keeps_its_model(tmp_path):
 
     assert state.backend.name == "torch"
     assert state.verdict.prepared is not None
+
+
+@pytest.fixture(scope="module")
+def hf():
+    pytest.importorskip("transformers")
+    from downshift import hf_repo as module
+
+    return module
+
+
+def test_position_limit_of_a_roberta_config_skips_the_padding_offset(hf):
+    from transformers import RobertaConfig
+
+    config = RobertaConfig(max_position_embeddings=514, pad_token_id=1)
+    assert hf.position_limit(config) == 512
+
+
+def test_position_limit_of_the_other_roberta_family_configs(hf):
+    from transformers import XLMRobertaConfig
+
+    assert hf.position_limit(XLMRobertaConfig(max_position_embeddings=514)) == 512
+    assert (
+        hf.position_limit(SimpleNamespace(model_type="camembert", max_position_embeddings=514))
+        == 512
+    )
+
+
+def test_position_limit_uses_the_configs_own_pad_token_id(hf):
+    config = SimpleNamespace(model_type="roberta", max_position_embeddings=514, pad_token_id=3)
+    assert hf.position_limit(config) == 514 - 4
+
+
+def test_position_limit_assumes_pad_id_one_when_a_roberta_config_has_none(hf):
+    config = SimpleNamespace(model_type="roberta", max_position_embeddings=514, pad_token_id=None)
+    assert hf.position_limit(config) == 512
+
+
+def test_position_limit_never_drops_below_two(hf):
+    config = SimpleNamespace(model_type="roberta", max_position_embeddings=3, pad_token_id=5)
+    assert hf.position_limit(config) == 2
+
+
+def test_position_limit_of_bert_is_unchanged(hf):
+    from transformers import BertConfig
+
+    assert hf.position_limit(BertConfig(max_position_embeddings=512)) == 512
+    assert hf.position_limit(BertConfig(max_position_embeddings=512, pad_token_id=7)) == 512
+
+
+def test_position_limit_is_none_without_a_declared_maximum(hf):
+    assert hf.position_limit(SimpleNamespace(model_type="bert")) is None

@@ -14,8 +14,10 @@ from typer.testing import CliRunner
 import downshift
 from downshift.cli import main, runtime
 from downshift.cli.main import app
+from downshift.cli.runtime import ArtifactHandoff, ServeArgs
+from downshift.core.axes import DimBound, axis_bounds_from_json, axis_bounds_to_json
 from downshift.loading import LoadSpec
-from downshift.serve.options import ServeOptions
+from downshift.serve.options import BackendChoice, ServeOptions
 from downshift.serve.schemas import OutputEncoding
 from tests.conftest import TLS_KEY_PASSWORD
 from tests.models import clean_mlp
@@ -728,3 +730,60 @@ def test_serve_passes_result_cache_rows_and_it_survives_workers(monkeypatch):
     _serve_captured(monkeypatch, "--result-cache-rows", "12", "--workers", "2")
     args = runtime.ServeArgs.from_json(os.environ[runtime._SERVE_ARGS_ENV])
     assert args.options.result_cache_rows == 12
+
+
+BOUNDS = {
+    "input_ids": {0: DimBound("batch", 1, 4096), 1: DimBound("seq", 1, 510)},
+    "attention_mask": {0: DimBound("batch", 1, 4096), 1: DimBound("seq", 1, 510)},
+}
+
+
+def _serve_args(**overrides) -> ServeArgs:
+    fields = {
+        "load": LoadSpec("some/model", pooling="mean", normalize=True),
+        "options": ServeOptions(
+            backend=BackendChoice.torch,
+            output_encoding=OutputEncoding.base64,
+            max_body_bytes=1234,
+            request_timeout=2.5,
+            dynamic={"x": [0, 1]},
+        ),
+        "reference": "ref.pt",
+        "middleware": ["pkg.mod:Mw"],
+        "log_level": "info",
+        "artifact": ArtifactHandoff(
+            verdict={"status": "CLEAN"},
+            input_names=["input_ids", "attention_mask"],
+            onnx_path="model.onnx",
+            feeds_path="feeds.npz",
+            axis_bounds=axis_bounds_to_json(BOUNDS),
+            kind="onnx-file",
+        ),
+        "access_log": False,
+        "tokenizer_from": "path/to/repo/dir",
+    }
+    fields.update(overrides)
+    return ServeArgs(**fields)
+
+
+def test_serve_args_round_trip_keeps_access_log_and_axis_bounds():
+    args = _serve_args()
+
+    restored = ServeArgs.from_json(args.to_json())
+
+    assert restored == args
+    assert restored.access_log is False
+    assert restored.options.backend is BackendChoice.torch
+    assert restored.options.output_encoding is OutputEncoding.base64
+    assert restored.artifact is not None
+    assert axis_bounds_from_json(restored.artifact.axis_bounds) == BOUNDS
+
+
+def test_serve_args_round_trip_without_an_artifact_defaults_access_log_on():
+    args = _serve_args(artifact=None, access_log=True)
+
+    restored = ServeArgs.from_json(args.to_json())
+
+    assert restored == args
+    assert restored.artifact is None
+    assert restored.access_log is True
