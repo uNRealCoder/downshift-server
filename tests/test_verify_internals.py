@@ -403,3 +403,14 @@ def test_resize_dim0_stays_near_the_example_rather_than_pure_noise():
     tiled = torch.tensor([[0.0], [10.0], [0.0], [10.0]])
     assert resized.shape == (4, 1)
     assert torch.all((resized - tiled).abs() < 5.0)
+
+
+def test_compare_sample_never_picks_a_nan_error_as_the_worst():
+    expected = [torch.tensor([float("nan")]), torch.tensor([1.0])]
+    got = [np.array([0.0]), np.array([3.0])]
+
+    _, _, failed, _, worst = _compare_sample(expected, got, 1e-4, 1e-3, 0)
+
+    assert failed is True
+    assert worst is not None
+    assert worst[0] == 1  # output 1, the real error, and not the NaN of output 0

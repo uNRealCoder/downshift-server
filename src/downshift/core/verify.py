@@ -190,6 +190,7 @@ def _compare_sample(
     sample_abs = sample_rel = 0.0
     failed = False
     worst: WorstCandidate | None = None
+    worst_abs = -1.0  # a NaN error never compares greater, so it is never the worst
     for idx, (expected, got) in enumerate(zip(torch_outs, ort_outs, strict=True)):
         # bf16 and fp16 have no faithful numpy dtype: widen floats to float32 first.
         expected = expected.detach()
@@ -210,10 +211,11 @@ def _compare_sample(
         sample_abs = max(sample_abs, output_abs)
         rel_err = abs_err / (np.abs(expected64) + 1e-8)
         sample_rel = max(sample_rel, float(rel_err.max(initial=0.0)))
-        if abs_err.size and (worst is None or output_abs > worst[4]):
+        if abs_err.size and output_abs > worst_abs:
             flat = int(np.argmax(abs_err))
             index = tuple(int(x) for x in np.unravel_index(flat, abs_err.shape))
-            worst = (idx, index, float(expected64.flat[flat]), float(got64.flat[flat]), output_abs)
+            worst_abs = float(abs_err.flat[flat])
+            worst = (idx, index, float(expected64.flat[flat]), float(got64.flat[flat]), worst_abs)
         if not np.isclose(got64, expected64, rtol=rtol, atol=atol, equal_nan=False).all():
             failed = True
     return sample_abs, sample_rel, failed, note, worst

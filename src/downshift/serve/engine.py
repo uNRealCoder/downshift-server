@@ -232,7 +232,11 @@ def choose_backend(
         wanted = BackendName.onnxruntime
         notes.append("--force-onnx: serving a DEGRADED graph; outputs may be wrong")
 
-    has_onnx = any((verdict.onnx_program, verdict.onnx_path, verdict.onnx_bytes))
+    has_onnx = (
+        verdict.onnx_program is not None
+        or verdict.onnx_path is not None
+        or bool(verdict.onnx_bytes)
+    )
     if has_torch is None:
         has_torch = verdict.prepared is not None
     if wanted == BackendName.onnxruntime and not has_onnx:
