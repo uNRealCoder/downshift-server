@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from torch import nn
 
+from downshift import settings
 from downshift.core.phase import Phase, report
 from downshift.loading import LoadSpec, load_model
 from downshift.serve.app import build_app
@@ -598,3 +599,14 @@ def test_server_timing_and_the_access_log_carry_the_wait_stages(mlp_state):
     assert resp.status_code == 200
     names = [part.split(";")[0] for part in resp.headers["server-timing"].split(", ")]
     assert names == ["parse", "prep_wait", "prep", "infer_wait", "infer", "encode"]
+
+
+def test_a_500_sets_the_configured_request_id_header(torch_state, monkeypatch):
+    monkeypatch.setattr(settings, "REQUEST_ID_HEADER", "X-Correlation-Id")
+    monkeypatch.setattr(torch_state.backend, "module", _Failing("boom"))
+    client = TestClient(build_app(torch_state, api_key=None), raise_server_exceptions=False)
+
+    resp = client.post("/predict", json=MLP_INPUT, headers={"X-Correlation-Id": "trace-500"})
+
+    assert resp.status_code == 500
+    assert resp.json()["request_id"] == resp.headers["x-correlation-id"] == "trace-500"

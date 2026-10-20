@@ -160,7 +160,7 @@ Boot        6.4 s: load 0.3, export 2.8, verify 0.2, session 0.1, warmup 0.1
 All output goes through Python `logging` to stdout, as plain text in the form `time LEVEL logger: message`. Point your log shipper at stdout. [`cli.md`](cli.md#logging) gives what each `--log-level` prints.
 
 - The request line goes to `downshift.access`, for example `POST /predict 200 12.3 ms request_id=3f9c1a7b2e4d5c60`. A `4xx` or `5xx` line prints at the default level. The probes log only at `debug`. Give `--no-access-log` if your proxy already logs each request.
-- Each response has `X-Request-Id`. If the client sent one, downshift returns it. The ID is on each log line that the request writes. A `500` body has the same `request_id`, so "see the server log" has a search key.
+- Each response has `X-Request-Id`. If your proxy or tracing uses another name, set `DOWNSHIFT_REQUEST_ID_HEADER`, for example `X-Correlation-Id`. If the client sent one, downshift returns it. The ID is on each log line that the request writes. A `500` body has the same `request_id`, so "see the server log" has a search key.
 
 ## No egress at start
 

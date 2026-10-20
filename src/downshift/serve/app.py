@@ -19,6 +19,7 @@ from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 import downshift
+from downshift import settings
 from downshift._imports import import_object
 from downshift.core.phase import CURRENT_PROGRESS, LoadProgress
 from downshift.logs import request_id_var
@@ -236,14 +237,15 @@ def require_serving(request: Request) -> ServingState:
 
 
 class RequestIdMiddleware:
-    """Pure ASGI (BaseHTTPMiddleware would buffer each response). It takes X-Request-Id or
-    makes one, binds it to `request_id_var` for the log lines, and returns it. With
+    """Pure ASGI (BaseHTTPMiddleware would buffer each response). It takes the request ID from
+    the `header` of the request (DOWNSHIFT_REQUEST_ID_HEADER, default X-Request-Id) or makes one, binds it to `request_id_var` for the log lines, and returns it. With
     `access_log`, it writes one line for each request: WARNING from status 400, DEBUG for the
     probes, INFO otherwise, with the stage timings of a predict."""
 
-    def __init__(self, app: ASGIApp, access_log: bool = True) -> None:
+    def __init__(self, app: ASGIApp, access_log: bool = True, header: str = "X-Request-Id") -> None:
         self.app = app
         self.access_log = access_log
+        self.header = header.lower()
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -251,7 +253,7 @@ class RequestIdMiddleware:
             return
 
         start = time.perf_counter()
-        request_id = Headers(scope=scope).get("x-request-id") or uuid.uuid4().hex[:16]
+        request_id = Headers(scope=scope).get(self.header) or uuid.uuid4().hex[:16]
         state = scope.setdefault("state", {})
         state["request_id"] = request_id
         status: int | None = None
@@ -260,7 +262,7 @@ class RequestIdMiddleware:
             nonlocal status
             if message["type"] == "http.response.start":
                 status = message["status"]
-                MutableHeaders(scope=message).append("x-request-id", request_id)
+                MutableHeaders(scope=message).append(self.header, request_id)
             await send(message)
 
         token = request_id_var.set(request_id)
@@ -416,7 +418,8 @@ def build_app(
     # sees only authenticated traffic. The request ID wraps everything, the 401s included.
     load_middleware(app, middleware)
     app.add_middleware(ApiKeyMiddleware, api_key=api_key)
-    app.add_middleware(RequestIdMiddleware, access_log=access_log)
+    request_id_header = settings.REQUEST_ID_HEADER
+    app.add_middleware(RequestIdMiddleware, access_log=access_log, header=request_id_header)
 
     @app.exception_handler(Exception)
     async def _unhandled_exception(request: Request, exc: Exception) -> JSONResponse:
@@ -439,7 +442,7 @@ def build_app(
                 "request_id": request_id,
             },
             status_code=500,
-            headers={"X-Request-Id": request_id} if request_id else None,
+            headers={request_id_header: request_id} if request_id else None,
         )
 
     @app.get("/", response_model=IndexResponse)

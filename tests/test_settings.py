@@ -192,3 +192,24 @@ def test_the_environment_overrides_reach_serve_options():
         DOWNSHIFT_MAX_BODY_BYTES="4096", DOWNSHIFT_REQUEST_TIMEOUT="2.5"
     )
     assert options == {"max_body_bytes": 4096, "request_timeout": 2.5}
+
+
+def test_request_id_header_defaults_to_x_request_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DOWNSHIFT_REQUEST_ID_HEADER", raising=False)
+    assert importlib.reload(settings).REQUEST_ID_HEADER == "X-Request-Id"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"), [("X-Correlation-Id", "X-Correlation-Id"), ("", "X-Request-Id")]
+)
+def test_request_id_header_is_read_from_the_env(
+    monkeypatch: pytest.MonkeyPatch, raw, expected
+) -> None:
+    monkeypatch.setenv("DOWNSHIFT_REQUEST_ID_HEADER", raw)
+    assert importlib.reload(settings).REQUEST_ID_HEADER == expected
+
+
+def test_a_bad_request_id_header_name_says_what_to_use(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DOWNSHIFT_REQUEST_ID_HEADER", "X Request Id")
+    with pytest.raises(ValueError, match="not a valid HTTP header name.*X-Correlation-Id"):
+        importlib.reload(settings)

@@ -5,6 +5,7 @@ variables are read once, at import.
 
 import math
 import os
+import re
 from collections.abc import Callable, Iterable
 
 # The decoded size that one base64 tensor input can reach. The server passes its own limit.
@@ -63,6 +64,23 @@ def _env_choice(name: str, default: str, choices: tuple[str, ...], type_name: st
         return raw
 
     return _env_cast(name, default, cast, f"{type_name} (one of {', '.join(choices)})")
+
+
+# The characters of an HTTP header name (the RFC 9110 token).
+_HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
+
+
+def _env_header(name: str, default: str) -> str:
+    """A header name from the environment. Unset or empty means the default."""
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    if not _HEADER_NAME.fullmatch(raw):
+        raise ValueError(
+            f"{name}={raw!r} is not a valid HTTP header name. Use letters, digits and '-' "
+            "only, for example X-Correlation-Id"
+        )
+    return raw
 
 
 def parse_axis_max(items: Iterable[str]) -> dict[str, int]:
@@ -162,6 +180,10 @@ WORKERS = _env_int("DOWNSHIFT_WORKERS", 1)
 # If it is set, every route except /health and /ready needs "Authorization: Bearer <this value>".
 # None (unset) means no authentication, with a startup warning that says so.
 API_KEY = os.environ.get("DOWNSHIFT_SERVER_API_KEY")
+
+# The header that carries the request ID: the server reads it from a request and sets it on
+# each response.
+REQUEST_ID_HEADER = _env_header("DOWNSHIFT_REQUEST_ID_HEADER", "X-Request-Id")
 
 # HTTPS. If SSL_CERTFILE is set, `serve` uses TLS. The key can be in the cert file, or in its
 # own file. The password of an encrypted key is an environment variable only, so that it does

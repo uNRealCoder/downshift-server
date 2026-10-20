@@ -11,6 +11,7 @@ import warnings
 import pytest
 from fastapi.testclient import TestClient
 
+from downshift import settings
 from downshift.loading import LoadSpec, load_model
 from downshift.logs import request_id_var, setup_logging
 from downshift.serve.app import build_app
@@ -235,3 +236,15 @@ def test_a_client_supplied_request_id_is_echoed_on_a_logged_request(client, capl
     assert resp.headers["x-request-id"] == "caller-7"
     (record,) = _access_records(caplog)
     assert record.status == 200
+
+
+def test_the_request_id_header_name_comes_from_the_settings(mlp_state, monkeypatch):
+    monkeypatch.setattr(settings, "REQUEST_ID_HEADER", "X-Correlation-Id")
+    client = TestClient(build_app(mlp_state, api_key=None))
+
+    supplied = client.get("/health", headers={"X-Correlation-Id": "trace-me"})
+    generated = client.get("/health", headers={"X-Request-Id": "ignored"})
+
+    assert supplied.headers["x-correlation-id"] == "trace-me"
+    assert "x-request-id" not in supplied.headers
+    assert generated.headers["x-correlation-id"] != "ignored"
