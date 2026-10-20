@@ -52,8 +52,8 @@ OutputEncodingField = Annotated[
 # --------------------------------------------------------------------------------------------------
 
 # ORT reports dtypes as "tensor(float)". Map those names to numpy names. bfloat16 has no numpy
-# dtype of its own. The wire contract for it is float32, the same as for the torch backend
-# (B1). It therefore maps there too.
+# dtype of its own. The wire contract for it is float32, the same as for the torch backend.
+# It therefore maps there too.
 _ORT_DTYPES = {
     "float": "float32",
     "float16": "float16",
@@ -430,7 +430,7 @@ class IndexResponse(BaseModel):
 
 class ReadyResponse(BaseModel):
     ready: bool
-    # The current phase of the loader while the app is not ready (U4). None when it is ready, or
+    # The current phase of the loader while the app is not ready. None when it is ready, or
     # when the app was built with state= directly (no loader, so no not-ready window to report).
     phase: str | None = None
 

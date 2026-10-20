@@ -137,8 +137,8 @@ WorkersOpt = Annotated[
     typer.Option(
         "--workers",
         min=1,
-        help="The number of uvicorn worker processes. Each one loads, exports and warms up "
-        "the model itself",
+        help="The number of uvicorn worker processes. The parent exports and verifies one "
+        "time. Each worker loads that result and warms up",
     ),
 ]
 OutputEncodingOpt = Annotated[

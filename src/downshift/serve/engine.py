@@ -36,10 +36,9 @@ from downshift.serve.backends import (
     TorchBackend,
     concrete_dim,
     resolve_device,
-    verified_provider_for,
 )
 from downshift.serve.graphs import eager_output_axes
-from downshift.serve.options import BackendChoice, ExecutionChoice, ServeOptions
+from downshift.serve.options import BackendChoice, ServeOptions
 from downshift.serve.result_cache import ResultCache
 from downshift.serve.schemas import normalize_dtype
 from downshift.settings import DEFAULT_RESULT_CACHE_ROWS
@@ -85,7 +84,7 @@ class ServingState:
     # --pooling gives one). It is already part of the graph. It is kept here so that /schema can
     # say what it is.
     embedding: EmbeddingRecipe | None = None
-    # The vocabulary size of the model, if the source is a Hugging Face repo directory (B3). It
+    # The vocabulary size of the model, if the source is a Hugging Face repo directory. It
     # lets the predict path check the range of input_ids before the inference. ORT would wrap
     # negative values.
     vocab_size: int | None = None
@@ -95,7 +94,7 @@ class ServingState:
     # of the CLI banner and the `boot` field of /metadata read it.
     timings: dict[str, float] = field(default_factory=dict)
     # For each input and each dynamic axis: the (name, min, max) that the export of downshift
-    # traced (U2). Empty for a bare .onnx file with no reference model. There is no Prepared from
+    # traced. Empty for a bare .onnx file with no reference model. There is no Prepared from
     # which to read it.
     axis_bounds: AxisBounds = field(default_factory=dict, repr=False)
     # Not JSON-able, and not part of the identity of a serving state. Downshift builds it again
@@ -153,10 +152,6 @@ class ServingState:
     def release(self) -> None:
         with self._admission_lock:
             self.in_flight -= 1
-
-    @property
-    def execution(self) -> ExecutionChoice:
-        return self.options.execution
 
     @property
     def backend_auto_selected(self) -> bool:
@@ -295,7 +290,7 @@ def attach_hf_metadata(state: ServingState) -> None:
     served model itself for a Hugging Face repo directory. Or it is a companion HF repo
     directory that --tokenizer-from names, if the served model is a bare .onnx file.
 
-    Each place that builds a ServingState calls this (through finish_state), also for a reused
+    Each place that builds a ServingState calls this (through _new_state), also for a reused
     export. Downshift reads the embedding recipe again from the repo with the same overrides
     that the load used. It therefore needs no handoff from the loader. Text input is optional
     by nature. If a repo has no tokenizer, or the [hf] extra is missing, only the `text` input
@@ -317,7 +312,7 @@ def attach_hf_metadata(state: ServingState) -> None:
         return
 
     # One config read for everything below. vocab_size is set before anything that needs a
-    # tokenizer or a recipe. The range check of the token ID (B3) then still works if those fail.
+    # tokenizer or a recipe. The range check of the token ID then still works if those fail.
     try:
         config = hf_repo.load_config(state.hf_source)
         vocab = getattr(config, "vocab_size", None)
@@ -369,7 +364,7 @@ def _reusable_verify_session(verdict: ExportVerdict, opts: ServeOptions) -> Any:
 
 def _axis_bounds(verdict: ExportVerdict) -> AxisBounds:
     """For each input and each dynamic axis: the (name, min, max) that the export of an adapter
-    traced it for (U2). Empty if there is no Prepared from which to read it (a bare .onnx file
+    traced it for. Empty if there is no Prepared from which to read it (a bare .onnx file
     with no --reference)."""
     prepared = verdict.prepared
     if prepared is None:
@@ -408,7 +403,8 @@ def _build_backend(
             opts.intra_op_threads,
             prepared.dynamic_shapes,
         )
-    backend.verified_provider = verified_provider_for(verdict)
+    # verify() runs only on the CPU. None if the verdict never ran the numerics.
+    backend.verified_provider = "CPUExecutionProvider" if verdict.numerics is not None else None
     timings[Phase.session] = time.perf_counter() - start
     return backend
 
@@ -428,9 +424,10 @@ def _new_state(
     hf_source: str | None = None,
     reused: str | None = None,
 ) -> ServingState:
-    """The one ServingState constructor that each builder below uses. A builder that forgot
-    finish_state (and so attach_hf_metadata) cannot skip it. `axis_bounds` overrides what the
-    Prepared of the verdict would give (a worker has none)."""
+    """The one ServingState constructor that each builder below uses, so none of them can skip
+    a step. It attaches the Hugging Face metadata, records the phase timings, then warms up
+    (timed) and sets ready. `axis_bounds` overrides what the Prepared of the verdict would give
+    (a worker has none)."""
     state = ServingState(
         source,
         verdict,
@@ -444,7 +441,13 @@ def _new_state(
         hf_source=hf_source,
         reused=reused,
     )
-    return finish_state(state, timings)
+    attach_hf_metadata(state)
+    state.timings = timings
+    report(Phase.warmup)
+    warmup_start = time.perf_counter()
+    warmup(state, opts.warmup)
+    timings[Phase.warmup] = time.perf_counter() - warmup_start
+    return state
 
 
 def prepare_serving(
@@ -575,20 +578,6 @@ def serving_state_from_torch_artifact(
         hf_source=hf_source,
         reused=reused,
     )
-
-
-def finish_state(state: ServingState, timings: dict[str, float]) -> ServingState:
-    """The last part that each ServingState builder shares. It attaches the Hugging Face
-    metadata, records the phase timings until now, then warms up (timed) and sets ready. A
-    builder that skipped attach_hf_metadata would lose the text input and the embedding metadata
-    without a message."""
-    attach_hf_metadata(state)
-    state.timings = timings
-    report(Phase.warmup)
-    warmup_start = time.perf_counter()
-    warmup(state, state.options.warmup)
-    timings[Phase.warmup] = time.perf_counter() - warmup_start
-    return state
 
 
 def synthesize_feeds(backend: Backend) -> dict[str, np.ndarray]:

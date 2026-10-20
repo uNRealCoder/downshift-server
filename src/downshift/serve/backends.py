@@ -12,7 +12,7 @@ import torch
 from torch import nn
 
 from downshift.core.feeds import WIDEN_DTYPES, example_feeds, widen_for_wire
-from downshift.core.verdict import BackendName, ExportVerdict
+from downshift.core.verdict import BackendName
 from downshift.core.verify import first_line, new_session
 
 _CUDA_EP = "CUDAExecutionProvider"
@@ -71,7 +71,7 @@ class Backend(Protocol):
     # The execution provider that verify() compared the graph against (always CPU today,
     # because verify.load_session is CPU only). None if the verdict never ran numerics. The
     # places in engine.py that create sessions set it, when the verdict is known. The banner
-    # reads it to print a "Verified on" row (U6).
+    # reads it to print a "Verified on" row.
     verified_provider: str | None
 
     def infer(self, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]: ...
@@ -79,15 +79,8 @@ class Backend(Protocol):
     def metadata(self) -> BackendMeta: ...
 
 
-def verified_provider_for(verdict: ExportVerdict) -> str | None:
-    """See `Backend.verified_provider`. It is called one time, from engine._build_backend,
-    directly after a backend is constructed. Each serving-state builder (including a `--workers`
-    torch worker) therefore gets it in the same way."""
-    return _CPU_EP if verdict.numerics is not None else None
-
-
-# The positional name that output_names() gives to the first output. TextIO.predictions reads it
-# (M5). Callers therefore do not need to carry the "output_0" literal by hand.
+# The positional name that output_names() gives to the first output. TextIO.predictions reads it.
+# Callers therefore do not need to carry the "output_0" literal by hand.
 FIRST_OUTPUT_NAME = "output_0"
 
 
@@ -175,7 +168,7 @@ class OnnxRuntimeBackend:
         # (OrtValue.numpy() raises "No corresponding Numpy type"). The normal session.run()
         # can therefore never return one. Only the OrtValue form exposes DLPack. Torch
         # understands DLPack for bf16. _widen_ort_value can then use the same float32 wire
-        # contract (B1) as TorchBackend.infer.
+        # contract as TorchBackend.infer.
         ort_inputs = {name: ort.OrtValue.ortvalue_from_numpy(arr) for name, arr in inputs.items()}
         try:
             outputs = self.session.run_with_ort_values(self.onnx_output_names, ort_inputs)
@@ -226,7 +219,7 @@ class TorchBackend:
         self.verified_provider: str | None = None
         # bf16 and fp16 models take float32 on the wire. The module itself stays in its own
         # dtype. Floating inputs are cast to it here, and outputs are widened again on the way
-        # out (B1). Downshift does not produce modules with mixed dtypes. The first parameter
+        # out. Downshift does not produce modules with mixed dtypes. The first parameter
         # that downshift finds wins.
         self._param_dtype = next(
             (p.dtype for p in self.module.parameters() if p.is_floating_point()), torch.float32
@@ -291,7 +284,7 @@ def _dynamic_shape(
 
 def _widen_ort_value(value: ort.OrtValue) -> np.ndarray:
     """An ORT output as a numpy array that is ready for the wire. bf16 and fp16 are widened to
-    float32 (B1), as in TorchBackend.infer. fp16 goes through numpy, which has the dtype. bf16
+    float32, as in TorchBackend.infer. fp16 goes through numpy, which has the dtype. bf16
     has none (OrtValue.numpy() raises "No corresponding Numpy type"). It therefore takes the
     DLPack bridge into torch. Only newer onnxruntime builds expose this on OrtValue."""
     data_type = value.data_type()

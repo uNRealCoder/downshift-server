@@ -1,6 +1,6 @@
 """The internals of /predict and /predict/graph: the request conversion, the admission
 bookkeeping and the inference call itself. This code is separate from the routing in
-serve/app.py. A change in the handling of the body (P1 to P3) then touches one file (M8).
+serve/app.py. A change in the handling of the body then touches one file.
 """
 
 import asyncio
@@ -135,7 +135,7 @@ def _text_feeds(
 
 
 def _vocab_violation(state: ServingState, feeds: dict[str, np.ndarray]) -> str | None:
-    """B3: ORT wraps a negative input_ids index and does not refuse it. Wrong input would then
+    """ORT wraps a negative input_ids index and does not refuse it. Wrong input would then
     become a confident 200 response."""
     if state.vocab_size is None:
         return None
@@ -167,7 +167,7 @@ def _shape_violation(state: ServingState, feeds: dict[str, np.ndarray]) -> str |
 def _bound_violation(
     state: ServingState, feeds: dict[str, np.ndarray], skip_batch_axis: bool = False
 ) -> str | None:
-    """U2: the first input whose shape is outside an axis that the export of downshift
+    """The first input whose shape is outside an axis that the export of downshift
     traced. None if each known bound is satisfied (also if no bound is known).
     `skip_batch_axis` is for the rows of a request that missed the cache. The caller checked
     the whole batch, and the rows that missed are fewer."""
@@ -251,6 +251,24 @@ def _batch_feeds(
     return {n: feeds[n] for n in state.input_names}, (node_counts, edge_counts)
 
 
+def _violation(
+    state: ServingState,
+    feeds: dict[str, np.ndarray],
+    *,
+    edges: bool = True,
+    skip_batch_axis: bool = False,
+) -> str | None:
+    """The first client error in `feeds`, checked before infer: a token ID outside the
+    vocabulary, an edge index outside the nodes, a wrong rank or fixed axis, or an axis outside
+    its bounds. None if there is none."""
+    return (
+        _vocab_violation(state, feeds)
+        or (edge_index_violation(feeds) if edges else None)
+        or _shape_violation(state, feeds)
+        or _bound_violation(state, feeds, skip_batch_axis)
+    )
+
+
 @dataclass
 class _Request:
     """A predict body, decoded and validated: what _prepare_feeds takes, plus the encoding."""
@@ -261,6 +279,19 @@ class _Request:
     tensors: dict[str, np.ndarray] | None = None
     graphs: list[dict[str, Any]] | None = None
     encoding: OutputEncoding | RequestOutputEncoding | None = None
+
+
+def _tensor_feeds(state: ServingState, request: _Request) -> dict[str, np.ndarray]:
+    """The input arrays of a tensor request: the arrays of a safetensors body, or the JSON
+    values of `inputs` converted with the dtypes that the backend declares."""
+    declared = state.declared_dtypes
+    if request.tensors is not None:
+        return _binary_feeds(state, request.tensors, declared)
+    max_bytes = state.options.max_input_bytes
+    return {
+        n: to_numpy(n, request.inputs[n], declared.get(n), max_bytes=max_bytes)
+        for n in state.input_names
+    }
 
 
 def _prepare_feeds(
@@ -275,8 +306,6 @@ def _prepare_feeds(
 
     It raises HTTPException(400) for each client error (a bad shape, dtype or JSON).
     """
-    declared = state.declared_dtypes
-    max_bytes = state.options.max_input_bytes
     tensors = request.tensors
     start = time.perf_counter()
     layout: GraphLayout | None = None
@@ -284,27 +313,17 @@ def _prepare_feeds(
         if request.graphs is not None or (
             tensors is not None and ("num_nodes" in tensors or "num_edges" in tensors)
         ):
+            max_bytes = state.options.max_input_bytes
             feeds, layout = _batch_feeds(state, request.graphs, tensors, max_bytes)
-        elif tensors is not None:
-            feeds = _binary_feeds(state, tensors, declared)
         elif request.text is not None:
-            feeds = _text_feeds(state, request.text, declared, request.prompt)
+            feeds = _text_feeds(state, request.text, state.declared_dtypes, request.prompt)
         else:
-            feeds = {
-                n: to_numpy(n, request.inputs[n], declared.get(n), max_bytes=max_bytes)
-                for n in state.input_names
-            }
+            feeds = _tensor_feeds(state, request)
     except (ValueError, TypeError, KeyError) as exc:
         raise HTTPException(400, str(exc)) from exc
 
-    vocab_violation = _vocab_violation(state, feeds)
-    if vocab_violation is not None:
-        raise HTTPException(400, vocab_violation)
-    # Downshift checked a batch graph by graph, against the node count of each graph.
-    edge_violation = None if layout is not None else edge_index_violation(feeds)
-    if edge_violation is not None:
-        raise HTTPException(400, edge_violation)
-    violation = _shape_violation(state, feeds) or _bound_violation(state, feeds, skip_batch_axis)
+    # Downshift checked the edges of a batch graph by graph, against the node count of each graph.
+    violation = _violation(state, feeds, edges=layout is None, skip_batch_axis=skip_batch_axis)
     if violation is not None:
         raise HTTPException(400, violation)
     return feeds, (time.perf_counter() - start) * 1000, layout
@@ -613,24 +632,12 @@ def _cache_prepare(
             keys = text_keys(request.prompt, request.text)
             violation = _row_count_violation(state, len(keys))
         else:
-            declared = state.declared_dtypes
-            if request.tensors is not None:
-                arrays = _binary_feeds(state, request.tensors, declared)
-            else:
-                max_bytes = state.options.max_input_bytes
-                arrays = {
-                    n: to_numpy(n, request.inputs[n], declared.get(n), max_bytes=max_bytes)
-                    for n in state.input_names
-                }
+            arrays = _tensor_feeds(state, request)
             counts = {a.shape[0] if a.ndim else -1 for a in arrays.values()}
             if len(counts) != 1 or -1 in counts:
                 raise ValueError("each input needs the same number of rows on axis 0")
             keys = tensor_keys(arrays, counts.pop())
-            violation = (
-                _vocab_violation(state, arrays)
-                or _shape_violation(state, arrays)
-                or _bound_violation(state, arrays)
-            )
+            violation = _violation(state, arrays)
     except (ValueError, TypeError, KeyError) as exc:
         raise HTTPException(400, str(exc)) from exc
     if violation is not None:
@@ -814,7 +821,7 @@ async def run_predict(
     on an inference thread. The encoding therefore holds the inference slot. The event loop
     does neither of them. A large body therefore never blocks /health or /ready (they share the
     one event loop of this process). PredictRoute already did the admission before it read the
-    body (P1). `admitted_at` is the time of that event. The request keeps its slot until the
+    body. `admitted_at` is the time of that event. The request keeps its slot until the
     response is built.
 
     `binary` means a safetensors body. `inline` (--execution inline, a small JSON body) runs
@@ -822,7 +829,7 @@ async def run_predict(
     pool.
 
     `timings_ms` collects the milliseconds of each stage (parse, prep_wait, prep, infer_wait,
-    infer, encode) for Server-Timing and the request log line (U1). With `accept_safetensors`,
+    infer, encode) for Server-Timing and the request log line. With `accept_safetensors`,
     the response is safetensors.
 
     A graph batch (a `graphs` list, or a safetensors body with num_nodes and num_edges) is

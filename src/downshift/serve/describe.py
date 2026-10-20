@@ -105,7 +105,7 @@ def _tensor_schema(
     """One input or output. The dtype name of the backend is normalized to the name that a
     client puts in a typed or base64 body ("tensor(float)" -> "float32").
 
-    `axis_info` (U2), if you give it, has the axis names and the (min, max) bounds of the
+    `axis_info`, if you give it, has the axis names and the (min, max) bounds of the
     adapter (state.axis_bounds). The ONNX graph has lost the names (the "s0" and "s1" of
     torch.export). A bounded axis therefore reports the name of the adapter and its bound, and
     not "dynamic".

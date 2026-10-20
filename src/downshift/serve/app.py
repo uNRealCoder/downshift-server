@@ -94,7 +94,7 @@ def _capacity_error(state: ServingState) -> HTTPException:
 
 async def _read_body_limited(request: Request, limit: int) -> bytes | JSONResponse:
     """request.stream(), with a running total. It gives a 413 when the total passes `limit`. It
-    does not first collect the whole body (P2 - request.body() does this)."""
+    does not first collect the whole body (request.body() does this)."""
     chunks: list[bytes] = []
     total = 0
     async for chunk in request.stream():
@@ -131,9 +131,8 @@ async def _predict(
 
     If Content-Length is more than the limit, the server refuses the request without a read of
     the body. It reads a chunked body while it arrives. It refuses it when the running total
-    passes the limit (P2), and not after the whole body arrived. The timings of each stage are in
-    the state of the scope. RequestIdMiddleware reads them again from there for the request line
-    (U1)."""
+    passes the limit, and not after the whole body arrived. The timings of each stage are in
+    the state of the scope. RequestIdMiddleware reads them again from there for the request line."""
     content_type = _content_type(request)
     binary = content_type in BINARY_REQUEST_TYPES
     if content_type and not binary and "json" not in content_type:
@@ -157,7 +156,7 @@ async def _predict(
         body,
         graph=graph,
         binary=binary,
-        inline=state.execution == ExecutionChoice.inline
+        inline=state.options.execution == ExecutionChoice.inline
         and not binary
         and content_length is not None
         and len(body) <= INLINE_MAX_BODY_BYTES,
@@ -171,10 +170,10 @@ async def _predict(
 class PredictRoute(APIRoute):
     """/predict and /predict/graph. _predict serves them directly from the raw body. FastAPI does
     not resolve the body. run_predict parses it (orjson), validates it (the pydantic model of the
-    route), and prepares it in one prep-pool hop. It never does this on the event loop (P3). The
+    route), and prepares it in one prep-pool hop. It never does this on the event loop. The
     endpoint functions only document the JSON body in the OpenAPI schema.
 
-    Downshift first admits a slot (P1). An overloaded server answers 503 without a buffer or a
+    Downshift first admits a slot. An overloaded server answers 503 without a buffer or a
     parse of one byte. Downshift releases the slot in `finally`. Each exit (413, 400, a
     validation error, a client that disconnects) therefore releases it exactly one time.
     """
@@ -267,7 +266,7 @@ class RequestIdMiddleware:
 
     It also binds the ID to `request_id_var` for the request. Each log line that downshift
     emits while it serves the request then has the ID. With `access_log`, it writes the one
-    request line (U1): method, path, status, duration and, for the predict routes, the split
+    request line: method, path, status, duration and, for the predict routes, the split
     of parse, codec and infer. The routes leave the split in the state of the scope as
     "timings_ms". The level is WARNING from status 400, DEBUG for the probes /health and /ready
     (a 503 from /ready during the load is its normal answer), and INFO for all other requests.
@@ -336,8 +335,8 @@ class RequestIdMiddleware:
 
 
 class ApiKeyMiddleware:
-    """DOWNSHIFT_SERVER_API_KEY (U7). Downshift reads it through settings.py, so it also applies
-    to app_for() (ruling 5). None (unset) means no authentication. The caller already gave a
+    """DOWNSHIFT_SERVER_API_KEY. Downshift reads it through settings.py, so it also applies
+    to app_for(). None (unset) means no authentication. The caller already gave a
     warning about this at build_app time. This is pure ASGI, like RequestIdMiddleware.
     /health and /ready are exempt, so a probe never needs the key.
     """
@@ -388,7 +387,7 @@ def _loader_lifespan(
         def run() -> None:
             # This runs in a new Context (see below). This set() is therefore visible only to the
             # call stack of this thread. The calls that report the phase inside the builders of
-            # engine.py (U4) read it again with CURRENT_PROGRESS.get(). Downshift does not pass
+            # engine.py read it again with CURRENT_PROGRESS.get(). Downshift does not pass
             # a parameter through each builder and through the loader closure of the CLI.
             CURRENT_PROGRESS.set(progress)
             try:
@@ -424,14 +423,14 @@ def build_app(
     loader on a background thread when the app is served.)
 
     If you set `api_key`, every route except /health and /ready needs "Authorization: Bearer
-    <api_key>" (U7). It defaults to DOWNSHIFT_SERVER_API_KEY (settings.API_KEY). The
-    environment variable then reaches app_for() and this function in the same way (ruling 5).
+    <api_key>". It defaults to DOWNSHIFT_SERVER_API_KEY (settings.API_KEY). The
+    environment variable then reaches app_for() and this function in the same way.
     To override that default for a library caller, pass a value (or None to turn it off). An
     empty string counts as unset. DOWNSHIFT_SERVER_API_KEY="" must not make "Bearer " a valid
     credential.
 
     `access_log` False removes the one request line that RequestIdMiddleware writes on the
-    `downshift.access` logger (U1). The request ID is still set and returned.
+    `downshift.access` logger. The request ID is still set and returned.
     """
     if (state is None) == (loader is None):
         raise ValueError("build_app needs exactly one of state or loader")
@@ -538,7 +537,7 @@ def build_app(
                 if current.result_cache is not None
                 else None
             ),
-            execution=current.execution.value,
+            execution=current.options.execution.value,
             boot=dict(current.timings),
             warmup=asdict(current.warmup_stats) if current.warmup_stats is not None else None,
         )

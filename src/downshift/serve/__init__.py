@@ -53,8 +53,8 @@ def app_for(
     path (reported as the file name only). For an `nn.Module`, the default is `"model"`,
     because it has no path to name.
 
-    `api_key` defaults to DOWNSHIFT_SERVER_API_KEY (settings.API_KEY), the same as the CLI (U7,
-    ruling 5). To override that for this app, pass a value, or pass None to turn it off.
+    `api_key` defaults to DOWNSHIFT_SERVER_API_KEY (settings.API_KEY), the same as the CLI. To
+    override that for this app, pass a value, or pass None to turn it off.
 
     If this process already exported and verified a model (the same weights, code and options),
     downshift serves it from the in-process memo. There is no export phase and no verification
