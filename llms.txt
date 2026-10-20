@@ -52,9 +52,9 @@ Known problems and their fixes:
 ## Docs
 
 - [README](README.md): install, serve, the gate, and examples.
-- [HTTP API](docs/code-docs/http-api.md): all routes, bodies, status codes and wire formats.
-- [CLI](docs/code-docs/cli.md): all commands, flags, environment variables and exit codes.
-- [Python API](docs/code-docs/python-api.md): `check()`, `export()`, `app_for()` and `build_app()`.
+- [HTTP API](docs/http-api.md): all routes, bodies, status codes and wire formats.
+- [CLI](docs/cli.md): all commands, flags, environment variables and exit codes.
+- [Python API](docs/python-api.md): `check()`, `export()`, `app_for()` and `build_app()`.
 - [Production](docs/production.md): HTTPS, the API key, probes, sizing and Kubernetes.
-- [Adapters](docs/code-docs/adapters.md): add a model family.
+- [Adapters](docs/adapters.md): add a model family.
 - OpenAPI: `GET /openapi.json` on a running server.

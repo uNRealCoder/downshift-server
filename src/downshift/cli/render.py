@@ -189,7 +189,7 @@ def _cache_text(state: ServingState) -> str:
 
 
 def _execution_text(state: ServingState) -> str:
-    if state.execution == ExecutionChoice.inline:
+    if state.options.execution == ExecutionChoice.inline:
         return "inline for small JSON bodies  (--execution inline)"
     return "threadpool  (--execution)"
 
@@ -406,7 +406,7 @@ def print_banner(
     )
     rows.add("Capacity", _capacity_text(state))
     rows.add("Execution", _execution_text(state))
-    if state.execution == ExecutionChoice.inline:
+    if state.options.execution == ExecutionChoice.inline:
         rows.note(
             f"{_WARN} --execution inline only helps very fast models (under ~1 ms per "
             "inference); a slow model stalls the event loop, including /health and /ready"

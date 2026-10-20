@@ -11,7 +11,7 @@ import torch
 from torch import nn
 
 from downshift.core.feeds import WIDEN_DTYPES, example_feeds, widen_for_wire
-from downshift.core.verdict import BackendName, ExportVerdict
+from downshift.core.verdict import BackendName
 from downshift.core.verify import first_line, new_session
 
 _CUDA_EP = "CUDAExecutionProvider"
@@ -63,10 +63,6 @@ class Backend(Protocol):
     def infer(self, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]: ...
 
     def metadata(self) -> BackendMeta: ...
-
-
-def verified_provider_for(verdict: ExportVerdict) -> str | None:
-    return _CPU_EP if verdict.numerics is not None else None
 
 
 FIRST_OUTPUT_NAME = "output_0"

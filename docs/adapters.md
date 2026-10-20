@@ -12,7 +12,7 @@ An adapter knows one model family. It does two jobs:
 `downshift.core.verdict.prepare_model` is the only caller. It does these steps:
 
 1. It resolves an adapter.
-2. If the caller gave no inputs, it asks the adapter for them (`adapter.example_inputs`).
+2. If the caller gave no example inputs, it calls `adapter.example_inputs(model)`.
 3. It calls `adapter.prepare(...)`.
 
 ## The `Adapter` protocol
@@ -36,8 +36,8 @@ The protocol is a `typing.Protocol` with the `@runtime_checkable` mark. `isinsta
 
 - **`name: str`** is the identifier that selects the adapter. It is used in `--adapter name`, in `adapter="name"` on `check()`, `export()`, `intake()` and `prepare_model()`, and in `registry.get()`. It is also the value that `ExportVerdict.model_family` and the `family` field of `/metadata` report. Set `Prepared.family` to this value.
 - **`matches(model, example_inputs) -> bool`** is called by `registry.detect()`, in the order of registration (see below), when the caller gave no `--adapter` or `adapter=`. The first adapter that returns `True` wins. Check something structural. For example, the built-in `pyg` adapter checks for a `MessagePassing` layer. Do not check something incidental. A false positive takes a model away from an adapter that fits better, and nobody sees this.
-- **`example_inputs(model) -> tuple | None`** is called only when the caller gave no `example_inputs`. Return a tuple of forward arguments that you can build from the model alone. For example, read the shapes from the first `Linear` or `Conv` layer, or use `hidden_size` from a Hugging Face config. If you cannot guess, return `None`. `prepare_model()` then raises a `ValueError` that tells the caller how to pass inputs explicitly.
-- **`prepare(model, example_inputs) -> Prepared`** is the main job of the adapter. It returns everything that is ready for export. `example_inputs` is always a tuple. The caller or `example_inputs()` already resolved it. It is never `None`.
+- **`example_inputs(model) -> tuple | None`** is called only when the caller gave no `example_inputs`. Return a tuple of forward arguments that you can build from the model alone. For example, read the shapes from the first `Linear` or `Conv` layer, or use `hidden_size` from a Hugging Face config. If you cannot guess, return `None`. `prepare_model` then raises a `ValueError` that tells the caller how to pass inputs explicitly.
+- **`prepare(model, example_inputs, axis_max=None) -> Prepared`** is the main job of the adapter. `axis_max` is `--axis-max`: lower the maximum of the named `Dim`s with `core.shapes.lower_axis_max`, and make verification sample 1 exactly at those sizes (`core.shapes.pin_vary_fn` does this for the generic case). It returns everything that is ready for export. `example_inputs` is always a tuple. The caller or `example_inputs()` already resolved it. It is never `None`.
 
 ## `Prepared`
 

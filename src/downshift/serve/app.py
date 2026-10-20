@@ -146,7 +146,7 @@ async def _predict(
         body,
         graph=graph,
         binary=binary,
-        inline=state.execution == ExecutionChoice.inline
+        inline=state.options.execution == ExecutionChoice.inline
         and not binary
         and content_length is not None
         and len(body) <= INLINE_MAX_BODY_BYTES,
@@ -491,7 +491,7 @@ def build_app(
                 if current.result_cache is not None
                 else None
             ),
-            execution=current.execution.value,
+            execution=current.options.execution.value,
             boot=dict(current.timings),
             warmup=asdict(current.warmup_stats) if current.warmup_stats is not None else None,
         )

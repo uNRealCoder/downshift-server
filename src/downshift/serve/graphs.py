@@ -21,8 +21,8 @@ GRAPH_COUNTS = ("num_nodes", "num_edges")
 
 _FIXED_HELP = (
     "has a fixed size (its axis 0 follows neither nodes nor edges), so it can't be split per "
-    "graph; graph-level batching needs a model that takes a `batch` vector and an explicit "
-    "graph count (planned for 0.6). Send one graph per request"
+    "graph. Downshift does not support graph-level batching (a model that takes a `batch` "
+    "vector). Send one graph per request"
 )
 _UNKNOWN_HELP = (
     "could not be classified as per-node or per-edge when the model was verified, so it can't "

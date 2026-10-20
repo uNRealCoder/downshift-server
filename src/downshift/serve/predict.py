@@ -170,6 +170,23 @@ def _bound_violation(
     return None
 
 
+def _violation(
+    state: ServingState,
+    feeds: dict[str, np.ndarray],
+    *,
+    edges: bool = True,
+    skip_batch_axis: bool = False,
+) -> str | None:
+    """The first client error in `feeds`: a token ID outside the vocabulary, an edge index
+    outside the nodes, a wrong rank or fixed axis, or an axis outside its bounds."""
+    return (
+        _vocab_violation(state, feeds)
+        or (edge_index_violation(feeds) if edges else None)
+        or _shape_violation(state, feeds)
+        or _bound_violation(state, feeds, skip_batch_axis)
+    )
+
+
 def _check_timeout(state: ServingState, admitted_at: float) -> None:
     request_timeout = state.options.request_timeout
     if request_timeout > 0:
@@ -281,14 +298,8 @@ def _prepare_feeds(
     except (ValueError, TypeError, KeyError) as exc:
         raise HTTPException(400, str(exc)) from exc
 
-    vocab_violation = _vocab_violation(state, feeds)
-    if vocab_violation is not None:
-        raise HTTPException(400, vocab_violation)
     # A graph batch was already checked graph by graph.
-    edge_violation = None if layout is not None else edge_index_violation(feeds)
-    if edge_violation is not None:
-        raise HTTPException(400, edge_violation)
-    violation = _shape_violation(state, feeds) or _bound_violation(state, feeds, skip_batch_axis)
+    violation = _violation(state, feeds, edges=layout is None, skip_batch_axis=skip_batch_axis)
     if violation is not None:
         raise HTTPException(400, violation)
     return feeds, (time.perf_counter() - start) * 1000, layout
@@ -577,11 +588,7 @@ def _cache_prepare(
             if len(counts) != 1 or -1 in counts:
                 raise ValueError("each input needs the same number of rows on axis 0")
             keys = tensor_keys(arrays, counts.pop())
-            violation = (
-                _vocab_violation(state, arrays)
-                or _shape_violation(state, arrays)
-                or _bound_violation(state, arrays)
-            )
+            violation = _violation(state, arrays)
     except (ValueError, TypeError, KeyError) as exc:
         raise HTTPException(400, str(exc)) from exc
     if violation is not None:

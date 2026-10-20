@@ -16,6 +16,8 @@ All notable changes to this project are documented here. Format follows
 - The export cache of 0.5.x exports again one time. The version of downshift is part of its key, and 0.6.0 adds the row check to the verdict.
 - A bare `serve` or `app_for` on a model with independent rows now has the result cache on. To keep the old behavior, set `--result-cache-rows 0`.
 - `/predict` with the cache on does the encoding on a prep thread and not on an inference thread.
+- The docs have a new structure. The pages of `docs/code-docs/` are now in `docs/` (`docs/cli.md`, `docs/http-api.md`, `docs/python-api.md`, `docs/serving.md`, `docs/adapters.md`, and the index `docs/README.md`). The README is shorter: it has the quick start, the gate, the model forms and the matrix. The reference material is in `docs/`. The GPU notes and the export cache are now in `docs/production.md`.
+- The `400` for a graph batch that a model with a fixed-size output cannot split no longer says that graph-level batching is planned for 0.6.
 - The code is simpler. The behavior of the CLI, the HTTP API, the environment variables and the names in `downshift.__all__` does not change. Some internal modules moved. If your code imports them, change the import:
   - `downshift.core.prevalidated.intake` is now `downshift.core.verdict.intake`. `downshift.intake` does not change.
   - `downshift.core.inputs.synthesize` is removed. `downshift.core.verdict.prepare_model` raises the same error.
@@ -24,6 +26,9 @@ All notable changes to this project are documented here. Format follows
   - `downshift.core.verify.quiet_ort_logging` is removed. `new_session` silences the ONNX Runtime logger itself.
 
 ### Fixed
+
+- The `--help` of `--workers` said that each worker exports the model. The parent exports and verifies one time, and each worker loads that result.
+- The docs agree with the code again. `docs/cli.md` lists `--axis-max`, `--export-cache-dir`, `--tokenizer-from`, `DOWNSHIFT_AXIS_MAX` and `DOWNSHIFT_EXPORT_CACHE_DIR`, and its steps to add a `serve` option are correct. `docs/serving.md` has the current signatures, `ServingState` fields and backend errors. `docs/python-api.md` says that `check()` never reads the export memo. `docs/production.md` says that each `--workers` worker gives `503` on `/ready` while it loads.
 
 ## 0.5.1 - 2026-10-11
 

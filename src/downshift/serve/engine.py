@@ -38,10 +38,9 @@ from downshift.serve.backends import (
     TorchBackend,
     concrete_dim,
     resolve_device,
-    verified_provider_for,
 )
 from downshift.serve.graphs import eager_output_axes
-from downshift.serve.options import BackendChoice, ExecutionChoice, ServeOptions
+from downshift.serve.options import BackendChoice, ServeOptions
 from downshift.serve.result_cache import ResultCache
 from downshift.serve.schemas import normalize_dtype
 from downshift.settings import DEFAULT_RESULT_CACHE_ROWS
@@ -133,10 +132,6 @@ class ServingState:
     def release(self) -> None:
         with self._admission_lock:
             self.in_flight -= 1
-
-    @property
-    def execution(self) -> ExecutionChoice:
-        return self.options.execution
 
     @property
     def backend_auto_selected(self) -> bool:
@@ -342,7 +337,8 @@ def _build_backend(
             opts.intra_op_threads,
             prepared.dynamic_shapes,
         )
-    backend.verified_provider = verified_provider_for(verdict)
+    # The provider that verify() compared against (always the CPU), or None without numerics.
+    backend.verified_provider = "CPUExecutionProvider" if verdict.numerics is not None else None
     timings[Phase.session] = time.perf_counter() - start
     return backend
 

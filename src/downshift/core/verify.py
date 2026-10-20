@@ -153,6 +153,12 @@ def first_line(exc: Exception) -> str:
     return text.splitlines()[0] if text else type(exc).__name__
 
 
+def tensor_to_numpy(tensor: torch.Tensor) -> np.ndarray:
+    """bf16 and fp16 have no faithful numpy dtype: widen floats to float32 first."""
+    tensor = tensor.detach()
+    return (tensor.float() if tensor.is_floating_point() else tensor).numpy()
+
+
 def _bounds_text(dynamic_shapes: tuple | None) -> str | None:
     parts = [
         f"axis {axis} in {dim_bounds(spec, axis)}"
@@ -192,9 +198,7 @@ def _compare_sample(
     worst: WorstCandidate | None = None
     worst_abs = -1.0  # a NaN error never compares greater, so it is never the worst
     for idx, (expected, got) in enumerate(zip(torch_outs, ort_outs, strict=True)):
-        # bf16 and fp16 have no faithful numpy dtype: widen floats to float32 first.
-        expected = expected.detach()
-        expected_np = (expected.float() if expected.is_floating_point() else expected).numpy()
+        expected_np = tensor_to_numpy(expected)
         got_np = np.asarray(got)
         if expected_np.shape != got_np.shape:
             failed = True

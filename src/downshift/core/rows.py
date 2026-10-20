@@ -11,7 +11,13 @@ import torch
 
 from downshift.adapters.base import Family, Prepared
 from downshift.adapters.embedding import PADDING_SIDE_ATTR
-from downshift.core.verify import NumericsReport, as_tensor_list, make_shared_axis0_vary_fn
+from downshift.core.shapes import dim_name
+from downshift.core.verify import (
+    NumericsReport,
+    as_tensor_list,
+    make_shared_axis0_vary_fn,
+    tensor_to_numpy,
+)
 
 # Runs a tuple of input tensors, gives one numpy array for each output.
 Runner = Callable[[tuple], list[np.ndarray]]
@@ -25,7 +31,7 @@ def batch_axis(prepared: Prepared, numerics: NumericsReport) -> str | None:
         dim = spec.get(0) if spec else None
         if dim is None:
             return f"input {name} has no dynamic batch axis"
-        names.add(getattr(dim, "__name__", str(dim)))
+        names.add(dim_name(dim, 0))
     if len(names) > 1:
         return f"the inputs do not share one batch axis ({', '.join(sorted(names))})"
 
@@ -117,7 +123,7 @@ def torch_runner(model: torch.nn.Module) -> Runner:
     def run(feeds: tuple) -> list[np.ndarray]:
         with torch.inference_mode():
             outs = as_tensor_list(model(*feeds))
-        return [o.detach().float().numpy() if o.is_floating_point() else o.numpy() for o in outs]
+        return [tensor_to_numpy(o) for o in outs]
 
     return run
 
