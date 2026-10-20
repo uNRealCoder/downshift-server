@@ -382,7 +382,7 @@ def test_app_for_takes_tokenizer_from_independent_of_reference(embedding_onnx, e
     assert body["shapes"]["output_0"] == [1, hf_repo.HIDDEN]
 
 
-# --- decoder embedder: left and right padding, named prompts (0.5.0 E3, E5) -------------------
+# --- decoder embedder: left and right padding, named prompts --------------------
 
 import json
 

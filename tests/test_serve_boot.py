@@ -1,4 +1,4 @@
-"""U3: `serve` binds a real socket before the model is ready. The test uses a real subprocess and
+"""`serve` binds a real socket before the model is ready. The test uses a real subprocess and
 a real uvicorn server on an ephemeral port. This exercises the lifespan and signal handling of
 uvicorn.Server on Windows (see the risk table of PLAN_0.4.0.md). The TestClient tests in
 tests/test_serve.py run in the same process and cannot do this. The HTTPS test also needs a

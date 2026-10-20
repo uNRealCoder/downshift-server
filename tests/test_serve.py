@@ -521,7 +521,7 @@ def test_middleware_specs(mlp_state):
 
 
 def test_ready_and_predict_503_until_the_loader_lands(mlp_state):
-    """Plan 3.3 U3: bind first, load on a background thread, 503 until the verdict is ready,
+    """Bind first, load on a background thread, 503 until the verdict is ready,
     200 after that, and no restart between them."""
     release = threading.Event()
 

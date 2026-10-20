@@ -72,15 +72,17 @@ def test_env_vars_override_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert mod.MAX_CONCURRENCY == 2
 
 
-def test_bad_int_env_var_raises_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DOWNSHIFT_PORT", "not-a-number")
-    with pytest.raises(ValueError, match="DOWNSHIFT_PORT.*not-a-number.*integer"):
-        importlib.reload(settings)
-
-
-def test_bad_float_env_var_raises_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DOWNSHIFT_TOL_FLOAT32_ATOL", "not-a-float")
-    with pytest.raises(ValueError, match="DOWNSHIFT_TOL_FLOAT32_ATOL.*not-a-float.*float"):
+@pytest.mark.parametrize(
+    ("name", "value", "kind"),
+    [
+        ("DOWNSHIFT_PORT", "not-a-number", "integer"),
+        ("DOWNSHIFT_TOL_FLOAT32_ATOL", "not-a-float", "float"),
+        ("DOWNSHIFT_EXECUTION", "auto", "execution mode"),
+    ],
+)
+def test_bad_env_var_raises_clear_error(monkeypatch: pytest.MonkeyPatch, name, value, kind) -> None:
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValueError, match=f"{name}.*{value}.*{kind}"):
         importlib.reload(settings)
 
 
@@ -144,12 +146,6 @@ def test_execution_defaults_to_threadpool(monkeypatch: pytest.MonkeyPatch) -> No
 def test_execution_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DOWNSHIFT_EXECUTION", "inline")
     assert importlib.reload(settings).EXECUTION == "inline"
-
-
-def test_bad_execution_env_var_raises_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DOWNSHIFT_EXECUTION", "auto")
-    with pytest.raises(ValueError, match="DOWNSHIFT_EXECUTION.*auto.*execution mode"):
-        importlib.reload(settings)
 
 
 def test_result_cache_rows_is_unset_by_default_and_read_from_the_env(

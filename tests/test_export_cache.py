@@ -1,4 +1,4 @@
-"""`--export-cache-dir` (0.5.0 C2): the optional disk tier behind the export memo. After a restart
+"""`--export-cache-dir`: the optional disk tier behind the export memo. After a restart
 (simulated by clearing the memo), downshift reuses the saved export and does not load the
 weights. By default, it writes nothing. A damaged entry is exported again. Downshift computes the
 digests one time for each file."""

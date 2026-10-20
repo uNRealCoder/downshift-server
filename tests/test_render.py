@@ -249,9 +249,11 @@ def test_print_banner_shows_threads_row_for_multiple_workers(caplog, monkeypatch
     assert "16 logical / 4 workers" in out
 
 
-def test_print_banner_omits_threads_row_for_a_single_worker(caplog):
+# The default state: one worker, a CLEAN verdict without numerics, no warmup and no timings.
+@pytest.mark.parametrize("row", ["Threads", "Worst", "Warmup", "Boot", "Verified on"])
+def test_print_banner_omits_rows_that_do_not_apply(caplog, row):
     render.print_banner(_serving_state(_verdict()), "127.0.0.1", 8000)
-    assert "Threads" not in caplog.text
+    assert row not in caplog.text
 
 
 def test_print_banner_tips_pybase64_when_missing(caplog, monkeypatch):
@@ -288,11 +290,6 @@ def test_print_banner_shows_worst_and_samples_rows_when_degraded(caplog):
     assert "output_0[2, 5]" in out
     assert "Samples" in out
     assert "(1,16)" in out and "(2,16)" in out
-
-
-def test_print_banner_omits_worst_row_when_clean(caplog):
-    render.print_banner(_serving_state(_verdict()), "127.0.0.1", 8000)
-    assert "Worst" not in caplog.text
 
 
 def test_print_banner_shows_embedding_and_text_rows(caplog):
@@ -333,11 +330,6 @@ def test_print_banner_shows_warmup_row_when_synthesized(caplog):
     assert "3 inferences on synthesized inputs" in out
 
 
-def test_print_banner_omits_warmup_row_without_warmup_stats(caplog):
-    render.print_banner(_serving_state(_verdict()), "127.0.0.1", 8000)
-    assert "Warmup" not in caplog.text
-
-
 def test_print_banner_shows_queue_and_timeout_in_the_capacity_row(caplog):
     state = _serving_state(_verdict(), options=ServeOptions(max_queue=64, request_timeout=0))
     render.print_banner(state, "127.0.0.1", 8000)
@@ -364,11 +356,6 @@ def test_print_banner_shows_boot_row(caplog):
     assert "verify 0.2" in out
     assert "session 0.1" in out
     assert "warmup 0.1" in out
-
-
-def test_print_banner_omits_boot_row_without_timings(caplog):
-    render.print_banner(_serving_state(_verdict()), "127.0.0.1", 8000)
-    assert "Boot" not in caplog.text
 
 
 def test_print_banner_unverified_with_prepared_backend_torch_skip():
@@ -455,11 +442,6 @@ def test_print_banner_says_numerics_did_not_cover_a_cuda_server(caplog):
     backend = _StubBackend(device="cuda:0", verified_provider="CPUExecutionProvider")
     render.print_banner(_serving_state(_verdict(), backend=backend), "127.0.0.1", 8000)
     assert "serving on cuda:0; numerics were only verified on the CPU" in caplog.text
-
-
-def test_print_banner_omits_verified_on_when_numerics_never_ran(caplog):
-    render.print_banner(_serving_state(_verdict()), "127.0.0.1", 8000)
-    assert "Verified on" not in caplog.text
 
 
 def test_print_banner_endpoint_names_the_client_url_for_a_wildcard_host(caplog):

@@ -264,7 +264,7 @@ def test_a_bf16_model_schema_reports_float32_inputs(bf16_client):
 def _bf16_output_onnx_bytes() -> bytes:
     """A graph that the CPU EP of ORT can run (Cast, and not Gemm, which has no bf16 CPU kernel.
     See tests/models/bf16_weights.py) but whose declared output is bfloat16. This is the case
-    that the OrtValue and DLPack widening (B1) of OnnxRuntimeBackend.infer covers.
+    that the OrtValue and DLPack widening of OnnxRuntimeBackend.infer covers.
     OrtValue.numpy() has no bfloat16 or float16 numpy dtype to convert to."""
     import onnx
     from onnx import TensorProto, helper
