@@ -18,7 +18,7 @@ The effect is that `import downshift` does not import torch, onnx or onnxruntime
 
 Two names are different. `__version__` is a plain string. Downshift imports it eagerly from `downshift._version`. `export` is defined directly in `__init__.py`. Its heavy imports (`downshift.core.manifest` and `downshift.core.verdict`) are inside its function body.
 
-For this reason, `downshift.cli.main` can answer `--help` and `--version` without the import cost of torch. At module load, it imports only `downshift` and `downshift.settings`. It does the other `downshift.*` imports inside the command bodies that need them.
+For this reason, `downshift --help` and `--version` do not import torch. The CLI does the heavy imports inside the command bodies that need them.
 
 ## Functions
 
@@ -54,7 +54,7 @@ def check(
 - `seed`: seeds the generator of verification samples. `verify()` runs under `torch.random.fork_rng`, so the global RNG state of the caller does not change.
 - `vary`: a `fn(i) -> inputs` that replaces the sampler of the adapter. Downshift imports a string in the same way as for `--vary`. `fn(0)` must return the example inputs.
 - `axis_max`: `{axis_name: N}`. It lowers a named dynamic axis to `N` and uses one verification sample at exactly `N`. Refer to `--axis-max`.
-- `cache`: if `True` (the default), downshift keeps the last two verified exports in memory. A repeat call for the same model in the same process then skips the export and the verification. Set `False` to turn this off.
+- `cache`: if `True` (the default), downshift keeps a CLEAN or DEGRADED result in the export memo of the process (the last two). A later `export()` or `app_for()` of the same model and options then skips the export and the verification. `check()` itself always runs the gate. Set `False` to keep nothing.
 
 `check` returns an `ExportVerdict`. It raises `ValueError` in these cases:
 
@@ -85,14 +85,14 @@ def export(
     vary: VaryFn | str | None = None,
     axis_max: dict[str, int] | None = None,
     cache: bool = True,
-    export_cache_dir: str | Path | None = None,
+    export_cache_dir: str | Path | None = settings.EXPORT_CACHE_DIR,
 ) -> ExportVerdict
 ```
 
 `export` is `check()` plus the writing of `output` (the `.onnx` path) and a `.manifest.json` file next to it (`downshift.core.manifest.write_manifest`). Each parameter that is not in this list has the same meaning as on `check()`.
 
 - `output`: the path of the `.onnx` file. Downshift creates missing parent directories.
-- `export_cache_dir`: a directory for the disk tier of the export cache. The key is the content of the weights. A restart then reuses a verified export.
+- `export_cache_dir`: a directory for the disk tier of the export cache. The default is `DOWNSHIFT_EXPORT_CACHE_DIR`. If it is unset, nothing goes to disk. The key is the content of the weights. A restart then reuses a verified export.
 - `source_path`: if it points to a real file, downshift records it in the manifest as the source checkpoint. The manifest has the file name only, never the directory. It also has the SHA-256 of the file.
 
 A `FAILED` verdict writes nothing. There is no `.onnx` file and no manifest. A `DEGRADED` verdict writes the artifact, because the manifest records how far the numbers differ. In that case, `verdict.onnx_path` is set on the returned verdict. `export` raises the same errors as `check()`.
@@ -162,7 +162,7 @@ def prepare_model(
 `prepare_model` does three things:
 
 1. It resolves an adapter: an explicit instance or name, or `registry.detect()` against the model and the inputs.
-2. It synthesizes example inputs if you gave none.
+2. If you gave no example inputs, it asks the adapter for them (`adapter.example_inputs(model)`).
 3. It asks the adapter to flatten the model into the form that is ready for export.
 
 If you give `axis_max`, downshift passes it to `adapter.prepare()`. If you give `dynamic`, it replaces the `dynamic_shapes` of the adapter through `downshift.core.shapes.apply_dynamic_override`. If you give `vary`, it replaces the `vary_fn` of the adapter. Downshift imports a string in the same way as the `pkg.module:fn` form of `--vary`.
@@ -180,21 +180,31 @@ def app_for(
     reference: torch.nn.Module | None = None,
     tokenizer_from: str | Path | None = None,
     middleware: Sequence[str] = (),
-    api_key: str | None = None,
+    api_key: str | None = settings.API_KEY,
     cache: bool = True,
     **options: Any,
 ) -> FastAPI
 ```
 
-`app_for` does three things in one call: it builds the `LoadedModel`, it runs `prepare_serving()`, and it runs `build_app(state=...)`. It is the one-line path from a model to a mounted FastAPI app. [`serving.md`](serving.md) and the section "Mount it in your own app" of the repo README describe it.
+`app_for` does three things in one call: it builds the `LoadedModel`, it runs `prepare_serving()`, and it runs `build_app(state=...)`. It is the one-line path from a model to a FastAPI app that you can mount in your own service:
+
+```python
+from fastapi import FastAPI
+from downshift.serve import app_for
+
+app = FastAPI()
+app.mount("/model", app_for(my_model, example_inputs))
+```
+
+`/model/predict`, `/model/health` and the other routes work as in `downshift serve`. There is no subprocess and no second port.
 
 `app_for` runs synchronously. The export-and-verify gate and the warmup finish before it returns. The app is ready to serve immediately. There is no loader thread and no `503` window on `/ready`. This is different from the `loader=` form of `build_app`.
 
-- `model`: usually an `nn.Module` that this process already built. A `str` or `Path` is a `.onnx` file that is already on this machine. `app_for` downloads nothing. The path must exist before the call.
+- `model`: usually an `nn.Module` that this process already built. A `str` or `Path` is a `.onnx` file or a downloaded Hugging Face repo directory on this machine. `app_for` downloads nothing. The path must exist before the call.
 - `source`: the label that `/metadata` and `/schema` report. For a `.onnx` path, the default is the path (reported as the file name only). For an `nn.Module`, the default is `"model"`, because a module has no path. `source.kind` on `/schema` is `onnx-file` or `in-process-module` in these two cases.
 - `reference`: a PyTorch model to verify a `.onnx` `model` against. It has the same role as `--reference` on the CLI. Without it, downshift serves a `.onnx` `model` as `UNVERIFIED`.
 - `tokenizer_from`: a downloaded Hugging Face repo directory. It supplies the tokenizer, the pooling recipe and the label metadata for a `.onnx` `model`. It has the same role as `--tokenizer-from` on the CLI.
-- `cache`: if `True` (the default), the export cache of `check()` applies.
+- `cache`: if `True` (the default), `app_for` reuses an earlier export of the same model and options from the memo of the process, and from `export_cache_dir` if you give that `ServeOptions` field. `False` skips both.
 - `api_key`: if you set it, every route except `/health` and `/ready` needs `Authorization: Bearer <api_key>`. Without it, the route answers `401`. If you do not pass it, downshift uses the `DOWNSHIFT_SERVER_API_KEY` environment variable. Pass a value to override it for this app. If the key is unset or empty, downshift logs one `WARNING` that the endpoints are unauthenticated.
 - `options`: downshift forwards these as `ServeOptions` fields (`backend=`, `warmup=`, `max_concurrency=`, and others). [`serving.md`](serving.md) has the full list of fields. Every default comes from `downshift.settings`. The `DOWNSHIFT_*` environment variables therefore also apply here, not only to the CLI. Downshift reads them once, when `downshift` is imported. A keyword argument has priority. `check()`, `export()` and `intake()` are an exception for `k`. They use the constant `8` as the default and not `DOWNSHIFT_SAMPLES`.
 
@@ -212,7 +222,7 @@ uvicorn.run(
 )
 ```
 
-Use `ssl_ciphers=None`. With `None`, uvicorn keeps the cipher list of the Python standard library. The default of uvicorn (`"TLSv1"`) also enables NULL ciphers and anonymous ciphers. `downshift serve --ssl-certfile` uses the same settings. Refer to [HTTPS in production.md](../production.md#https).
+Use `ssl_ciphers=None`. With `None`, uvicorn keeps the cipher list of the Python standard library. The default of uvicorn (`"TLSv1"`) also enables NULL ciphers and anonymous ciphers. `downshift serve --ssl-certfile` uses the same settings. Refer to [HTTPS in production.md](production.md#https).
 
 ## Types
 
@@ -235,6 +245,8 @@ class ExportVerdict:
     output_axes: list[str] = []
     unsupported_ops: list[str] = []
     warnings: list[str] = []
+    row_independent: bool | None = None
+    row_reason: str | None = None
     onnx_path: Path | None = None
     onnx_program: object | None = None  # torch.onnx.ONNXProgram
     onnx_bytes: bytes = b""
@@ -261,7 +273,7 @@ All other code reads this one object. `check`, `export`, `intake` and `build_ver
 | `output_axes` | `list[str]` | For the `pyg` adapter, the class of axis 0 of each output: `node`, `edge`, `fixed` or `unknown`. |
 | `unsupported_ops` | `list[str]` | The `aten::*` operation names that downshift found in the exception messages of a `FAILED` capture. |
 | `warnings` | `list[str]` | Notices that are not fatal: tied weights, the switch to training mode, and the message of an ONNX Runtime load failure. |
-| `row_independent` | `bool \| None` | `True` if each row gives the same output with other rows. Downshift checks it on ONNX Runtime and on torch. `False` if not. `None` if downshift did not check it (the verdict is `FAILED` or `UNVERIFIED`, or a model from 0.5 in the export cache). The result cache needs `True`. |
+| `row_independent` | `bool \| None` | `True` if each row gives the same output with other rows. Downshift checks it on ONNX Runtime and on torch. `False` if not. `None` if downshift did not check it: the verdict is `FAILED` or `UNVERIFIED`, the numerics check failed, or downshift could not make two different rows. The result cache needs `True`. |
 | `row_reason` | `str \| None` | Why `row_independent` is not `True`. If the numerics check failed, `row_independent` is `None` and the reason is "not checked: the numerics check failed". |
 | `onnx_path` | `Path \| None` | `export()` sets it after it writes the artifact. `intake()` or the serving of a pre-built `.onnx` file also sets it. |
 | `onnx_program` | `object \| None` | The live `torch.onnx.ONNXProgram`, if the capture made one. It is not JSON-able. |
@@ -283,6 +295,7 @@ Some properties are not dataclass fields. They are derived:
 - `shape_generalization`, `shape_generalization_reason`
 - `recommended_backend`, `reason`
 - `input_names` (as a `list`), `dynamic_dims`, `axes` (as a list of dicts), `output_axes`, `unsupported_ops`, `warnings`
+- `row_independent`, `row_reason` (a reason is always given when `row_independent` is not `true`)
 - `onnx_path` (as a `str` or `None`)
 
 It does not include `onnx_program`, `onnx_bytes` and `prepared`, because they are not JSON-able. It does not include the debug-only `capture_stderr` and `capture_exceptions`, because machine consumers do not need them. `exit_code` is a derived property, and `to_dict()` does not include it.
@@ -408,7 +421,7 @@ It is different from a numeric mismatch. A mismatch is a `NumericsReport` with `
 ### `__version__`
 
 ```python
-__version__: str  # "0.5.0"
+__version__: str  # "0.6.0"
 ```
 
 Downshift reads it from `downshift._version`. It imports it eagerly, and not through the lazy `_LAZY` map. `downshift.__version__` and `downshift --version` therefore never cause the import of torch.

@@ -1,23 +1,17 @@
 # Serving layer
 
-This page describes the programmatic parts under `downshift serve` and `app_for`:
+This page describes the code under `downshift serve` and `app_for`, for a person who changes it. To run a server, read [`production.md`](production.md). To call one, read [`http-api.md`](http-api.md).
 
-- The options dataclass.
-- The state object that a running server holds.
-- How downshift builds a `ServingState`.
-- The app that serves it.
-- The two backends that it can wrap.
-
-The code is split by job:
-
-- `serve/options.py`: `ServeOptions` and `BackendChoice`.
-- `serve/engine.py`: `ServingState` and `prepare_serving`.
-- `serve/app.py`: `build_app`, the routing, and the request-id and API-key middleware.
-- `serve/predict.py`: the internals of `/predict`.
-- `serve/describe.py`: `GET /schema`.
-- `serve/backends.py`, `serve/schemas.py` and `serve/codec.py`.
-
-[`docs/production.md`](../production.md) has operational guidance (probes, sizing, Kubernetes and thread budgets). This page does not repeat it.
+| Module | Contents |
+|---|---|
+| `serve/options.py` | `ServeOptions`, `BackendChoice`, `ExecutionChoice`. No torch import. |
+| `serve/engine.py` | `ServingState`, `choose_backend`, the boot builders and the warmup. |
+| `serve/reuse.py` | The boot from an earlier export: the memo, the disk cache, or the `--workers` handoff. |
+| `serve/app.py` | `build_app`, the routes, `PredictRoute`, and the request-ID and API-key middleware. |
+| `serve/predict.py` | The request path of `/predict` and `/predict/graph`. |
+| `serve/result_cache.py` | The result cache. |
+| `serve/backends.py` | `OnnxRuntimeBackend` and `TorchBackend`. |
+| `serve/describe.py`, `serve/schemas.py`, `serve/codec.py`, `serve/graphs.py` | `/schema`, the pydantic models, the base64 and safetensors codecs, and graph batching. |
 
 ## `ServeOptions`
 
@@ -31,209 +25,92 @@ class ServeOptions:
     k: int = 8
     adapter: str | None = None
     dynamic: dict[str, list[int]] | None = None
+    axis_max: dict[str, int] | None = None
+    export_cache_dir: str | None = None
     intra_op_threads: int = 0
     inter_op_threads: int = 0
     output_encoding: OutputEncoding = OutputEncoding.json
-    max_input_bytes: int = DEFAULT_MAX_INPUT_BYTES  # 256 MiB
-    max_body_bytes: int = DEFAULT_MAX_BODY_BYTES  # 32 MiB
+    max_input_bytes: int = 256 * 1024 * 1024
+    max_body_bytes: int = 32 * 1024 * 1024
     max_concurrency: int = 4
-    max_queue: int = DEFAULT_MAX_QUEUE  # 64
-    request_timeout: float = DEFAULT_REQUEST_TIMEOUT  # 30.0
+    execution: ExecutionChoice = ExecutionChoice.threadpool
+    prep_threads: int = min(4, usable_cpus())
+    max_queue: int = 64
+    request_timeout: float = 30.0
+    result_cache_rows: int | None = None  # None: 100 for independent rows, else off
     atol: float | None = None
     rtol: float | None = None
-    result_cache_rows: int | None = None  # None: 100 for independent rows, else off
     seed: int = 0
     vary: str | None = None
     pooling: str | None = None
     normalize: bool | None = None
 ```
 
-`ServeOptions` is defined in `downshift.serve.options`. It has no torch import at module scope. The CLI can therefore parse `--backend` and `--output-encoding` and print `--help` without the import cost of torch.
+The values above apply when no `DOWNSHIFT_*` variable is set. Each default comes from `downshift.settings`, so the variables reach `app_for()` too. Each field has the meaning of the `serve` flag with the same name. Refer to [`cli.md`](cli.md#serve). To add a field, follow "Add a `serve` option" in [`cli.md`](cli.md#add-a-serve-option).
 
-Every default comes from `downshift.settings`. The `DOWNSHIFT_*` environment variables therefore reach `ServeOptions()` and `app_for()`, and also the CLI. The values in the code above are the values when no variable is set. Downshift reads the variables once, when `downshift` is imported. A keyword argument has priority.
-
-`serve_cmd` builds a `ServeArgs`. This is a dataclass that can be converted to plain JSON, in `cli/runtime.py`. It is `{load: LoadSpec, options: ServeOptions, reference, middleware, log_level, artifact, access_log}`. Downshift uses it to give a run to the `--workers N` worker processes, through an environment variable. `_collect_serve_args` turns the typer parameters of `serve` into its `LoadSpec` and `ServeOptions` pair. To add an option, you add a typer parameter, a `ServeOptions` field and a `_collect_serve_args` parameter. [`cli.md`](cli.md#serve) describes the CLI flag and the environment variable of each field.
-
-| Field | Type | Default | Controls |
-|---|---|---|---|
-| `backend` | `BackendChoice` | `auto` | The backend to serve. `auto` follows the recommendation of the verdict. You can also force `onnxruntime` or `torch`. |
-| `force_onnx` | `bool` | `False` | Serve a `DEGRADED` graph through ONNX Runtime. |
-| `device` | `str` | `"auto"` | `"auto"`, `"cpu"` or `"cuda"`. `resolve_device` resolves it. `"cuda"` without CUDA raises `ValueError` (exit code `4` on the CLI) on both backends. |
-| `warmup` | `int` | `3` | The number of inferences that run before `ServingState.ready` changes. |
-| `k` | `int` | `8` | The number of verification samples. Downshift forwards it to the gate. |
-| `adapter` | `str \| None` | `None` | The adapter name or spec. `None` detects the adapter. |
-| `dynamic` | `dict[str, list[int]] \| None` | `None` | The override of the dynamic axes. Downshift forwards it to the gate. |
-| `intra_op_threads` | `int` | `0` | `SessionOptions.intra_op_num_threads` of ONNX Runtime. `0` lets ONNX Runtime choose. If the value is more than `0`, it also sets `torch.set_num_threads` for the torch backend. |
-| `inter_op_threads` | `int` | `0` | `SessionOptions.inter_op_num_threads` of ONNX Runtime. `0` lets ONNX Runtime choose. |
-| `output_encoding` | `OutputEncoding` | `json` | The default encoding of response tensors. The `output_encoding` field of a request overrides it. |
-| `max_input_bytes` | `int` | 256 MiB | The limit on one decoded base64 tensor input. |
-| `max_body_bytes` | `int` | 32 MiB | The limit on the whole request body (`413`). Downshift checks it before it parses the body. There is no separate limit on text length. This limit also applies to `text` requests. |
-| `max_concurrency` | `int` | `4` | The size of the inference thread pool (`ServingState.executor`) in each worker process. It is the number of requests that infer and encode at the same time. |
-| `execution` | `ExecutionChoice` | `threadpool` | `threadpool` runs the work of each request on the two pools. `inline` runs a small JSON body (Content-Length up to 64 KiB, no `text`) on the event loop. Refer to [Request path](#request-path-servepredictpy). |
-| `prep_threads` | `int` | `min(4, usable CPUs)` | The size of the prep pool (`ServingState.prep_executor`). The pool parses, validates and converts request bodies, and it tokenizes. |
-| `axis_max` | `dict[str, int] \| None` | `None` | `--axis-max NAME=N`. It sets a lower maximum that the server serves for a dynamic axis. Verification pins one sample at exactly `N`. |
-| `export_cache_dir` | `str \| None` | `None` | `--export-cache-dir`. The directory where downshift keeps verified exports. The next boot then skips the export and the verification. |
-| `max_queue` | `int` | `64` | The number of additional predicts that can be admitted and wait beyond `max_concurrency`. |
-| `request_timeout` | `float` | `30.0` | The number of seconds that an admitted predict can wait in the queue. After this time, it gets a `503` and does not run. `0` turns the check off. |
-| `atol` / `rtol` | `float \| None` | `None` | The override of the tolerance. Downshift forwards it to the gate. `None` means "by dtype". |
-| `result_cache_rows` | `int \| None` | `None` | `--result-cache-rows`. The number of rows in the result cache of each worker. `None` is `100` for a model with `verdict.row_independent` and off for other models. `0` is off. A number for a model that is not row-independent is a `ValueError` at boot. |
-| `seed` | `int` | `0` | The seed of the verification samples. Downshift forwards it to the gate. |
-| `vary` | `str \| None` | `None` | A `pkg.module:fn` that replaces the verification sampler of the adapter. |
-| `pooling` | `str \| None` | `None` | A `PoolingChoice` value (`mean`, `cls`, `max`, `mean_sqrt_len`, `lasttoken`, `weightedmean`, `none`). It overrides the embedding recipe of a Hugging Face repo. |
-| `normalize` | `bool \| None` | `None` | L2-normalise the embedding. `None` means the setting of the recipe. |
-
-## `BackendChoice`
-
-```python
-class BackendChoice(StrEnum):
-    auto = "auto"
-    onnxruntime = "onnxruntime"
-    torch = "torch"
-```
-
-`BackendChoice` is what the caller asked for. `"auto"` exists only in the CLI and the options. It is never a running backend. Before downshift builds anything, `choose_backend` resolves it to a concrete `BackendName` (`"onnxruntime"` or `"torch"`, from `core.verdict`).
+`BackendChoice` is what the caller asked for: `auto`, `onnxruntime` or `torch`. `auto` is never a running backend. `choose_backend` resolves it to a `BackendName` (`onnxruntime` or `torch`, from `core/verdict.py`).
 
 ## `choose_backend`
 
 ```python
-def choose_backend(verdict: ExportVerdict, opts: ServeOptions) -> tuple[BackendName, list[str]]
+def choose_backend(
+    verdict: ExportVerdict, opts: ServeOptions, *, has_torch: bool | None = None
+) -> tuple[BackendName, list[str]]
 ```
 
-`choose_backend` returns `(backend_name, notes)`. These rules apply, in this order:
+It returns the backend and the notes for the banner. The rules, in this order:
 
-1. If `opts.backend == BackendChoice.auto`, start from `verdict.recommended_backend`. Otherwise, start from `opts.backend`.
-2. `--backend onnxruntime` on a `DEGRADED` verdict without `--force-onnx` raises `ValueError`. This is the one case where `serve` refuses to boot and does not fall back silently.
-3. `--force-onnx` on a `DEGRADED` verdict selects `onnxruntime`. Downshift adds a banner note ("serving a DEGRADED graph; outputs may be wrong").
-4. If `onnxruntime` is selected, but the verdict has no ONNX graph (`onnx_program is None and onnx_path is None`), downshift falls back to `torch` and adds a note. This occurs after a `FAILED` capture, or when `--backend torch` skipped the export.
-5. If `torch` is selected, but the verdict has no `prepared`, `choose_backend` raises `ValueError`. This occurs for an `intake()` of a bare `.onnx` file without a reference. It never ran an adapter, so there is no `nn.Module` to run eagerly.
+1. With `auto`, start from `verdict.recommended_backend`. Otherwise, start from `opts.backend`.
+2. `onnxruntime` on a DEGRADED verdict without `force_onnx` raises `ValueError`.
+3. `force_onnx` on a DEGRADED verdict selects `onnxruntime` and adds a note.
+4. If `onnxruntime` is selected but the verdict has no graph (`onnx_program`, `onnx_path` and `onnx_bytes` are all empty), fall back to `torch` and add a note. This happens after a FAILED capture or `--backend torch`.
+5. If `torch` is selected but there is no PyTorch model, raise `ValueError`. By default, `has_torch` is `verdict.prepared is not None`. A reused export passes `has_torch=True`, because the caller can load the model when it needs it.
+
+## The boot builders
+
+Each builder makes a `ServingState` through `_new_state`. `_new_state` attaches the Hugging Face metadata (`attach_hf_metadata`), records the boot timings, warms up and sets `ready`. A builder therefore cannot skip a step.
+
+| Builder | Used by | What it does |
+|---|---|---|
+| `prepare_serving(loaded, opts, reference, tokenizer_from)` | a boot without a reusable export | Runs the gate (`intake()` for a `.onnx` file, else `prepare_model()` and `build_verdict()`), selects a backend, builds it, then `_new_state`. `--backend torch` and bfloat16-only weights skip the export and give an UNVERIFIED verdict. |
+| `serving_state_from_artifact(source, verdict, opts, input_names, ...)` | a reused export on ONNX Runtime | Builds a session over `verdict.onnx_path` or `verdict.onnx_bytes`. No capture, no verification. The caller gives `input_names`, `axis_bounds`, the saved example feeds and the source kind, because the verdict has no `Prepared`. |
+| `serving_state_from_torch_artifact(loaded, verdict, opts, ...)` | a reused export on torch | Prepares the loaded model again with the adapter and serves it eagerly. It uses the verdict of the earlier export. |
+
+`serve/reuse.py` chooses between them:
+
+- `prepare_serving_reusing(load, opts, ...)` makes the export key, looks it up in the memo of the process and then in `--export-cache-dir`, and boots from a hit with `state_from_entry`. On a miss, it calls `prepare_serving` and stores a CLEAN or DEGRADED result in both tiers. For a Hugging Face repo directory, the key comes from the files of the repo, so a hit that ONNX Runtime serves never loads the weights.
+- `state_from_entry(entry, load, opts, ...)` selects the backend again from the verdict of the entry. It calls `load()` only if torch serves the model. A `serve --workers N` worker uses it too: the parent sends its export as an `ArtifactHandoff` (`cli/runtime.py`).
+
+After the selection of ONNX Runtime on a CLEAN verdict, `prepare_serving` drops each reference to the torch model before the warmup. The peak memory then does not hold the weights two or three times. If the device is `cpu` and both thread counts are `0`, the backend reuses the session that `verify()` built.
+
+`core.phase.report(Phase.x)` tells `/ready` which phase the loader is in. Outside an app with a loader, it does nothing.
+
+`warmup(state, n)` runs `n` inferences on the example inputs, or on `synthesize_feeds(backend)` if there are none (dynamic axes become 1, floats are random, integers are zero). It sets `state.ready = True`, also for `n = 0`.
 
 ## `ServingState`
 
-```python
-@dataclass
-class ServingState:
-    source: str
-    verdict: ExportVerdict
-    backend: Backend
-    input_names: tuple[str, ...]
-    options: ServeOptions
-    example_inputs: tuple | None = None
-    ready: bool = False
-    notes: list[str] = field(default_factory=list)
-    source_kind: str = UNKNOWN_SOURCE
-    text: TextIO | None = None
-    embedding: EmbeddingRecipe | None = None
-    vocab_size: int | None = None
-    warmup_stats: WarmupStats | None = None
-    timings: dict[str, float] = field(default_factory=dict)
-    axis_bounds: dict[str, dict[int, DimBound]] = field(default_factory=dict, repr=False)
-    executor: ThreadPoolExecutor = field(init=False, repr=False, compare=False)
-    prep_executor: ThreadPoolExecutor = field(init=False, repr=False, compare=False)
-    in_flight: int = field(init=False, repr=False, compare=False, default=0)
-```
-
-One running server, or one worker process, holds this object. `/metadata` reads it. The predict routes admit requests against it (`PredictRoute` in `serve/app.py` and `run_predict` in `serve/predict.py`).
+One server process holds one `ServingState`. `/metadata`, `/schema` and the predict routes read it.
 
 | Field | Meaning |
 |---|---|
-| `source` | The model spec that `serve` or `app_for` received. It is always a form that is already on this machine. `/metadata` shows it in the `model` field. |
-| `verdict` | The `ExportVerdict` that the gate made. |
-| `backend` | The concrete `Backend` instance (`OnnxRuntimeBackend` or `TorchBackend`) that serves requests. |
+| `source`, `source_kind` | The `MODEL` argument and its form (`onnx-file`, `torch-checkpoint`, `hf-repo-dir`, `import-spec`, `in-process-module`, `unknown`, from `sources.py`). Clients see only the file or directory name. |
+| `verdict` | The `ExportVerdict` of the gate. |
+| `backend` | The `OnnxRuntimeBackend` or `TorchBackend` that serves requests. |
 | `input_names` | The flat input names, in the order of the forward arguments. |
-| `options` | The `ServeOptions` that built this state. |
-| `example_inputs` | Real example inputs, if there are any. Downshift uses them to warm up with realistic shapes and not with synthesized shapes. It also uses them to build the `.npz` sidecar of `--workers N`. |
-| `ready` | `True` after the state is warmed up. The last step of `warmup()` sets it, also with `--warmup 0`. |
-| `notes` | The strings that the CLI banner prints. Examples: a warning about `--force-onnx`, or a note about a backend fallback from `choose_backend`. |
-| `warmup_stats` | A `WarmupStats` after `warmup()` ran. Otherwise `None`. |
-| `source_kind` | The accepted form that `source` names: `onnx-file`, `torch-checkpoint`, `hf-repo-dir`, `import-spec`, `in-process-module` or `unknown`. The constants are in `downshift/sources.py`. `/schema` reports it under `source`. The `Model` row of the banner shows it. |
-| `text` | A `TextIO` (`adapters/text.py`: the tokenizer, the token limit of the model, and the labels of a classifier). It exists when the source is a Hugging Face repo directory with tokenizer files. It lets `/predict` take `{"text": ...}`. |
-| `embedding` | An `EmbeddingRecipe` (`adapters/embedding.py`). It exists when the repo declares a pooling recipe, or `--pooling` gives one. The recipe is already part of the exported graph. Downshift keeps it so that `/schema` can say what it is. |
-| `vocab_size` | The vocabulary size of the Hugging Face model. Downshift sets it also when the tokenizer or the recipe fails to load. An `input_ids` value outside `[0, vocab_size)` gets a `400` before the inference. |
-| `timings` | The wall-clock seconds of each boot phase that ran. The keys are `Phase` values (`downshift/core/phase.py`, a `StrEnum` of `load`, `export`, `verify`, `session` and `warmup`). The caller adds `load` after `prepare_serving` returns. The `Boot` row of the banner and the `boot` field of `/metadata` read it. |
-| `axis_bounds` | For each input and each dynamic axis: a `DimBound(name, min, max)`. It is the range that the export of the adapter was traced for. It is empty for a bare `.onnx` file with no reference model. It drives the `bounds` in `/schema` and the readable `400` for an axis that is out of range. |
-| `executor` | The inference pool: a `ThreadPoolExecutor` with the size `options.max_concurrency`. It is not part of the identity of the dataclass (`compare=False`). The backend call and the response encoding of each request run here. They never run on the event loop, unless `--execution inline` is set. A slow request therefore never blocks `/health` or `/ready`. |
-| `prep_executor` | The prep pool, with the size `options.prep_threads`. It does the parse, the validation, the conversion to arrays and the checks of each request. |
-| `in_flight` | The number of predicts that are admitted and not finished (in a pool, or waiting for one). An internal lock guards it. |
-
-Methods:
-
-- `try_admit()` claims one of the `max_concurrency + max_queue` slots in one atomic step. It returns `False` if no slot is free.
-- `release()` gives one slot back.
-
-Properties:
-
-- `backend_auto_selected` is `True` when `options.backend == BackendChoice.auto` and not `forced_onnx`.
-- `forced_onnx` is `True` when `--force-onnx` is set and the verdict is `DEGRADED`.
-- `declared_dtypes` is a `cached_property`. It is `{input_name: dtype}`, read once from `backend.metadata().inputs`. Downshift uses it to interpret ambiguous JSON input on each request, without deriving it again.
-
-A `--workers N` worker can rebuild from the ONNX artifact of the parent. It derives `source_kind` again from the spec (`loading.source_kind`). It therefore reports the kind of the original model.
-
-`WarmupStats`:
-
-```python
-@dataclass
-class WarmupStats:
-    count: int
-    mean_ms: float
-    synthesized: bool  # True when there was no example input, so warmup() made one up
-```
-
-## `prepare_serving`
-
-```python
-def prepare_serving(
-    loaded: LoadedModel, opts: ServeOptions | None = None, reference: LoadedModel | None = None
-) -> ServingState
-```
-
-`prepare_serving` does these steps:
-
-1. It runs the gate. For a `.onnx` `LoadedModel`, it runs `intake()`. Otherwise, it runs `prepare_model()` and `build_verdict()`. If `opts.backend == BackendChoice.torch`, the export is skipped, and it makes an `UNVERIFIED` verdict for torch only.
-2. It selects a backend with `choose_backend`.
-3. It builds the backend.
-4. It warms up the backend (`opts.warmup` inferences).
-
-`serve_cmd` and `app_for` both call it. `serve_cmd` adds a `Phase.load` timing entry itself. The read and import of the model happen before `prepare_serving` is called. They are outside this function.
-
-While `prepare_serving` runs, `core.phase.report(Phase.x)` tells `/ready` which phase the loader is in. Outside an app that a loader built, this call does nothing.
-
-## `serving_state_from_artifact`
-
-```python
-def serving_state_from_artifact(
-    source: str,
-    onnx_path: Path,
-    verdict: ExportVerdict,
-    opts: ServeOptions,
-    input_names: tuple[str, ...],
-    notes: list[str] | None = None,
-    example_inputs: tuple | None = None,
-    axis_bounds: dict[str, dict[int, DimBound]] | None = None,
-) -> ServingState
-```
-
-This function rebuilds a `ServingState` in a `serve --workers N` worker. It starts from the ONNX graph and the verdict that the parent process already exported and verified. There is no capture and no verification. It makes a new `OnnxRuntimeBackend` session over `onnx_path`, and it does a warmup pass.
-
-- `input_names` and `notes` come from the parent. The verdict that the parent ships has no `prepared`, so the worker cannot derive them.
-- The axis names and bounds of the adapter (`axis_bounds`) also come from the parent. The parent ships them as JSON with `axis_bounds_to_json`. `/schema` and the `400` for an axis out of range need them.
-- If the parent had `example_inputs`, they come from the `.npz` sidecar that the parent wrote. Otherwise, `warmup()` synthesizes them.
-
-`serving_state_from_torch_artifact(loaded, verdict, opts, notes=None)` is the equivalent for torch. The worker reloads the model itself, because downshift does not ship torch weights between processes. It prepares the model, but it uses the verdict that the parent already verified.
-
-## `warmup` and `synthesize_feeds`
-
-```python
-def warmup(state: ServingState, n: int) -> WarmupStats
-def synthesize_feeds(backend: Backend) -> dict[str, np.ndarray]
-```
-
-`warmup` runs `n` inferences. It uses `state.example_inputs` if they exist. Otherwise, it uses `synthesize_feeds`. It records `WarmupStats`, and it sets `state.ready = True` for all `n`, also `n=0`. `ready` means "the state finished the boot". It does not mean "at least one warmup inference ran".
-
-`synthesize_feeds` builds one dummy array for each input that the backend declares:
-
-- Dynamic or unknown axes get size 1.
-- Floats are `np.random.randn`.
-- Integers and bools are zero.
+| `options` | The `ServeOptions` of this state. |
+| `example_inputs` | Real example inputs, if any. The warmup and the `--workers` handoff use them. |
+| `ready`, `warmup_stats` | Set by `warmup()`. |
+| `notes` | Lines for the banner, for example a backend fallback. |
+| `reused` | `"memory"` or `"disk"` if the boot reused an earlier export. Otherwise `None`. |
+| `hf_source` | The Hugging Face repo directory for the tokenizer and the recipe: the model itself, or `--tokenizer-from`. |
+| `text` | A `TextIO` (tokenizer, token limit, labels) if `/predict` takes `text`. |
+| `embedding` | The `EmbeddingRecipe` if the graph ends in a pooling step. |
+| `vocab_size` | For a Hugging Face model. An `input_ids` value outside `[0, vocab_size)` gets a `400`. |
+| `timings` | The seconds of each boot phase (`Phase` values: `load`, `export`, `verify`, `session`, `warmup`). |
+| `axis_bounds` | `{input: {axis: DimBound(name, min, max)}}`, the traced range of each dynamic axis. Empty for a bare `.onnx` file. It gives `bounds` in `/schema` and the `400` for an axis out of range. |
+| `executor`, `prep_executor` | The inference pool (`max_concurrency` threads) and the prep pool (`prep_threads` threads). |
+| `in_flight` | The admitted predicts that did not finish. `try_admit()` claims one of `max_concurrency + max_queue` slots, and `release()` gives it back. |
+| `result_cache`, `cache_off_reason` | The `ResultCache`, or `None` with the reason why the default turned it off. |
 
 ## `build_app`
 
@@ -243,64 +120,38 @@ def build_app(
     *,
     loader: Callable[[], ServingState] | None = None,
     middleware: Sequence[str] = (),
-    api_key: str | None = API_KEY,
+    api_key: str | None = settings.API_KEY,
     access_log: bool = True,
 ) -> FastAPI
 ```
 
-You must give exactly one of `state` and `loader`. Otherwise, `build_app` raises `ValueError`.
+Give exactly one of `state` and `loader`:
 
-- **`state=`** is for library use, `app_for` and tests. The app serves `state` immediately. There is no `503` window on `/ready`. The gate and the warmup already ran, synchronously, before the call to `build_app`.
-- **`loader=`** is for `downshift serve` with one worker. The app binds with no `ServingState`. `/health` returns `200` immediately. `/ready`, `/metadata`, `/schema` and both predict routes return `503` until `loader` returns a `ServingState`. The lifespan of the app starts `loader` on a background thread when uvicorn starts to serve. It does not start when `build_app` is called. The returned `ServingState` goes to `app.state.serving`. During this time, `phase` on `/ready` says which `Phase` the loader is in. If `loader` raises an error, `app.state.serving` stays `None` for this function. `serve_cmd` holds the `uvicorn.Server` and sets `should_exit` itself when the loader fails. The process then exits and does not serve `503` forever.
+- `state=` serves at once. `app_for` and the tests use it.
+- `loader=` is for `downshift serve`. The app binds with no state. The lifespan of the app runs `loader` on a background thread. Until it returns, `/health` gives `200`, and `/ready`, `/metadata`, `/schema` and the predict routes give `503`. If `loader` raises an error, `serve_cmd` stops the server.
 
-In both modes, `GET /` returns `200`. The response gives `ready`, the model (when the model is ready) and the routes. `_routes` in `serve/app.py` reads the routes from `app.routes` for each request. The list therefore always agrees with the app. Each path includes the mount prefix (`root_path`).
-
-`middleware` is a sequence of `pkg.module:Attr` specs (`--middleware`, repeatable). `load_middleware` (`serve/middleware.py`) attaches them in order. Each spec must resolve to one of these:
-
-- A middleware class that is built as `cls(app)`: pure ASGI, or a subclass of `starlette.middleware.base.BaseHTTPMiddleware`.
-- An `async (request, call_next)` coroutine function.
-
-`api_key` defaults to `DOWNSHIFT_SERVER_API_KEY` (`settings.API_KEY`). The variable therefore reaches `app_for()` and all other library callers, and also the CLI. If the key is set, every route except `/health` and `/ready` needs `Authorization: Bearer <api_key>`. Downshift compares it in constant time. Otherwise, the route answers `401` with `WWW-Authenticate: Bearer`.
-
-`None` or an empty string means unauthenticated. `build_app` then logs one `WARNING` (logger `downshift.serve`) that the endpoints are unauthenticated. To fix this, set the key or add your own authentication middleware. To override the environment for one app, pass `api_key=None`.
-
-`access_log` (default `True`, `--access-log` on the CLI) controls the one log line for each request that `RequestIdMiddleware` writes on the logger `downshift.access`. The format is `METHOD PATH STATUS N ms`. The level is:
-
-- `INFO` for normal requests.
-- `WARNING` from status `400`.
-- `DEBUG` for the probes `/health` and `/ready`.
-
-Downshift sets and returns the request ID in both cases.
-
-Each app has this stack of middleware, from the outermost to the innermost:
-
-1. `RequestIdMiddleware` assigns or echoes `X-Request-Id`. It binds the ID to `downshift.logs.request_id_var`, so each log line that is written while the request is served has `request_id=...`. It also writes the request line.
-2. `ApiKeyMiddleware`.
-3. Your `middleware`. It therefore sees only authenticated traffic.
-
-`/predict` and `/predict/graph` use the `PredictRoute` route class, which the next section describes. All other routes are plain FastAPI routes. [`http-api.md`](http-api.md) has the details of the wire level.
+The middleware stack, from the outside in: `RequestIdMiddleware` (the `X-Request-Id` header, the request ID on each log line, and the access log line), `ApiKeyMiddleware`, then your `--middleware`. Your middleware therefore sees only authenticated requests.
 
 ## Request path (`serve/predict.py`)
 
-Serving speed has the first priority in the design of downshift. The boot can be slow, because the export, the verification and the warmup all happen before `/ready`. Each request pays only for its own work. One predict request makes two thread hops:
+Per-request speed has priority over boot time. The boot does the export, the verification and the warmup, so each request pays only for its own work. One predict makes two thread hops:
 
 ```
-event loop     PredictRoute: admit or 503, Content-Type (415), --max-body-bytes (413),
-               read the body
-prep pool      _parse: orjson + the route's pydantic model (422), per-route checks (400)
-               _prepare_feeds: arrays, tokenizing, graph batching, vocab/edge/shape/bound
-               checks (400)
-inference pool _infer: the backend call only
-               _encode_response: JSON, base64 or safetensors, split per graph
+event loop      PredictRoute: admit or 503, Content-Type (415), --max-body-bytes (413), read the body
+prep pool       _parse: orjson and the pydantic model of the route (422), route checks (400)
+                _prepare_feeds: arrays, tokenizing, graph batching, then the input checks (400)
+inference pool  _infer: the backend call
+                _encode_response: JSON, base64 or safetensors, split for each graph
 ```
 
-- `PredictRoute` serves the two routes itself. FastAPI does not resolve the body. `run_predict` gets the raw bytes. The functions `predict` and `predict_graph` exist only so that the OpenAPI schema documents `PredictRequest` and `GraphPredictRequest`. `_validate_json` makes the same `422` shapes as FastAPI: a missing body, `json_invalid`, and validation errors under `"body"`.
-- Admission happens before downshift reads one byte. The slot is released in `finally` on every exit. `--request-timeout` is checked after the prep and again when the inference starts. Downshift never interrupts an inference that is running.
-- The encoding runs on the inference thread directly after the backend call. It therefore holds the inference slot. This saves one hop. The cost is lower throughput when the outputs are large and `--max-concurrency` is the bottleneck.
-- `--execution inline` runs both hops on the event loop for a JSON body with a Content-Length of up to 64 KiB (`INLINE_MAX_BODY_BYTES`). A `text` request still tokenizes in the prep pool. This mode helps only for models that infer in much less than one millisecond. It stalls `/health` and `/ready` for as long as one inference takes.
-- `_run_in` carries the contextvars of the request into the pool thread. It records the wait as `prep_wait` or `infer_wait`. `Server-Timing` (and `timings_ms` of the access log) lists `parse`, `prep_wait`, `prep`, `infer_wait`, `infer` and `encode`.
-- **Result cache** (`serve/result_cache.py`, `_run_cached` in `serve/predict.py`). If `ServingState.result_cache` is set, `/predict` takes this path. The prep hop makes one key for each row (`text_keys` before the tokenizer, `tensor_keys` from the arrays). It calls `ResultCache.lookup`. The lookup splits the rows into hits, rows that another request computes, and rows that this request computes (it claims them). Only the missed rows go to the tokenizer and to the model. After the inference, the same inference thread calls `ResultCache.complete` for each row, so that the waiters can go on. The request then waits for the rows of other requests. If the owner of such a row failed, the request computes that row itself. The wait ends at `--request-timeout`. If a client leaves during the prep hop, the callback of the hop gives the claimed rows back as an error, so that the waiters compute them. The rows that missed skip the check of the batch axis, because the whole batch was checked before the lookup. The prep pool joins the rows in the order of the request and encodes the response. A tensor request is checked as a whole before the lookup. `/predict/graph` does not use the cache.
-- `ServingState.result_cache` is `None` if the cache is off. `ServingState.cache_off_reason` says why the default turned it off.
+- `PredictRoute` serves the raw body itself, so FastAPI does not parse it. The functions `predict` and `predict_graph` exist only to document the bodies in OpenAPI. `_validate_json` makes the same `422` bodies as FastAPI.
+- The slot is admitted before the server reads the body, and released in `finally`.
+- `--request-timeout` is checked after the prep and again when the inference starts. Downshift never stops an inference that runs.
+- The input checks (`_violation`) run before the inference: the vocabulary, the edge index, the rank and fixed axes, and the axis bounds. A shape error of the model therefore never reaches the client as a `500`.
+- `--execution inline` runs both hops on the event loop for a JSON body of up to 64 KiB with a `Content-Length` and no `text`.
+- `_run_in` carries the context variables (the request ID) into the pool thread and records `prep_wait` and `infer_wait` for `Server-Timing`.
+
+With the result cache on, `/predict` takes `_run_cached`. The prep hop makes one key for each row (`text_keys` before the tokenizer, `tensor_keys` from the arrays) and calls `ResultCache.lookup`. The lookup sorts the rows into hits, rows that another request computes, and rows that this request claims. Only the claimed rows go to the tokenizer and the model. After the inference, `ResultCache.complete` gives each row to its waiters. If the owner of a row fails or leaves, a waiter computes the row itself. The prep pool joins the rows and encodes the response, so a request in which each row hits makes no inference hop. `/predict/graph` does not use the cache.
 
 ## Backends (`serve/backends.py`)
 
@@ -308,92 +159,13 @@ inference pool _infer: the backend call only
 class Backend(Protocol):
     name: BackendName
     input_names: list[str]
-    verified_provider: str | None
+    verified_provider: str | None  # "CPUExecutionProvider" if the numerics ran, else None
 
     def infer(self, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]: ...
-    def metadata(self) -> BackendMeta: ...
+    def metadata(self) -> BackendMeta: ...  # name, device, inputs and outputs as IOSpec
 ```
 
-`verified_provider` is the execution provider that the numerics gate ran against. It is `"CPUExecutionProvider"` if the numerics ran. Otherwise, it is `None`. `engine._build_backend` sets it directly after it builds a backend. The `Verified on` row of the banner prints it. The row also says so when the server runs on a device that the numerics never covered.
+Both backends take and return dicts of numpy arrays. The output keys are positional (`output_0`, `output_1`, ...), so the responses look the same for both backends. bfloat16 and float16 tensors go on the wire as float32.
 
-Both concrete backends take and return dicts of numpy arrays. The keys are the input or output names. `serve/app.py` therefore does not need to know which backend it uses.
-
-### `OnnxRuntimeBackend`
-
-```python
-OnnxRuntimeBackend(
-    model: bytes | str | Path | None = None,
-    device: str = "auto",
-    intra_op_threads: int = 0,
-    inter_op_threads: int = 0,
-    *,
-    session: ort.InferenceSession | None = None,
-)
-```
-
-This class wraps an `onnxruntime.InferenceSession`. Pass `model` (bytes, or a path to a `.onnx` file). Or pass an existing `session` directly. `prepare_serving` passes `session=` when it can reuse the exact session that `verify()` built. This is possible when the device resolves to `cpu` and both thread counts are `0`, which is the default session of ONNX Runtime. It avoids a second load of the same graph.
-
-- `device="cuda"` selects `CUDAExecutionProvider`, with `CPUExecutionProvider` behind it. This requires that it is in `onnxruntime.get_available_providers()`. If it is not, the class raises `ValueError`. It does not run on the CPU without a message.
-- Graph optimization is always `ORT_ENABLE_ALL`.
-- The outputs have positional keys (`output_0`, `output_1`, and so on), for all names that the ONNX graph uses. The responses therefore look the same for both backends.
-- ONNX Runtime `InvalidArgument` and `InvalidGraph` exceptions become `InferenceInputError` (a `400` and not a `500`). So does each `Fail` exception whose message contains "shape". Other exceptions propagate.
-
-### `TorchBackend`
-
-```python
-TorchBackend(
-    module: nn.Module,
-    input_names: tuple[str, ...],
-    device: str = "auto",
-    example_inputs: tuple | None = None,
-    intra_op_threads: int = 0,
-)
-```
-
-This class wraps an `nn.Module` in eager mode: `module.eval().to(device)`. `device="cuda"` without `torch.cuda.is_available()` raises `ValueError`. If `intra_op_threads > 0`, the class calls `torch.set_num_threads`. With `0`, it leaves the default of torch.
-
-A bfloat16 or float16 module is served on a float32 wire. Numpy has no bfloat16. The backend casts floating inputs to the dtype of the module on the way in. It widens the outputs to float32 on the way out. Such a model boots on the torch fallback, and `/schema` reports its dtypes as `float32`.
-
-If you give `example_inputs`, the class does one pass through the model at construction, with no warmup. This pass fills in the real dtypes and shapes for `/metadata` (`_spec_from_tensor` and `_spec_from_array`). Without `example_inputs`, the input specs have `dtype=None, shape=None`, and there are no output specs.
-
-`infer()` converts numpy inputs to tensors with `torch.from_numpy`. It copies only when the array is not C-contiguous or not writable. Base64-decoded arrays are sometimes like this. It runs under `torch.inference_mode()`. It turns only errors that the client caused into `InferenceInputError` (a `400`):
-
-- An `IndexError`.
-- A `RuntimeError` or `ValueError` whose message names a problem with shape, size, dimension, dtype, broadcast or range, and that is not an out-of-memory error.
-
-Any other exception from the model propagates and becomes a `500`. Examples: an unsupported operation, a CUDA failure, a bug in the module, and an out-of-memory error.
-
-### `BackendMeta` and `IOSpec`
-
-```python
-@dataclass
-class IOSpec:
-    name: str
-    dtype: str | None
-    shape: list[int | str | None] | None
-
-
-@dataclass
-class BackendMeta:
-    name: BackendName
-    device: str
-    inputs: list[IOSpec]
-    outputs: list[IOSpec]
-```
-
-`backend.metadata()` returns `BackendMeta`. The `backend` field of `/metadata` serializes it (`BackendMeta.to_dict()`).
-
-- `IOSpec.dtype` for the ONNX Runtime backend is the own string of ONNX Runtime, in the style `"tensor(float)"`. For the torch backend, it is in the style `"tensor(float32)"` (the torch dtype name). This applies when example inputs were available.
-- `IOSpec.shape` marks axis 0 with the string `"batch"` for the specs of the torch backend (`_dynamic_shape`). Axis 0 is dynamic for all models that downshift serves. The ONNX Runtime backend reports what the graph declares.
-
-### `resolve_device`
-
-```python
-def resolve_device(device: str) -> str
-```
-
-`"auto"` becomes `"cuda"` if `torch.cuda.is_available()`. Otherwise, it becomes `"cpu"`. Other values (`"cpu"` and `"cuda"`) pass through unchanged.
-
-## `app_for`
-
-`app_for` is the one-call path from a model to a mounted app. It does three things: it builds the `LoadedModel`, it runs `prepare_serving()`, and it runs `build_app(state=...)`. It reads the same `DOWNSHIFT_*` environment variables as the CLI, through `ServeOptions()` and the `api_key` default of `build_app`. [`python-api.md`](python-api.md#app_for) has the full signature and the meaning of the parameters.
+- `OnnxRuntimeBackend(model=None, device="auto", intra_op_threads=0, inter_op_threads=0, *, session=None)` wraps an `InferenceSession` with all graph optimizations on. `device="cuda"` needs `CUDAExecutionProvider`. If ONNX Runtime cannot start it, the class raises `ValueError` and does not run on the CPU. An `InvalidArgument` error from ONNX Runtime becomes `InferenceInputError`, which the route gives as a `400`. Other errors are a `500`.
+- `TorchBackend(module, input_names, device="auto", example_inputs=None, intra_op_threads=0, dynamic_shapes=None)` runs the module eagerly under `torch.inference_mode()`. `device="cuda"` without CUDA raises `ValueError`. With `example_inputs`, it runs one pass at construction to learn the dtypes and shapes for `/metadata`. The shape of a dynamic axis is the name of its `torch.export.Dim`, or `"batch"` for axis 0 when there are no dynamic shapes. A missing input gives `InferenceInputError`. Any other error from the model is a `500`, because the input checks of the request path ran before the call.

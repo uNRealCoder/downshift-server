@@ -1,17 +1,12 @@
 # Running downshift in production
 
-`downshift serve` is a FastAPI app behind uvicorn. It does these jobs:
+`downshift serve` is a FastAPI app behind uvicorn. It runs the export-and-verify gate, selects a backend, warms it up and answers `/predict`. It has one fixed API key for authentication and optional HTTPS with your certificate. It has no rate limiting and no process supervision. A real deployment adds these around downshift. This page tells you how.
 
-- It runs the export-and-verify gate.
-- It selects a backend.
-- It warms up the backend.
-- It answers `/predict`.
+Each flag on this page is in [`cli.md`](cli.md#serve), with its environment variable and default. A flag has priority over its variable. The variable has priority over the default. Downshift reads the variables one time, at start.
 
-It has one fixed API key for authentication and optional HTTPS with your certificate. It has no rate limiting and no process supervision. A real deployment adds these around downshift. This page describes how to do that.
+## Authentication
 
-## Authentication: one API key, no rate limiting
-
-Set `DOWNSHIFT_SERVER_API_KEY`. Every route except `/health` and `/ready` then needs `Authorization: Bearer <key>`. The comparison takes constant time. Any other request gets a `401` with `WWW-Authenticate: Bearer` and this body: `{"detail": "Authorization header is not set or incorrect"}`. The two probes stay open, so Kubernetes never needs the key.
+Set `DOWNSHIFT_SERVER_API_KEY`. Each route except `/health` and `/ready` then needs `Authorization: Bearer <key>`. The comparison takes constant time. Any other request gets a `401` with `WWW-Authenticate: Bearer`. The probes stay open, so Kubernetes never needs the key.
 
 ```bash
 export DOWNSHIFT_SERVER_API_KEY="$(openssl rand -hex 32)"
@@ -20,30 +15,20 @@ curl -s localhost:8000/predict -H "Authorization: Bearer $DOWNSHIFT_SERVER_API_K
   -H 'content-type: application/json' -d '{"inputs": {"x": [[0.0, 0.1]]}}'
 ```
 
-If the variable is unset or empty, the server logs one `WARNING` at startup. The warning says that the endpoints are unauthenticated. To fix this, set the key or add your own authentication middleware. The server then serves all routes without a check. An empty string does not make `Bearer ` a valid credential.
+If the variable is unset or empty, the server logs one `WARNING` at start and checks nothing. An empty string does not make `Bearer ` a valid credential. `app_for()` and `build_app()` read the same variable. To override it for one app, pass `api_key=`. To turn it off, pass `api_key=None`.
 
-`app_for()` and `build_app(..., api_key=...)` read the same variable by default. To override it for one app, pass `api_key=`. To turn it off, pass `api_key=None`.
+One key is a shared secret in a header. Use it only with TLS: the `--ssl-certfile` of downshift, or a proxy. Put a reverse proxy (nginx, Envoy, the load balancer of your cloud, a service mesh) in front of downshift for:
 
-One key is not a user system. It is a shared secret that travels in a header. Use it only with TLS: either the `--ssl-certfile` of downshift (refer to [HTTPS](#https)) or a proxy. A proxy layer does the other jobs better than downshift can. Put a reverse proxy in front of downshift. Examples are nginx, Envoy, the load balancer of your cloud, and a service mesh sidecar. Configure these items in the proxy:
-
-- TLS termination, with automatic renewal of the certificate.
-- Authentication that is more than one shared key (mTLS, keys for each client, OAuth).
+- TLS termination with automatic renewal of the certificate.
+- Authentication that is more than one key (mTLS, a key for each client, OAuth).
 - Rate limiting and IP allow-lists.
-- Limits on request size that are lower than `--max-body-bytes`. Use them to reject oversized bodies before they reach this process.
+- Size limits that are lower than `--max-body-bytes`.
 
-If you need something in the process, use `--middleware pkg.module:Attr` (repeatable). It accepts these forms:
-
-- A pure ASGI class. This is the cheapest form. `starlette.middleware.gzip:GZipMiddleware` of Starlette works as it is.
-- A `BaseHTTPMiddleware` subclass.
-- An `async (request, call_next)` function.
-
-Downshift attaches them in the order that you give. Your middleware runs inside the key check. It sees only authenticated requests. A `401` never reaches it.
+To add code in the process, give `--middleware pkg.module:Attr` (repeatable). It takes a pure ASGI class (the cheapest form, for example `starlette.middleware.gzip:GZipMiddleware`), a `BaseHTTPMiddleware` subclass, or an `async (request, call_next)` function. Downshift attaches them in the order that you give. They run inside the key check, so a `401` never reaches them.
 
 ## HTTPS
 
-Downshift can serve HTTPS with a certificate that you supply. To serve HTTPS, do these steps:
-
-1. Get a PEM certificate and its PEM private key. For a public name, get the two files from a certificate authority, for example Let's Encrypt. For a private network, use the certificate authority of your organization.
+1. Get a PEM certificate and its PEM private key.
 2. Give the two files to `serve`:
 
    ```bash
@@ -51,218 +36,150 @@ Downshift can serve HTTPS with a certificate that you supply. To serve HTTPS, do
      --ssl-certfile /etc/downshift/cert.pem --ssl-keyfile /etc/downshift/key.pem
    ```
 
-3. If the key is encrypted, set `DOWNSHIFT_SSL_KEYFILE_PASSWORD`. There is no flag for the password, because a flag shows in the process list.
-4. Make sure that the banner shows `https://` in the `Endpoint` row.
+3. If the key is encrypted, set `DOWNSHIFT_SSL_KEYFILE_PASSWORD`. There is no flag, because a flag shows in the process list.
+4. Make sure that the `Endpoint` row of the banner shows `https://`.
 
-Downshift loads the files before it loads the model. If a file is bad, `serve` stops with exit code `4`. Examples are a missing file, a key that does not agree with the certificate, and a wrong password. The error message gives the next step. Downshift never asks for a password on the terminal.
+Downshift loads the files before the model. A missing file, a key that does not agree with the certificate, or a wrong password stops `serve` with exit code `4` and a message that gives the next step. Downshift never asks for a password on the terminal.
 
-Downshift uses the TLS settings of `ssl.create_default_context` in the Python standard library. The minimum protocol is TLS 1.2. The cipher list is the list of the standard library. The default cipher string of uvicorn (`"TLSv1"`) also enables NULL ciphers and anonymous ciphers. Downshift does not use that default.
+Downshift uses the TLS settings of `ssl.create_default_context`: TLS 1.2 or later, and the cipher list of the Python standard library. It does not use the default cipher string of uvicorn, which also enables NULL and anonymous ciphers. `--workers N` works with HTTPS.
 
-`--workers N` works with HTTPS. Each worker reads the same files.
-
-These items are not in downshift. If you need one of them, use a proxy:
-
-- Automatic renewal of the certificate. Downshift reads the files one time, at startup. After you renew the certificate, restart the process.
-- ACME (Let's Encrypt) requests.
-- Client certificates (mTLS).
-- HTTP and HTTPS on the same port, or a redirect from HTTP to HTTPS.
-
-If a proxy terminates TLS, do not give `--ssl-certfile` to downshift. Keep downshift on plain HTTP behind the proxy, on `127.0.0.1` or on a private network.
+Downshift does not renew certificates, does not do ACME requests or client certificates, and does not redirect HTTP to HTTPS. It reads the files one time, so restart it after a renewal. If a proxy terminates TLS, do not give `--ssl-certfile`. Keep downshift on plain HTTP on `127.0.0.1` or a private network.
 
 ## `/health` and `/ready`
 
-- **`/health`** is the liveness probe. It returns `200` when the process is up and the event loop runs, with or without a loaded model. It never shows readiness or load. It never waits for predicts that are running. `/health` and `/ready` are `async def` routes. They run directly on the event loop and do not share a thread pool with predicts. Use it to decide "restart this container". Do not use it to decide "send traffic to it".
-- **`/ready`** returns `503` with `{"ready": false, "phase": "export"}` until the model is loaded, exported, verified and warmed up. It then returns `200` with `{"ready": true}`. It does not return to `503` by itself. `phase` is the step that the loader is in now: `load`, `export`, `verify`, `session` or `warmup`. Use `/ready` to decide "send traffic to this pod".
+- **`/health`** is the liveness probe. It gives `200` when the process is up, also while the model loads. It runs on the event loop and never waits for predicts. Use it to decide "restart this container".
+- **`/ready`** gives `503` with `{"ready": false, "phase": "export"}` until the model is loaded, exported, verified and warmed up. It then gives `200` and does not change back. `phase` is `load`, `export`, `verify`, `session` or `warmup`. Use it to decide "send traffic to this pod".
 
-The boot is different for different values of `--workers`:
+With one worker, `serve` binds the port before it loads anything. `/ready`, `/metadata`, `/schema` and the predict routes give `503` while a background thread runs the gate. If the load fails, the process exits with the code that `check` gives for the same error. A supervisor sees a failed start, not a server that gives `503` forever.
 
-- **One worker (default).** `serve` binds the port before it loads anything.
-  - `/health` answers `200` immediately.
-  - `/ready`, `/metadata`, `/schema` and both predict routes answer `503` while a background thread runs the gate. Predicts, `/metadata` and `/schema` have `Retry-After: 2`.
-  - `/ready` changes to `200` in place, without a restart, when the thread has a verdict.
-  - If the load fails, the process exits with the same code that `check` or `export` uses for the same error. Your process supervisor sees a crash. It does not see a server that serves `503` forever.
-- **`--workers N`.** The parent process runs the export-and-verify gate once, before any worker binds a socket (see "What `--workers` costs" below). Every worker needs the artifact that the gate makes. After that, uvicorn forks the workers. Each worker loads its own copy and binds immediately. There is no `503` window. When the port is open, every worker is ready. Set `initialDelaySeconds` to the boot time of the parent for this mode. Do not set it to zero.
+With `--workers N`, the parent runs the gate one time before the port opens. Each worker then binds, loads the export of the parent and warms up. `/ready` of a worker gives `503` for this short time. If a worker cannot load, the whole server stops.
 
-## What `--workers` costs
+## Workers and threads
 
-Each worker is a separate process with its own memory. In `--workers N` mode, each worker also has its own copy of the model. The parent exports and verifies once. It sends the result to every worker. The result is the ONNX graph, or only the verdict for a torch-backed verdict. `capture()` and `verify()` therefore do not repeat for each worker.
+Each worker is a process with its own copy of the model, its own pools and its own result cache. The parent exports and verifies one time and sends the result to each worker: the ONNX graph, or only the verdict if torch serves the model. A worker that serves ONNX builds its own session over that graph. A worker that serves torch loads the model again. Memory and start time increase with `N`.
 
-- A worker that serves ONNX builds its own `InferenceSession` over the graph of the parent, and it warms up.
-- A worker that serves torch reloads the model itself.
-
-Memory and startup time both increase with `N`.
-
-### Thread budgeting
-
-Assume that you use `--workers N` and leave `--intra-op-threads` at the default (`0`, "let ONNX Runtime choose"). Downshift then sets it to `max(1, logical_cores // N)` before it starts the workers. The `N` processes share the machine. They do not each claim all cores. If you set `--intra-op-threads` explicitly, your value always has priority. The torch backend gets the same budget through `torch.set_num_threads`. The banner shows it:
+If you leave `--intra-op-threads` at `0`, `--workers N` sets it to `max(1, CPUs // N)`, so the workers do not all claim all cores. A value that you set has priority. The banner shows the split:
 
 ```
 Threads     4 intra-op per worker  (16 logical / 4 workers)
 ```
 
-With one worker, `--intra-op-threads 0` keeps the default of ONNX Runtime (usually the full number of cores). This is the best choice, unless other CPU-bound work runs in the same container.
+`--workers` gives more requests at the same time. It does not make one request faster. In the 0.4.0 benchmark on 16 logical cores (`bench/REPORT_v0.4.0.md`), 4 workers against 1 worker:
 
-This split has a measured cost. The test machine had 16 logical cores (`bench/REPORT_v0.4.0.md`, `--intra-op-threads` at the default). Changing from 1 worker to 4 workers increases the throughput at concurrency 32. It decreases the throughput at concurrency 1:
+| model | workers | rps c=1 | rps c=32 |
+|---|---|---|---|
+| `clean_mlp` | 1 | 1377.8 | 1693.4 |
+| `clean_mlp` | 4 | 1257.8 | 6366.4 |
+| `mlp_large` | 1 | 546.6 | 1311.3 |
+| `mlp_large` | 4 | 503.2 | 2766.2 |
+| `bert_small` | 1 | 84.3 | 97.9 |
+| `bert_small` | 4 | 67.5 | 244.0 |
 
-| model         | workers | rps c=1 | rps c=32 |
-|---------------|---------|---------|----------|
-| `clean_mlp`   | 1       | 1377.8  | 1693.4   |
-| `clean_mlp`   | 4       | 1257.8  | 6366.4   |
-| `mlp_large`   | 1       | 546.6   | 1311.3   |
-| `mlp_large`   | 4       | 503.2   | 2766.2   |
-| `bert_small`  | 1       | 84.3    | 97.9     |
-| `bert_small`  | 4       | 67.5    | 244.0    |
+At concurrency 1, each request gets 4 threads and not 16, so it is a little slower. Choose `N` from the number of predicts that you expect at the same time.
 
-At concurrency 32, `clean_mlp` gains about 3.8x, `bert_small` about 2.5x and `mlp_large` about 2.1x. The 4 workers run 4 requests at the same time and not 1. Each worker has its own budget of 4 threads. The workers do not compete for threads.
+`--workers N` writes the graph (and a `.npz` file of the example inputs) to a `downshift-*` directory from `tempfile.mkdtemp`. Downshift removes it when `serve` exits, and through `atexit` on most other exits. A `SIGKILL` skips both. If `/tmp` is on persistent storage, remove a stray `downshift-*` directory after a hard kill.
 
-At concurrency 1, each model is slightly worse with 4 workers. One request now gets 4 intra-op threads (16 logical cores / 4 workers) and not 16. The only request that runs has fewer cores. `--workers` gives more concurrency. It does not give faster single requests. Choose the number of workers from the number of predicts that you expect at the same time. Do not choose it from the speed that you want for one predict.
+## Where the time of a request goes
 
-## Serving first: where the time of a request goes
+Downshift uses the boot to make requests fast. Each predict pays only for its own work, in two thread hops:
 
-Downshift uses boot time to make serving fast. Before `/ready` changes to `200`, it exports, verifies, builds an optimised ONNX Runtime session and warms up. None of this repeats for each request. Each predict pays only for its own work, in two thread hops:
+1. **Event loop:** admit the request or give `503`, check the body size (`413`), read the body.
+2. **Prep pool** (`--prep-threads`): parse and validate the body, convert it to arrays or tokenize the text, check the shapes and bounds.
+3. **Inference pool** (`--max-concurrency`): run the model, then encode the response on the same thread.
 
-1. **Event loop:** Admit the request (or return `503`). Check the body size (`413`). Read the body.
-2. **Prep pool** (`--prep-threads`, default `min(4, CPUs)`): Parse and validate the body. Convert it to arrays (or tokenize text). Check the shapes and the bounds.
-3. **Inference pool** (`--max-concurrency`, default 4): Run the model. Then encode the response on the same thread.
+The `Server-Timing` header of each predict response gives each stage: `parse`, `prep_wait`, `prep`, `infer_wait`, `infer` and `encode`, and `cache` if the result cache is on. You can see it with `curl -sD - -o /dev/null` or in the network tab of a browser. The access log line has the same values as `timings_ms`.
 
-`Server-Timing` on each predict response shows each stage: `parse`, `prep_wait`, `prep`, `infer_wait`, `infer` and `encode`. If the result cache is on, there is a seventh stage, `cache`. A request in which all rows hit the cache makes no hop to the inference pool. You can see the slow part of each request. The access log line has the same split as `timings_ms`.
-
-These items change the numbers. They are in the order of the gain, approximately. The test machine had 16 logical cores. `bench/results/v0.5.0/REPORT.md` has every row.
+These levers change the numbers, approximately in the order of the gain (16 logical cores, `bench/results/v0.5.0/REPORT.md`):
 
 | Lever | When it helps | Measured |
 |---|---|---|
-| `--max-concurrency` (default 4) | It is on by default. Decrease it to 1 or 2 for a large model whose concurrent activations run out of memory. | all-MiniLM-L6-v2: 282 req/s at 1, 483 at 4 |
-| `--workers N` | Many requests run at the same time. Each worker has its own pools and event loop. | `clean_mlp` at concurrency 32: about 3.8x with 4 workers |
-| safetensors or base64 bodies | Inputs or outputs of more than about 100 KiB. `parse` or `encode` is the largest part. | `bert_small` p50 11.2 ms as JSON, 9.1 ms as safetensors. `mlp_large` batch 32: 6.6k to 14.4k rows/s |
-| `--execution inline` | Models that infer in much less than one millisecond. Nothing else helps them. | `clean_mlp`: 1498 req/s peak inline against 1030 by default. It stalls `/health` for the time of one inference. |
-| `--intra-op-threads` | Keep it at 0 with one worker. `--workers` already splits the cores. | `1` thread: `bert_small` 98 to 48 req/s, `clean_mlp` 903 to 919 (spot check) |
+| `--max-concurrency` (default 4) | On by default. Decrease it to 1 or 2 for a large model whose concurrent activations run out of memory. | all-MiniLM-L6-v2: 282 req/s at 1, 483 at 4 |
+| `--workers N` | Many requests at the same time. | `clean_mlp` at concurrency 32: about 3.8x with 4 workers |
+| safetensors or base64 bodies | Inputs or outputs of more than about 100 KiB, where `parse` or `encode` is the largest stage. A JSON float list also holds the GIL while it is parsed. | `bert_small` p50 11.2 ms as JSON, 9.1 ms as safetensors |
+| `--execution inline` | Models that infer in much less than 1 ms. It stalls `/health` for the time of one inference. | `clean_mlp`: 1498 req/s inline against 1030 by default |
+| `--intra-op-threads` | Keep it at 0 with one worker. | `1` thread: `bert_small` 98 to 48 req/s |
 
-Below about one millisecond of inference, the HTTP stack (uvicorn, routing and the response) is most of the latency of a request. For `clean_mlp` on that machine, it was 0.63 of 1.00 ms. Only `--workers` and `--execution inline` decrease it. On Linux, uvicorn uses `uvloop` and `httptools` (installed with `uvicorn[standard]`). They are faster than the Windows event loop that was used for the numbers above.
+Below about 1 ms of inference, the HTTP stack is most of the latency. Only `--workers` and `--execution inline` decrease it.
+
+## Capacity and the meaning of a `503`
+
+- **`--max-concurrency N`** (default 4) is the number of inferences at the same time in each worker. One inference does not usually fill all cores: all-MiniLM-L6-v2 (batch 8, 8 clients) gave 52 req/s at 1 and 134 req/s at 4. Each inference holds its own activation memory.
+- **`--max-queue N`** (default 64) is the number of predicts that can wait beyond `--max-concurrency`. The next one gets an immediate `503` with `Retry-After: 1`. It counts requests, not rows.
+- **`--request-timeout SECONDS`** (default 30) is how long an admitted predict can wait before its inference starts, also for a row that another request computes. After that, it gets a `503`. A running inference is never stopped.
+
+```
+Capacity    4 inferences at a time, 4 prep threads, 64 queued, 30 s timeout  (--max-concurrency, --prep-threads, --max-queue, --request-timeout)
+```
+
+A `503` from a predict route means one of three things: the server is at capacity, the request waited too long, or the model still loads. It never means a model error, which is a `400` or a `500`. The server admits or refuses a predict before it reads the body, so an overloaded server does not buffer what it refuses.
+
+`--max-body-bytes` (default 32 MiB) gives a `413` for a larger body, before a read if `Content-Length` shows the size. `--max-input-bytes` (default 256 MiB) limits one decoded base64 or safetensors tensor (`400`).
 
 ## Result cache
 
-The result cache keeps the output of single rows. A row that arrives again skips the model. This helps a server that gets the same query many times. Examples: the same RAG question, or the same chunk of a document.
+The result cache keeps the output of single rows. A row that arrives again skips the model. This helps a server that gets the same query many times, for example the same RAG question.
 
-- The cache is on by default. It keeps 100 rows in each worker process. To change this, set `--result-cache-rows N`. `0` turns the cache off.
-- A row enters the cache when it arrives for the second time. A bulk load of rows that arrive one time does not push out the rows that arrive often.
-- The cache needs a model with independent rows. A row must give the same output with any other rows in its batch. Downshift checks this at boot, with two different rows that run alone and together. The check finds a model whose rows change each other by more than the tolerance. It cannot prove that a small effect is absent. If the numerics check failed, the rows are not checked and the cache is off. The `Rows` line of the banner shows the result. `/metadata` has it as `verdict.row_independent`. A model such as `x - x.mean(0)` is not independent. A model that returns one vector for each token is not independent. For these models, the cache is off and the banner says why. If you set `--result-cache-rows` for such a model, `serve` stops with exit code `4`.
-- If two requests ask for the same new row at the same time, the model runs one time. The second request waits for the first. This wait ends at `--request-timeout`, and the request then gets a `503`. If the first request fails or the client leaves, the second request computes the row itself.
-- The cache counts rows and not bytes. Its memory is the number of rows times the size of one output row. If the output rows are large, set a smaller number. The memory of the cache is part of the memory of the worker.
-- Each worker process has its own cache. With `--workers 4` and the default, the server keeps up to 400 rows.
-- `/predict/graph` does not use the cache.
-- Each response has `X-Downshift-Cache: hit`, `partial` or `miss`. If a request sends `Cache-Control: no-cache`, the server does not read the cache for it. The server still stores the rows.
-- `Server-Timing` has a `cache` stage when the cache is on. Its `desc` is the number of rows that hit and the number of rows of the request, for example `desc="3/5"`.
+- It is on by default and keeps 100 rows in each worker. `--result-cache-rows N` changes the number. `0` turns it off.
+- A row enters the cache on its second arrival. A bulk load of rows that arrive one time does not push out the frequent rows.
+- It needs a model with independent rows: each row gives the same output with any other rows in its batch. Downshift checks this at boot with two different rows, alone and together, on both backends. The check finds rows that change each other by more than the tolerance. It cannot prove that a small effect is absent. The `Rows` line of the banner and `verdict.row_independent` in `/metadata` give the result. For a model such as `x - x.mean(0)`, or a model with an output for each token, the cache is off and the banner says why. If you set `--result-cache-rows` for such a model, `serve` stops with exit code `4`.
+- If two requests ask for the same new row at the same time, the model runs one time and the second request waits. If the first request fails or leaves, the second one computes the row.
+- It counts rows, not bytes. Its memory is the number of rows times the size of one output row.
+- `/predict/graph` does not use it.
+- Each response has `X-Downshift-Cache: hit`, `partial` or `miss`. `Cache-Control: no-cache` skips the lookup for one request. The server still stores the rows.
 
-**Warning for a server with more than one tenant.** A hit is faster than a miss. A client can use the difference in time to learn that another client sent the same text. If the clients of a server must not learn this about each other, set `--result-cache-rows 0`. For a server with one tenant, there is no such risk.
+**Warning for a server with more than one tenant.** A hit is faster than a miss. A client can use the time to learn that another client sent the same text. If your clients must not learn this about each other, set `--result-cache-rows 0`.
 
-**Values.** A hit returns exactly the values of the request that stored the row. A miss for the same row in another batch can differ in the last bits. The difference is inside the tolerance of the verdict.
+A hit gives exactly the values of the request that stored the row. A miss for the same row in another batch can differ in the last bits, inside the tolerance of the verdict.
 
+## Export cache
 
-## Concurrency, queueing and the meaning of a `503`
+The boot is the slow part on purpose. If the boot time is important (frequent restarts, autoscaling), give `--export-cache-dir DIR` (or `DOWNSHIFT_EXPORT_CACHE_DIR`). The directory must exist and be writable.
 
-- **`--max-concurrency N`** (default 4) is the number of inferences that run at the same time in each worker process. A dedicated thread pool of this size runs them. Each inference also encodes its response before it gives the slot back. One inference does not usually fill all cores. The default therefore serves more requests for each second than 1. Measurements:
-  - all-MiniLM-L6-v2, batch 8, 8 clients: 52 req/s at 1, 134 req/s at 4.
-  - Qwen3-Embedding-0.6B on CPU, one query, 4 clients: 7.2 at 1, 14.6 at 4.
+- Downshift saves each CLEAN or DEGRADED export in `DIR/<key>/`: the `.onnx` file, its manifest, the verdict and the example inputs. A later boot of the same model with the same options skips the export and the verification. The `Boot` row of the banner then says `reused from --export-cache-dir`.
+- The key covers the weights, the source code of the model classes, the options of the gate, and the versions of downshift, torch, onnx, onnxscript, onnxruntime, transformers and torch_geometric. A change to any of them misses.
+- For a Hugging Face repo directory, the key comes from the content of the files, so pods that share a volume share the cache. A hit that ONNX Runtime serves does not load the weights.
+- A read checks the hashes of the graph against the manifest. A bad entry gives one warning and counts as a miss. A write goes to a temporary directory first, so a reader never sees half an entry.
+- Downshift never removes entries. To clear the cache, delete the directory.
 
-  Each inference in progress holds its own activation memory. For a large model whose big requests run out of memory together, decrease the value.
-- **`--max-queue N`** (default 64) is the number of predicts that can wait beyond `--max-concurrency`. When `max-concurrency + max-queue` requests are admitted, the next request gets an immediate `503` with `Retry-After: 1`. The body says how many requests run and how many wait. The request does not join an unbounded queue. Such a queue would time out on the client side later.
-  `--max-queue` counts requests and not rows. A request with many rows counts as one.
-- **`--request-timeout SECONDS`** (default `30`, `0` turns it off) sets how long an admitted predict can wait in the queue for its turn. The clock starts when the request is admitted. It therefore counts the time in the queue, and the time that the request waits for a row of another request (the result cache). After this time, the request gets a `503` and does not start. This limit never interrupts a request that already runs.
-
-The `Capacity` row of the banner shows all three:
-
-```
-Capacity    4 inferences at a time, 64 queued, 30 s timeout  (--max-concurrency, --max-queue, --request-timeout)
-```
-
-A `503` from `/predict` or `/predict/graph` always has one of these three meanings:
-
-- The server is at capacity.
-- The request waited too long in the queue.
-- The server is still loading.
-
-It never means a model error. A model error is a `400` or a `500`. The server admits or refuses a predict before it reads the body. An overloaded server therefore answers `503` without buffering or parsing the body that it refuses. The capacity case and the loading case have `Retry-After`. A client that behaves well waits and does not retry immediately into the same queue.
-
-Two other limits guard the body:
-
-- `--max-body-bytes` (default 32 MiB) gives a `413` when a body is larger. If `Content-Length` is more than the limit, the server refuses the request without a read. For a chunked body, it refuses the request when the running total passes the limit. There is no separate limit on text length. For a `{"text": ...}` request, this limit is the limit.
-- `--max-input-bytes` (default 256 MiB) limits one decoded base64 or safetensors tensor. The error is a `400`.
+Without the flag, nothing goes to disk.
 
 ## Sizing
 
-Use this rough memory budget:
+Use this rough memory budget: the size of the model (the parameters, plus what the session or the eager module needs at inference time), times `--workers`, plus the result cache. The export holds an extra copy of the graph for a short time, one time for each boot.
 
-- The size of the model (the parameters, and what the ONNX Runtime session or the eager module needs at inference time), multiplied by `--workers`.
-- Plus a temporary peak during the export. `torch.export` and the ONNX translation hold an extra copy of the graph in memory while they work. This peak occurs one time for each boot and each worker. It does not occur for each request.
-
-The boot is deliberately the slow part. Downshift verifies before it serves. It uses seconds at startup to save microseconds on each request. If the boot time is important (frequent restarts, autoscaling), use `--export-cache-dir DIR`. The directory keeps verified exports. A repeat boot of the same model then skips the export and the verification.
-
-The `Boot` row of the banner shows the parts of a boot. You do not need to guess which phase is slow:
+The `Boot` row of the banner shows the phases of a boot:
 
 ```
 Boot        6.4 s: load 0.3, export 2.8, verify 0.2, session 0.1, warmup 0.1
 ```
 
-- `load` reads the model from disk or imports it.
-- `export` is `torch.export` plus the ONNX translation.
-- `verify` runs the samples of the numerics gate through both backends.
-- `session` builds the `InferenceSession`. For eager torch, it adds nothing.
-- `warmup` runs the `--warmup N` inferences before `/ready` changes.
+`load` reads or imports the model. `export` is `torch.export` plus the ONNX translation. `verify` runs the samples through both backends. `session` builds the backend. `warmup` runs `--warmup N` inferences. The `boot` field of `/metadata` has the same numbers. With `--workers N`, the parent pays `export` and `verify` one time, and each worker pays its own `load`, `session` and `warmup`.
 
-The `boot` field of `/metadata` has the same numbers as JSON.
+## Logs and request IDs
 
-With `--workers N`, the parent pays `export` and `verify` one time. Each worker pays its own `load`, `session` and `warmup`. The parent frees its own copy of the model before the workers start. It is therefore not held in memory `N+1` times.
+All output goes through Python `logging` to stdout, as plain text in the form `time LEVEL logger: message`. Point your log shipper at stdout. [`cli.md`](cli.md#logging) gives what each `--log-level` prints.
 
-## Logs, request IDs and `Server-Timing`
+- The request line goes to `downshift.access`, for example `POST /predict 200 12.3 ms request_id=3f9c1a7b2e4d5c60`. A `4xx` or `5xx` line prints at the default level. The probes log only at `debug`. Give `--no-access-log` if your proxy already logs each request.
+- Each response has `X-Request-Id`. If the client sent one, downshift returns it. The ID is on each log line that the request writes. A `500` body has the same `request_id`, so "see the server log" has a search key.
 
-All output goes through Python `logging` to one plain-text handler on stdout. This includes the boot banner, the `check` and `export` reports, the startup and error lines of uvicorn, `warnings`, and the request log line of downshift. There is no JSON format, no colour and no box drawing. Point your log shipper at stdout, and parse `time LEVEL logger: message`.
+## No egress at start
 
-- **`--log-level`** is `warning` by default. The banner, the reports, and the `loading`, `will listen on` and `ready in X s` lines go to `downshift.report`. This logger always prints. A default `serve` therefore still shows its banner. At `warning`, you also get warnings, errors, and one line for each `4xx` and `5xx` request. You can see a `401`, `413` or `503` without a change in the settings. `info` adds the lines of uvicorn and one line for each request. `debug` adds tracebacks.
-- **The request line** goes to `downshift.access`. Example: `POST /predict 200 12.3 ms request_id=3f9c1a7b2e4d5c60`. Downshift logs the probes (`/health`, `/ready`) only at `DEBUG`. A kubelet that polls them does not fill the log. A `/ready` that answers `503` while the model loads is not a warning. `--access-log`/`--no-access-log` (default on) turns this line on or off. Turn it off if your proxy already logs each request and you want only the warnings and errors of downshift.
-- Each request has an `X-Request-Id`. If the client sent one, downshift returns it. Otherwise, downshift makes one. It is in the response, on the request line, and on each other log line that is written while the request is served. The JSON body of a `500` has the same ID under `"request_id"`. "See the server log" then has a search key. You do not need to match a plain timestamp by hand.
-- The responses of `/predict` and `/predict/graph` have `Server-Timing` with six stages: `parse`, `prep_wait`, `prep`, `infer_wait`, `infer` and `encode` (see [Serving first](#serving-first-where-the-time-of-a-request-goes)). You can see it in the network tab of each browser, or with `curl -sD - -o /dev/null`. You do not need extra client code. The request log line has the same split as `timings_ms`. Send large tensors as safetensors or base64 and not as nested lists. This decreases `parse` and `prep` by a large factor. A JSON float list holds the GIL while it is parsed. It can also delay other requests in that process.
-- With `check --json` or `export --json`, the verdict JSON is the only output on stdout. The log lines go to stderr.
+`serve` runs only a model that is already on this machine. It rejects a Hugging Face hub id, and the `hf` adapter loads with `local_files_only=True`. Behind an egress policy or in an air-gapped cluster:
 
-## Configuration through the environment
+- Start does not depend on the network.
+- A missing or half-copied file fails with a clear error during the load.
+- A failed load exits with code `4` (a bad model or option) or `5` (a crash).
 
-Downshift reads each `DOWNSHIFT_*` variable once, when `downshift` is imported. The variables are:
+Put the model in the image, or mount it, and give its path.
 
-- `DOWNSHIFT_HOST`, `DOWNSHIFT_PORT`, `DOWNSHIFT_DEVICE`, `DOWNSHIFT_BACKEND`
-- `DOWNSHIFT_WARMUP`, `DOWNSHIFT_SAMPLES`
-- `DOWNSHIFT_INTRA_OP_THREADS`, `DOWNSHIFT_INTER_OP_THREADS`
-- `DOWNSHIFT_OUTPUT_ENCODING`
-- `DOWNSHIFT_MAX_INPUT_BYTES`, `DOWNSHIFT_MAX_BODY_BYTES`
-- `DOWNSHIFT_MAX_CONCURRENCY`, `DOWNSHIFT_MAX_QUEUE`, `DOWNSHIFT_REQUEST_TIMEOUT`, `DOWNSHIFT_RESULT_CACHE_ROWS`
-- `DOWNSHIFT_WORKERS`, `DOWNSHIFT_SERVER_API_KEY`
-- `DOWNSHIFT_SSL_CERTFILE`, `DOWNSHIFT_SSL_KEYFILE`, `DOWNSHIFT_SSL_KEYFILE_PASSWORD`
-- The `DOWNSHIFT_TOL_*` variables for each dtype.
+## GPU
 
-They apply to library use (`app_for()` and `ServeOptions()`) and to the CLI. A flag or a keyword argument has priority over the variable. The variable has priority over the default. To change a variable, restart the process that reads it.
+A person tested `--device cuda` one time, by hand: an RTX 4050, torch 2.14 (CUDA 13.0) and `onnxruntime-gpu` 1.30. Both backends served and agreed with the CPU.
 
-## No egress at startup
+- Install `onnxruntime-gpu` in place of `onnxruntime`.
+- Install a torch build with the same CUDA major version as the `onnxruntime-gpu` wheel (1.30 needs CUDA 13). If the versions differ, ONNX Runtime cannot load its CUDA libraries, and `serve --device cuda` stops with exit code `4`.
 
-`serve` runs only a model that is already downloaded to this machine. It is one of these:
-
-- A `.onnx` file.
-- A `weights.pt` checkpoint.
-- A directory with a Hugging Face repo. Downshift identifies it by the `config.json` in it.
-- An import spec. It names a model that the process can already import.
-
-Downshift rejects a Hugging Face hub id as a `MODEL` argument. The `hf` adapter calls `AutoModel.from_pretrained(..., local_files_only=True)`. A load therefore never resolves a repo ID or fetches a file.
-
-This is important for a deployment behind an egress policy, or in an air-gapped cluster:
-
-- Startup cannot depend on the network without a message.
-- A missing or half-copied file fails with a clear error during the load. A download that works on one node and not on another does not hide it.
-- If the load of a single-worker `serve` fails, it logs the error and exits with the same code that `check` uses. The code is `4` for a bad model spec or option, and `5` for a crash. A supervisor sees a failed start. It does not see a pod that is stuck at `503`.
-
-Put the repo directory in the image, or mount it. Pass its path.
-
-## Temporary files
-
-`--workers N` writes the exported ONNX graph to a temporary directory, so that each worker can load it. If you gave real example inputs, it also writes a `.npz` file of them. The directory comes from `tempfile.mkdtemp(prefix="downshift-")`.
-
-Downshift removes the directory when `serve` exits normally (`finally`). It also removes it through `atexit` on most other exits. A container orchestrator that sends `SIGKILL` skips both. This is the same for the temporary files of all other processes. If you mount `/tmp` from persistent storage, look for a stray `downshift-*` directory after a hard kill, and remove it.
+The gate runs only on the CPU. The CUDA provider of ONNX Runtime uses TF32 matrix multiplies by default. In the test, this moved the output of a small MLP by 4e-4 against the CPU, which is more than the float32 tolerance. The gate does not see this. With `--backend torch` on CUDA, the output matched the CPU to 5e-8. The `Verified on` row of the banner says when the numerics did not cover the serving device.
 
 ## Kubernetes
 
@@ -280,22 +197,20 @@ resources:
   requests: {cpu: "1", memory: 512Mi}
 ```
 
-`initialDelaySeconds` can stay small in this mode. The port is open immediately. `/ready` reports `503` (and not connection-refused) for the time that the gate needs. The probe therefore does not need to guess the boot time.
+The port opens at once, and `/ready` gives `503` (not connection-refused) while the gate runs. The probe does not need to guess the boot time.
 
-With `--workers N`, the export-and-verify gate of the parent runs before the port opens. Give the liveness probe time for this:
+With `--workers N`, the gate of the parent runs before the port opens. Read the `Boot` row from a real run of your model, and set `initialDelaySeconds` a little above it on both probes:
 
 ```yaml
 livenessProbe:
   httpGet: {path: /health, port: 8000}
-  initialDelaySeconds: 15  # >= the banner's Boot row for the slowest model you serve
+  initialDelaySeconds: 15  # >= the Boot row of the slowest model that you serve
 readinessProbe:
   httpGet: {path: /ready, port: 8000}
   initialDelaySeconds: 15
   periodSeconds: 2
 resources:
-  requests: {cpu: "4", memory: 2Gi}  # scale with --workers; see Sizing above
+  requests: {cpu: "4", memory: 2Gi}  # scale with --workers
 ```
-
-Read the `Boot` row from a real run of the model that you deploy. Set `initialDelaySeconds` a little above it, on both probes in this mode. The pod does not listen at all until the export of the parent finishes.
 
 If `serve` uses `--ssl-certfile`, add `scheme: HTTPS` to the `httpGet` of both probes. The kubelet does not check the certificate.
