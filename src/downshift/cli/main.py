@@ -1,21 +1,13 @@
-"""The downshift CLI. Each command loads the model, calls the library, and gives the result to
-render.
+"""The downshift CLI: each command loads the model, calls the library and renders the result.
 
-The command bodies do the heavy imports (torch, onnxruntime, uvicorn, fastapi, downshift.core,
-downshift.serve and downshift.loading) when they need them. This keeps `--help` and `--version`
-fast and free of torch. `from __future__ import annotations` lets the type hints below name the
-types of those modules without an import at module load time. The `TYPE_CHECKING` block lets
-mypy see them. `downshift.cli.options` (the typer option types) and `downshift.cli.runtime`
-(ServeArgs and the `--workers` code) follow the same rule. An import of them here costs nothing.
+Heavy modules (torch, onnxruntime, uvicorn, downshift.core and downshift.serve) are imported
+inside the command bodies, so `--help` and `--version` stay fast.
 """
 
 from __future__ import annotations
 
-import atexit
-import gc
 import json
 import os
-import shutil
 import sys
 import traceback
 from collections.abc import Iterator
@@ -67,14 +59,12 @@ from downshift.cli.options import (
     WorkersOpt,
 )
 from downshift.cli.runtime import (
-    _SERVE_ARGS_ENV,
-    ArtifactHandoff,
     ServeArgs,
     _build_serving_state,
     _load,
+    _run_workers,
     _setup_logging,
     _tls_config,
-    _write_onnx_artifact,
 )
 from downshift.serve.options import BackendChoice, ExecutionChoice, ServeOptions
 from downshift.serve.schemas import OutputEncoding
@@ -124,10 +114,8 @@ def _main(
         ),
     ] = False,
 ) -> None:
-    # As with `python -m downshift`, import specs (MODEL, --inputs, --model-class, --vary and
-    # --middleware) also resolve against the current directory. Downshift appends the directory
-    # and does not put it first. A local file therefore never hides the standard library or an
-    # installed package. The --workers processes start with this sys.path.
+    # Import specs also resolve against the current directory, as with `python -m`. It goes
+    # last, so a local file never hides an installed module.
     cwd = os.getcwd()
     if cwd not in sys.path:
         sys.path.append(cwd)
@@ -177,8 +165,7 @@ def _emit(
 
 
 def _log_capture_failure(verdict: ExportVerdict, log_level: LogLevel) -> None:
-    """At --log-level debug, a FAILED verdict logs what the CLI table only summarizes: the own
-    stderr of torch and the traceback of each strategy, not only the first line."""
+    """At --log-level debug, log the torch stderr and the traceback of each failed strategy."""
     if log_level is not LogLevel.debug or verdict.status != "FAILED":
         return
     if verdict.capture_stderr:
@@ -219,8 +206,7 @@ def check_cmd(
         dynamic_spec = parse_dynamic_spec(dynamic) if dynamic else None
         axis_max_spec = _axis_max(axis_max)
         if loaded.onnx_path is not None:
-            # --reference shares --pooling and --normalize with MODEL. The two agree on the
-            # numbers only if the embedding recipe of the reference model matches the export.
+            # --reference shares --pooling and --normalize with MODEL, so the recipes match.
             ref = _load(replace(spec, model=reference)) if reference else None
             verdict = downshift.intake(
                 loaded.onnx_path,
@@ -322,7 +308,7 @@ def export_cmd(
             seed=seed,
             vary=vary,
             axis_max=_axis_max(axis_max),
-            # The key hashes every weight. In a process with one export, only the disk tier can use it.
+            # The key hashes every weight: worth it only for the disk tier.
             cache=bool(export_cache_dir),
             export_cache_dir=export_cache_dir,
         )
@@ -406,9 +392,7 @@ def serve_cmd(
     with _exit_on_error(log_level is LogLevel.debug):
         tls = _tls_config(ssl_certfile, ssl_keyfile, settings.SSL_KEYFILE_PASSWORD)
         https = bool(tls)
-        # The settings of both uvicorn paths. log_config=None: the loggers of uvicorn use the
-        # sink that _setup_logging installed. The app logs its own record for each request
-        # (access_log), so the access log of uvicorn stays off.
+        # log_config=None keeps our logging sink. The app writes its own access log.
         uvicorn_kwargs: dict[str, Any] = dict(
             host=host,
             port=port,
@@ -427,9 +411,7 @@ def serve_cmd(
 
             resolved_tokenizer_from = resolve_tokenizer_source(tokenizer_from)
         if workers > 1 and intra_op_threads == 0:
-            # An unset value (0 means "let ONNX Runtime or torch choose") oversubscribes the
-            # cores N times across the worker processes. Split the logical cores instead. A flag
-            # that you set still has priority.
+            # The backend default would oversubscribe the cores N times: split them.
             intra_op_threads = max(1, settings.usable_cpus() // workers)
         from downshift.core.shapes import parse_dynamic_spec
         from downshift.loading import LoadSpec
@@ -480,7 +462,8 @@ def serve_cmd(
             tokenizer_from=resolved_tokenizer_from,
         )
 
-        def print_config(state: ServingState, workers: int = 1) -> None:
+        def announce(state: ServingState, workers: int = 1) -> None:
+            render.print_banner(state, host, port, workers=workers, https=https)
             render.print_config(
                 state,
                 host,
@@ -493,89 +476,35 @@ def serve_cmd(
                 api_key_set=bool(settings.API_KEY),
             )
 
-        if workers <= 1:
-            from downshift.serve.app import build_app
+        if workers > 1:
+            _run_workers(args, workers, uvicorn_kwargs, announce)
+            return
 
-            # Bind first, then load in the background. A slow export, verification or warmup
-            # does not keep the port closed. The loader runs on its own thread. The lifespan
-            # of build_app starts it when uvicorn begins to serve. If the loader crashes,
-            # failure[] gives the main thread a way to see the error. The loader keeps the
-            # exception here and sets should_exit. A failed load then still ends the process.
-            # It does not serve 503 forever. `server` below is bound before the lifespan can
-            # run the loader, and closures resolve names at call time, so the loader can read it.
-            failure: list[BaseException] = []
+        from downshift.serve.app import build_app
 
-            def loader() -> ServingState:
-                try:
-                    state = _build_serving_state(args)
-                except Exception as exc:
-                    failure.append(exc)
-                    server.should_exit = True
-                    raise
-                render.print_banner(state, host, port, https=https)
-                print_config(state)
-                render.print_ready(state)
-                return state
+        # Bind first, then load on the lifespan's thread, so a slow boot does not keep the
+        # port closed. A failed load stops the server and is raised again here.
+        failure: list[BaseException] = []
 
-            api = build_app(
-                loader=loader, middleware=tuple(args.middleware or ()), access_log=access_log
-            )
-            render.print_booting(model, host, port, https=https)
-            server = uvicorn.Server(uvicorn.Config(api, **uvicorn_kwargs))
-            server.run()
-            if failure:
-                raise failure[0]
-        else:
-            # This is the only export. Each worker loads this artifact and does not capture
-            # or verify again. This temporary copy never serves traffic. It only decides which
-            # backend to send and prints the banner. It therefore skips the warmup and uses
-            # the default threads of ONNX Runtime. This lets it reuse the session of the
-            # verification and not build a second one. Downshift drops it before uvicorn.run
-            # starts the workers.
-            parent_options = replace(args.options, warmup=0, intra_op_threads=0, inter_op_threads=0)
-            state = _build_serving_state(replace(args, options=parent_options))
-            state.options = args.options  # the banner reports what the workers use
-            render.print_banner(state, host, port, workers=workers, https=https)
-            print_config(state, workers=workers)
-            temp_dir: Path | None = None
-            onnx_path_str: str | None = None
-            feeds_path_str: str | None = None
-            if state.backend.name == "onnxruntime":
-                onnx_path, feeds_path, temp_dir = _write_onnx_artifact(state)
-                if temp_dir is not None:
-                    atexit.register(shutil.rmtree, temp_dir, ignore_errors=True)
-                onnx_path_str = str(onnx_path)
-                feeds_path_str = str(feeds_path) if feeds_path else None
-            else:
-                render.warn(
-                    f"--workers {workers}: each worker independently reloads and re-warms "
-                    "the model (memory and startup time increase with this number)"
-                )
-            from downshift.core.axes import axis_bounds_to_json
-
-            artifact = ArtifactHandoff(
-                verdict=state.verdict.to_dict(),
-                input_names=list(state.input_names),
-                kind=state.source_kind,
-                axis_bounds=axis_bounds_to_json(state.axis_bounds),
-                onnx_path=onnx_path_str,
-                feeds_path=feeds_path_str,
-            )
-            del state
-            gc.collect()
-            # The verdict goes to the workers, so they never need --reference.
-            args = replace(args, artifact=artifact, reference=None)
-            os.environ[_SERVE_ARGS_ENV] = args.to_json()
+        def loader() -> ServingState:
             try:
-                uvicorn.run(
-                    "downshift.cli.runtime:_serve_app_factory",
-                    workers=workers,
-                    factory=True,
-                    **uvicorn_kwargs,
-                )
-            finally:
-                if temp_dir is not None:
-                    shutil.rmtree(temp_dir, ignore_errors=True)
+                state = _build_serving_state(args)
+            except Exception as exc:
+                failure.append(exc)
+                server.should_exit = True
+                raise
+            announce(state)
+            render.print_ready(state)
+            return state
+
+        api = build_app(
+            loader=loader, middleware=tuple(args.middleware or ()), access_log=access_log
+        )
+        render.print_booting(model, host, port, https=https)
+        server = uvicorn.Server(uvicorn.Config(api, **uvicorn_kwargs))
+        server.run()
+        if failure:
+            raise failure[0]
 
 
 if __name__ == "__main__":  # pragma: no cover

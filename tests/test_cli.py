@@ -436,7 +436,7 @@ def test_serve_workers_uses_an_import_string_factory(monkeypatch):
     assert captured["workers"] == 2
     assert captured["factory"] is True
 
-    args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
+    args = runtime.ServeArgs.from_json(os.environ[runtime._SERVE_ARGS_ENV])
     assert args.load.model == CLEAN
 
 
@@ -445,7 +445,7 @@ def test_serve_workers_splits_threads_across_the_cpu_count(monkeypatch):
     _, captured = _serve_captured(monkeypatch, "--workers", "4")
     assert captured["workers"] == 4
 
-    args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
+    args = runtime.ServeArgs.from_json(os.environ[runtime._SERVE_ARGS_ENV])
     assert args.options.intra_op_threads == 4
 
 
@@ -453,7 +453,7 @@ def test_serve_workers_explicit_intra_op_threads_wins(monkeypatch):
     monkeypatch.setattr(main.settings, "usable_cpus", lambda: 16)
     _serve_captured(monkeypatch, "--workers", "4", "--intra-op-threads", "7")
 
-    args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
+    args = runtime.ServeArgs.from_json(os.environ[runtime._SERVE_ARGS_ENV])
     assert args.options.intra_op_threads == 7
 
 
@@ -467,7 +467,7 @@ def _rebuilt_app():
 
 def test_serve_app_factory_rebuilds_the_app_from_env(monkeypatch):
     pytest.importorskip("downshift.serve.app")
-    args = main.ServeArgs(
+    args = runtime.ServeArgs(
         load=LoadSpec(CLEAN),
         options=ServeOptions(
             k=1,
@@ -482,7 +482,7 @@ def test_serve_app_factory_rebuilds_the_app_from_env(monkeypatch):
         middleware=None,
         log_level="warning",
     )
-    monkeypatch.setenv(main._SERVE_ARGS_ENV, args.to_json())
+    monkeypatch.setenv(runtime._SERVE_ARGS_ENV, args.to_json())
 
     api = _rebuilt_app()
     assert api.state.serving.verdict.status == "CLEAN"
@@ -501,14 +501,14 @@ def test_a_worker_that_cannot_load_exits_with_uvicorns_startup_failure_code(monk
 
     from downshift.cli import runtime
 
-    args = main.ServeArgs(
+    args = runtime.ServeArgs(
         load=LoadSpec(CLEAN),
         options=ServeOptions(k=1, device="cpu", warmup=1),
         reference=None,
         middleware=None,
         log_level="warning",
     )
-    monkeypatch.setenv(main._SERVE_ARGS_ENV, args.to_json())
+    monkeypatch.setenv(runtime._SERVE_ARGS_ENV, args.to_json())
 
     def fail(_args):
         raise MemoryError("not enough RAM for another copy")
@@ -531,7 +531,7 @@ def test_serve_workers_writes_and_ships_the_onnx_artifact(monkeypatch):
     def fake_run(app, **kw):
         seen["app"] = app
         seen.update(kw)
-        args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
+        args = runtime.ServeArgs.from_json(os.environ[runtime._SERVE_ARGS_ENV])
         seen["args"] = args
         assert args.artifact.onnx_path is not None
         seen["onnx_bytes"] = Path(args.artifact.onnx_path).read_bytes()
@@ -574,7 +574,7 @@ def test_serve_workers_hands_an_external_data_export_to_the_workers(monkeypatch)
     seen: dict = {}
 
     def fake_run(app, **kw):
-        args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
+        args = runtime.ServeArgs.from_json(os.environ[runtime._SERVE_ARGS_ENV])
         onnx_path = Path(args.artifact.onnx_path)
         seen["files"] = sorted(p.name for p in onnx_path.parent.iterdir() if p.suffix != ".npz")
         seen["api"] = _rebuilt_app()
@@ -595,7 +595,7 @@ def test_serve_workers_degraded_ships_a_torch_artifact_and_warns(monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert "each worker independently reloads and re-warms" in result.output
-    args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
+    args = runtime.ServeArgs.from_json(os.environ[runtime._SERVE_ARGS_ENV])
     assert args.artifact.verdict is not None
     assert args.artifact.verdict["status"] == "DEGRADED"
     assert args.artifact.onnx_path is None
@@ -616,7 +616,7 @@ def test_serve_app_factory_from_onnx_artifact_never_calls_capture(monkeypatch, t
 
     monkeypatch.setattr(verdict_mod, "capture", boom)
 
-    args = main.ServeArgs(
+    args = runtime.ServeArgs(
         load=LoadSpec(CLEAN),
         options=ServeOptions(
             k=1, device="cpu", warmup=1, max_input_bytes=1024, max_body_bytes=2048
@@ -624,14 +624,14 @@ def test_serve_app_factory_from_onnx_artifact_never_calls_capture(monkeypatch, t
         reference=None,
         middleware=None,
         log_level="warning",
-        artifact=main.ArtifactHandoff(
+        artifact=runtime.ArtifactHandoff(
             verdict=verdict.to_dict(),
             input_names=list(verdict.input_names),
             onnx_path=str(onnx_path),
             kind="import-spec",
         ),
     )
-    monkeypatch.setenv(main._SERVE_ARGS_ENV, args.to_json())
+    monkeypatch.setenv(runtime._SERVE_ARGS_ENV, args.to_json())
 
     api = _rebuilt_app()
 
@@ -726,5 +726,5 @@ def test_serve_passes_result_cache_rows_and_it_survives_workers(monkeypatch):
     assert captured["app"].state.serving.result_cache.max_rows == 12
 
     _serve_captured(monkeypatch, "--result-cache-rows", "12", "--workers", "2")
-    args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
+    args = runtime.ServeArgs.from_json(os.environ[runtime._SERVE_ARGS_ENV])
     assert args.options.result_cache_rows == 12

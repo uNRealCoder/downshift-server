@@ -1,9 +1,5 @@
-"""The serving package. `app_for` is the one-line path from a model to a FastAPI app. It is for
-a team that already has a service and wants downshift as a mounted component and not as a whole
-process (`app.mount("/model", app_for(model))`). Refer to the Serve section of the README.
-`app_for` imports everything that it calls inside the function body. An import of this package
-therefore costs only as much as an import of `downshift.serve.options`.
-"""
+"""The serving package. `app_for` imports its dependencies lazily, so importing this package
+is cheap."""
 
 from __future__ import annotations
 
@@ -32,36 +28,18 @@ def app_for(
     cache: bool = True,
     **options: Any,
 ) -> FastAPI:
-    """`LoadedModel`, `prepare_serving()` and `build_app(state=...)`, in one call.
+    """A ready FastAPI app for `model`, to mount in your own service:
+    `app.mount("/model", app_for(model))`.
 
-    It runs synchronously. The export-and-verify gate and the warmup finish before it returns.
-    The app is therefore ready to serve immediately. There is no loader thread and no `/ready`
-    503 window. For that, see the `loader=` form of `build_app`. `options` are `ServeOptions`
-    fields (`backend=`, `warmup=`, `max_concurrency=`, ...). `model` is usually a
-    `torch.nn.Module` that this process already built. A `str` or `Path` is an `.onnx` file
-    that is already on this machine. `reference` (a PyTorch model) verifies it. This is the
-    same as `--reference` on the CLI. Without `reference`, downshift serves an `.onnx` `model`
-    as UNVERIFIED. Downshift downloads nothing here. An `.onnx` path must exist before the call.
+    It runs the gate and the warmup before it returns, so there is no /ready 503 window.
+    `model` is an `nn.Module`, a `.onnx` file on this machine (verified against `reference`,
+    else served UNVERIFIED), or a downloaded HF repo directory. `tokenizer_from` is an HF repo
+    directory for the tokenizer, pooling and labels (as --tokenizer-from). `source` is the
+    label of /metadata and /schema. `options` are ServeOptions fields.
 
-    `tokenizer_from` is a downloaded Hugging Face repo directory. Downshift loads the tokenizer,
-    the pooling recipe and the label metadata from it. This is the same as `--tokenizer-from` on
-    the CLI. Use it for an `.onnx` or checkpoint `model` that has none of its own. It does not
-    depend on `reference`. It never changes the verification. Both can name the same directory
-    or different directories.
-
-    `source` is the label that `/metadata` and `/schema` report. The default is the `.onnx`
-    path (reported as the file name only). For an `nn.Module`, the default is `"model"`,
-    because it has no path to name.
-
-    `api_key` defaults to DOWNSHIFT_SERVER_API_KEY (settings.API_KEY), the same as the CLI (U7,
-    ruling 5). To override that for this app, pass a value, or pass None to turn it off.
-
-    If this process already exported and verified a model (the same weights, code and options),
-    downshift serves it from the in-process memo. There is no export phase and no verification
-    phase. `model` can also be a downloaded Hugging Face repo directory. Downshift then looks it
-    up before it loads anything. `export_cache_dir=` (a `ServeOptions` field. The default is
-    DOWNSHIFT_EXPORT_CACHE_DIR) adds the disk tier that survives restarts. `cache=False` skips
-    both, for reads and for writes.
+    `api_key` defaults to DOWNSHIFT_SERVER_API_KEY; None turns it off. An earlier export of
+    the same model and options is reused from the in-process memo and from
+    `export_cache_dir`; `cache=False` skips both.
     """
     from downshift.loading import (
         LoadedModel,

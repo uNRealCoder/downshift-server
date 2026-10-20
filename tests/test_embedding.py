@@ -456,19 +456,19 @@ def test_the_flags_are_on_every_command_that_loads_a_model(command):
 # --- the --workers builders keep the text and embedding metadata --------------------------
 
 
-def _worker_args(repo: str, *, pooling=None, normalize=None, **artifact) -> main.ServeArgs:
-    return main.ServeArgs(
+def _worker_args(repo: str, *, pooling=None, normalize=None, **artifact) -> runtime.ServeArgs:
+    return runtime.ServeArgs(
         load=LoadSpec(repo, pooling=pooling, normalize=normalize),
         options=ServeOptions(warmup=1, device="cpu", pooling=pooling, normalize=normalize),
         reference=None,
         middleware=None,
         log_level="warning",
-        artifact=main.ArtifactHandoff(**artifact) if artifact else None,
+        artifact=runtime.ArtifactHandoff(**artifact) if artifact else None,
     )
 
 
-def _rebuilt(monkeypatch, args: main.ServeArgs) -> TestClient:
-    monkeypatch.setenv(main._SERVE_ARGS_ENV, args.to_json())
+def _rebuilt(monkeypatch, args: runtime.ServeArgs) -> TestClient:
+    monkeypatch.setenv(runtime._SERVE_ARGS_ENV, args.to_json())
     api = runtime._serve_app_factory()
     with TestClient(api):
         api.state.loader_thread.join(timeout=60)
