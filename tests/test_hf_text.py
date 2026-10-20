@@ -14,6 +14,7 @@ from transformers import BertForSequenceClassification, BertModel  # noqa: E402
 
 import downshift  # noqa: E402
 from downshift.adapters.text import SIGMOID, SOFTMAX, TextIO  # noqa: E402
+from downshift.core.memo import ExportEntry  # noqa: E402
 from downshift.hf_repo import load_pretrained  # noqa: E402
 from downshift.loading import LoadedModel, LoadSpec, load_model  # noqa: E402
 from downshift.serve import app_for  # noqa: E402
@@ -21,8 +22,9 @@ from downshift.serve.app import build_app  # noqa: E402
 from downshift.serve.engine import (  # noqa: E402
     ServeOptions,
     prepare_serving,
-    serving_state_from_artifact,
+    state_from_entry,
 )
+from downshift.sources import ONNX_FILE  # noqa: E402
 from tests.models import hf_repo, tiny_bert  # noqa: E402
 
 LABELS = {0: "BENIGN", 1: "INJECTION", 2: "JAILBREAK"}
@@ -348,21 +350,21 @@ def test_tokenizer_from_must_be_an_hf_repo_directory(tmp_path):
         resolve_tokenizer_source(str(no_config))
 
 
+def _no_load():
+    raise AssertionError("an ONNX rebuild must not load the model")
+
+
 @pytest.mark.needs_torch_26
 def test_worker_rebuild_attaches_text_from_a_carried_hf_source(embedding_onnx, embedding_dir):
-    """A `--workers N` worker calls serving_state_from_artifact to build again from the onnx
-    artifact that the parent already verified. It takes no reference model and no
-    --tokenizer-from string to validate again. A worker does neither. The resolved hf_source
-    path (sent in ArtifactHandoff) is enough on its own."""
+    """A `--workers N` worker rebuilds from its parent's export with the resolved hf_source
+    alone: no reference model and no --tokenizer-from to validate again."""
     base = prepare_serving(load_model(LoadSpec(embedding_onnx)))
     assert base.text is None  # no --tokenizer-from here: nothing to carry yet
 
-    rebuilt = serving_state_from_artifact(
-        embedding_onnx,
-        base.verdict,
-        base.options,
-        base.input_names,
-        hf_source=embedding_dir,
+    entry = ExportEntry(base.verdict.to_dict(), list(base.input_names), {})
+    entry.onnx_path = base.verdict.onnx_path
+    rebuilt = state_from_entry(
+        entry, _no_load, base.options, embedding_dir, source=embedding_onnx, kind=ONNX_FILE
     )
 
     assert rebuilt.text is not None

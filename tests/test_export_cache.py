@@ -301,10 +301,10 @@ def test_a_worker_with_an_artifact_never_opens_the_cache(cache, monkeypatch, tmp
         raise AssertionError("a worker opened the export cache")
 
     monkeypatch.setattr(export_cache, "ExportCache", refuse)
-    from downshift.serve import reuse
+    from downshift.serve import engine
 
     built = SimpleNamespace(timings={})
-    monkeypatch.setattr(reuse, "state_from_entry", lambda *args, **kwargs: built)
+    monkeypatch.setattr(engine, "state_from_entry", lambda *args, **kwargs: built)
     from downshift.cli.runtime import ArtifactHandoff
 
     args = ServeArgs(

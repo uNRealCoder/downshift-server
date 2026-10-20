@@ -162,7 +162,8 @@ class ServeArgs:
 
 def _build_serving_state(args: ServeArgs) -> ServingState:
     from downshift.loading import hf_repo_dir
-    from downshift.serve.reuse import prepare_serving_reusing, state_from_entry
+    from downshift.serve.engine import state_from_entry
+    from downshift.serve.reuse import prepare_serving_reusing
 
     opts = args.options
     load_s = 0.0
