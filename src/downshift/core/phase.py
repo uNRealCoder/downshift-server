@@ -24,7 +24,7 @@ class Phase(StrEnum):
 
 @dataclass
 class LoadProgress:
-    """What GET /ready reports while there is no ServingState yet (U4): the phase that the
+    """What GET /ready reports while there is no ServingState yet: the phase that the
     background loader thread is in. See CURRENT_PROGRESS."""
 
     phase: Phase = Phase.load

@@ -12,7 +12,7 @@ from typing import NamedTuple
 
 
 class DimBound(NamedTuple):
-    """One dynamic axis's Dim name and the (min, max) torch.export traced it for (U2)."""
+    """One dynamic axis's Dim name and the (min, max) torch.export traced it for."""
 
     name: str
     min: int
@@ -55,16 +55,7 @@ class AxisFact:
 
     @classmethod
     def from_dict(cls, data: dict) -> "AxisFact":
-        sampled_min, sampled_max = data.get("sampled_min"), data.get("sampled_max")
-        return cls(
-            input=str(data["input"]),
-            axis=int(data["axis"]),
-            name=str(data["name"]),
-            served_min=int(data["served_min"]),
-            served_max=int(data["served_max"]),
-            sampled_min=None if sampled_min is None else int(sampled_min),
-            sampled_max=None if sampled_max is None else int(sampled_max),
-        )
+        return cls(**data)
 
 
 def classify_outputs(

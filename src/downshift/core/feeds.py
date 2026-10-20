@@ -6,12 +6,12 @@ from collections.abc import Sequence
 import numpy as np
 import torch
 
-# bf16 and fp16 have no numpy dtype. The wire contract for both is float32 (B1).
+# bf16 and fp16 have no numpy dtype. The wire contract for both is float32.
 WIDEN_DTYPES = (torch.bfloat16, torch.float16)
 
 
 def widen_for_wire(t: torch.Tensor) -> torch.Tensor:
-    """bf16/fp16 -> float32, everything else unchanged (B1)."""
+    """bf16/fp16 -> float32, everything else unchanged."""
     return t.float() if t.dtype in WIDEN_DTYPES else t
 
 
@@ -20,7 +20,7 @@ def example_feeds(input_names: Sequence[str], example_inputs: tuple) -> dict[str
     forward argument.
 
     bf16 and fp16 tensors have no numpy dtype. Downshift widens them to float32 first. This is
-    the same as the wire contract (B1).
+    the same as the wire contract.
     """
     return {
         name: widen_for_wire(t).numpy() if isinstance(t, torch.Tensor) else np.asarray(t)

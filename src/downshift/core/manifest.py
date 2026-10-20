@@ -2,7 +2,6 @@
 
 import json
 from datetime import UTC, datetime
-from enum import IntEnum
 from pathlib import Path
 
 import onnx
@@ -14,37 +13,21 @@ from downshift.core.memo import sha256_file
 from downshift.core.verdict import ExportVerdict
 from downshift.sources import path_basename
 
-
-class _DTYPE_NAMES(IntEnum):
-    """ONNX TensorProto dtype codes we can label, keyed by their short name."""
-
-    fp32 = onnx.TensorProto.FLOAT
-    fp16 = onnx.TensorProto.FLOAT16
-    fp64 = onnx.TensorProto.DOUBLE
-    bf16 = onnx.TensorProto.BFLOAT16
-
-
-# A plain value->name dict. A miss is then a dict lookup and not a ValueError of an IntEnum.
-# Most initializers (int64 indices, bools, ...) are misses, and this code runs in a loop.
-_DTYPE_LOOKUP: dict[int, str] = {member.value: member.name for member in _DTYPE_NAMES}
-
-
-def _dtype_name(code: int) -> str | None:
-    return _DTYPE_LOOKUP.get(code)
+# The ONNX float dtype codes that the manifest names. Other codes (int64 indices, bools) have no name.
+_FLOAT_DTYPES = {
+    onnx.TensorProto.FLOAT: "fp32",
+    onnx.TensorProto.FLOAT16: "fp16",
+    onnx.TensorProto.DOUBLE: "fp64",
+    onnx.TensorProto.BFLOAT16: "bf16",
+}
 
 
 def observed_dtype(onnx_path: Path) -> str | None:
     """Float dtype of the graph's weights, i.e. what the export actually produced."""
     proto = onnx.load(str(onnx_path), load_external_data=False)
-    for init in proto.graph.initializer:
-        name = _dtype_name(init.data_type)
-        if name is not None:
-            return name
-    for inp in proto.graph.input:
-        name = _dtype_name(inp.type.tensor_type.elem_type)
-        if name is not None:
-            return name
-    return None
+    codes = [init.data_type for init in proto.graph.initializer]
+    codes += [inp.type.tensor_type.elem_type for inp in proto.graph.input]
+    return next((_FLOAT_DTYPES[code] for code in codes if code in _FLOAT_DTYPES), None)
 
 
 def external_data_files(onnx_path: Path) -> list[str]:

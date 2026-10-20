@@ -24,7 +24,6 @@ from downshift.adapters.base import Adapter, Family, Prepared, VaryFn
 from downshift.core import memo
 from downshift.core.axes import AxisFact, axis_facts, classify_outputs
 from downshift.core.capture import capture
-from downshift.core.inputs import synthesize
 from downshift.core.phase import Phase, report
 from downshift.core.rows import check_rows
 from downshift.core.shapes import (
@@ -269,7 +268,16 @@ def prepare_model(
         adapter = registry.get(adapter)
     if adapter is None:
         adapter = registry.detect(model, example_inputs)
-    example_inputs = synthesize(model, adapter, example_inputs)
+    if example_inputs is None:
+        # The ladder: the inputs of the user, then the guess of the adapter, then this error.
+        example_inputs = adapter.example_inputs(model)
+        if example_inputs is None:
+            raise ValueError(
+                f"Cannot find example inputs for {type(model).__name__} with the "
+                f"{adapter.name!r} adapter. Pass them explicitly. From Python, use "
+                "check(model, example_inputs=(tensor, ...)). From the CLI, use --inputs "
+                "module:function. The function returns a tuple of forward() arguments."
+            )
     prepared = adapter.prepare(model, example_inputs, axis_max=None if dynamic else axis_max)
     if dynamic:
         prepared.dynamic_shapes = lower_axis_max(

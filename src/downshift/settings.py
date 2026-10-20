@@ -40,10 +40,6 @@ def usable_cpus() -> int:
     return os.cpu_count() or 1
 
 
-def _env_str(name: str, default: str) -> str:
-    return os.environ.get(name, default)
-
-
 def _env_cast[T](name: str, default: T, cast: Callable[[str], T], type_name: str) -> T:
     raw = os.environ.get(name)
     if raw is None:
@@ -88,13 +84,9 @@ def parse_axis_max(items: Iterable[str]) -> dict[str, int]:
     return result
 
 
-def _env_axis_max(name: str, default: dict[str, int]) -> dict[str, int]:
-    return _env_cast(name, default, lambda raw: parse_axis_max([raw]), "list of NAME=N")
-
-
-HOST = _env_str("DOWNSHIFT_HOST", "127.0.0.1")
+HOST = os.environ.get("DOWNSHIFT_HOST", "127.0.0.1")
 PORT = _env_int("DOWNSHIFT_PORT", 8000)
-DEVICE = _env_str("DOWNSHIFT_DEVICE", "auto")
+DEVICE = os.environ.get("DOWNSHIFT_DEVICE", "auto")
 BACKEND = _env_choice("DOWNSHIFT_BACKEND", "auto", ("auto", "onnxruntime", "torch"), "backend")
 WARMUP = _env_int("DOWNSHIFT_WARMUP", 3)
 SAMPLES = _env_int("DOWNSHIFT_SAMPLES", DEFAULT_SAMPLES)
@@ -133,7 +125,9 @@ EXECUTION = _env_choice(
 # The largest size to serve for each named axis ("seq=4096,num_nodes=500"). The names are the
 # names that the boot banner and /schema list. If it is empty, each axis keeps the bound that
 # the adapter exported.
-AXIS_MAX = _env_axis_max("DOWNSHIFT_AXIS_MAX", {})
+AXIS_MAX: dict[str, int] = _env_cast(
+    "DOWNSHIFT_AXIS_MAX", {}, lambda raw: parse_axis_max([raw]), "list of NAME=N"
+)
 
 # A directory where downshift saves verified exports and reuses them at the next boot (`serve`
 # and `export`). If it is unset, downshift never writes to disk. The in-process memo is then the
@@ -165,8 +159,9 @@ RESULT_CACHE_ROWS: int | None = (
 DEFAULT_REQUEST_TIMEOUT = 30.0
 REQUEST_TIMEOUT = _env_float("DOWNSHIFT_REQUEST_TIMEOUT", DEFAULT_REQUEST_TIMEOUT)
 
-# A value of more than 1 starts that number of uvicorn worker processes. Each one loads,
-# exports and warms up the model on its own. Memory and startup time increase with this number.
+# A value of more than 1 starts that number of uvicorn worker processes. The parent exports and
+# verifies one time. Each worker loads that result and warms up. Memory and startup time
+# increase with this number.
 WORKERS = _env_int("DOWNSHIFT_WORKERS", 1)
 
 # If it is set, every route except /health and /ready needs "Authorization: Bearer <this value>".

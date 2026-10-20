@@ -138,6 +138,8 @@ def capture(
 
         try:
             onnx_program = torch.onnx.export(exported_program, verbose=False, report=False)
+            if onnx_program is None:  # the stub allows it for the legacy path, never for a program
+                raise RuntimeError("torch.onnx.export returned None")
         except Exception as exc:  # noqa: BLE001 - a failed translation is a failed capture
             return CaptureResult(
                 success=False,
@@ -145,14 +147,6 @@ def capture(
                 exception=exc,
                 stderr=captured.getvalue(),
             )
-
-    if onnx_program is None:
-        # The type stub allows None for the legacy path. With an ExportedProgram, it is never None.
-        return CaptureResult(
-            success=False,
-            capture_strategy=strategy_used,
-            exception=RuntimeError("torch.onnx.export returned None"),
-        )
 
     limit = EXTERNAL_DATA_THRESHOLD if external_data_threshold is None else external_data_threshold
     onnx_bytes = b""

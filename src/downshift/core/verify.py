@@ -6,7 +6,7 @@ graph that traced without an error but froze a shape or specialized a data-depen
 """
 
 import logging
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 import numpy as np
@@ -53,9 +53,7 @@ class NumericsReport:
     shape_generalization: bool | None
     tolerance_abs: float
     tolerance_rel: float
-    tolerance_dtype: str = (
-        "float32"  # the dtype whose default (tolerance_abs, tolerance_rel) applied
-    )
+    tolerance_dtype: str = "float32"  # the dtype whose default tolerances applied
     tolerance_overridden: bool = False  # --atol or --rtol set the values, not tolerance_dtype
     baseline_failed: bool = False
     worst: WorstMismatch | None = None
@@ -73,41 +71,21 @@ class NumericsReport:
 
     @classmethod
     def from_dict(cls, data: dict) -> "NumericsReport":
-        """Rebuild from to_dict()'s output; `passed` is derived, so it is ignored."""
-        worst_data = data.get("worst")
-        worst = (
-            WorstMismatch(
-                sample=worst_data["sample"],
-                output=worst_data["output"],
-                index=tuple(worst_data["index"]),
-                expected=worst_data["expected"],
-                got=worst_data["got"],
-                input_shapes=[tuple(shape) for shape in worst_data["input_shapes"]],
+        """Rebuild from to_dict()'s output. Keys that are not fields (`passed`) are ignored."""
+        names = {f.name for f in fields(cls)}
+        kwargs = {key: value for key, value in data.items() if key in names}
+        worst = kwargs.get("worst")
+        if worst is not None:
+            kwargs["worst"] = WorstMismatch(
+                **worst
+                | {
+                    "index": tuple(worst["index"]),
+                    "input_shapes": [tuple(shape) for shape in worst["input_shapes"]],
+                }
             )
-            if worst_data is not None
-            else None
-        )
-        return cls(
-            samples_tested=data["samples_tested"],
-            max_abs_err=data["max_abs_err"],
-            max_rel_err=data["max_rel_err"],
-            failures=data["failures"],
-            shape_generalization=data["shape_generalization"],
-            tolerance_abs=data["tolerance_abs"],
-            tolerance_rel=data["tolerance_rel"],
-            tolerance_dtype=data.get("tolerance_dtype", "float32"),
-            tolerance_overridden=data.get("tolerance_overridden", False),
-            baseline_failed=data.get("baseline_failed", False),
-            worst=worst,
-            sample_shapes=[
-                [tuple(shape) for shape in sample] for sample in data.get("sample_shapes", [])
-            ],
-            output_shapes=[
-                [tuple(shape) for shape in sample] for sample in data.get("output_shapes", [])
-            ],
-            seed=data.get("seed", 0),
-            notes=list(data.get("notes", [])),
-        )
+        for key in ("sample_shapes", "output_shapes"):
+            kwargs[key] = [[tuple(shape) for shape in sample] for sample in kwargs.get(key, [])]
+        return cls(**kwargs)
 
 
 def default_tolerances(model: torch.nn.Module) -> tuple[str, float, float]:
@@ -154,30 +132,16 @@ def make_shared_axis0_vary_fn(base_inputs: tuple, dynamic_shapes: tuple) -> Vary
     return vary
 
 
-_ort_logging_quieted = False
-
-
-def quiet_ort_logging() -> None:
-    """Silence the C++ logger of ONNX Runtime. Otherwise, it prints each failure that a client
-    caused to stderr, and it bypasses the logging of downshift. It has an effect only before
-    the first session in the process is built (P6). Each place that creates a session
-    therefore calls this first. You can call it more than one time.
-    """
-    global _ort_logging_quieted
-    if _ort_logging_quieted:
-        return
-    ort.set_default_logger_severity(4)
-    _ort_logging_quieted = True
-
-
 def new_session(
     model: bytes | str | Path,
     providers: list[str] | None = None,
     options: ort.SessionOptions | None = None,
 ) -> ort.InferenceSession:
     """The one place that builds an InferenceSession (CPU, unless `providers` says otherwise).
-    The logger of ORT is therefore always quiet first (P6)."""
-    quiet_ort_logging()
+    It silences the C++ logger of ONNX Runtime first. Otherwise, the logger prints each failure
+    that a client caused to stderr, outside the logging of downshift. The setting has an effect
+    only before the first session of the process is built."""
+    ort.set_default_logger_severity(4)
     source = model if isinstance(model, bytes) else str(model)
     return ort.InferenceSession(
         source, sess_options=options, providers=providers or ["CPUExecutionProvider"]
@@ -227,7 +191,7 @@ def _bounds_text(dynamic_shapes: tuple | None) -> str | None:
     return ", ".join(parts) if parts else None
 
 
-def _to_numpy(tensor: torch.Tensor) -> np.ndarray:
+def tensor_to_numpy(tensor: torch.Tensor) -> np.ndarray:
     # bfloat16 tensors (and, for safety, float16 tensors) have no faithful numpy dtype. The own
     # .numpy() of torch raises an error on bfloat16. Widen floating outputs to float32 first.
     # Downshift does not change integer and bool outputs.
@@ -274,7 +238,7 @@ def _compare_sample(
     worst: WorstCandidate | None = None
     worst_abs = -1.0
     for idx, (expected, got) in enumerate(zip(torch_outs, ort_outs, strict=True)):
-        expected_np = _to_numpy(expected)
+        expected_np = tensor_to_numpy(expected)
         got_np = np.asarray(got)
         if expected_np.shape != got_np.shape:
             failed = True
