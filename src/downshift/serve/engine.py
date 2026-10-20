@@ -425,6 +425,7 @@ def state_from_entry(
     name, notes = choose_backend(verdict, opts, has_torch=True)
     hf_source = source if kind == HF_REPO_DIR else tokenizer_from
     timings: dict[str, float] = {}
+    example_inputs: tuple | None
 
     if name == BackendName.torch:
         # Eager serving needs the model: the entry has only the export and its verdict.

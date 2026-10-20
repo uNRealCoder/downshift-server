@@ -1,6 +1,5 @@
-"""The inference backends. Both take and return dicts of numpy arrays. The key is the input
-name. The HTTP layer therefore does not need to know which backend is behind it.
-"""
+"""The inference backends. Both map {input name: numpy array} to {output name: numpy array},
+so the HTTP layer does not know which one serves."""
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -23,12 +22,9 @@ _ort_state = ort.capi.onnxruntime_pybind11_state
 
 
 class InferenceInputError(ValueError):
-    """The backend rejected the inputs themselves. Downshift can report this to the client as a
-    400.
-
-    Only ORT says this by type (InvalidArgument). Each other failure inside infer is a fault of
-    the server (a 500). predict.py checks the names, dtypes, ranks and bounds before infer. A
-    request that gets this far is a request that the model declared it takes."""
+    """The backend rejected the inputs themselves (a 400). Only ORT's InvalidArgument and a
+    missing input are this. Any other failure inside infer is a 500: predict.py checks names,
+    dtypes, ranks and bounds before the inference."""
 
 
 @dataclass
@@ -42,10 +38,8 @@ class IOSpec:
 
 
 def concrete_dim(dim: object) -> int:
-    """One axis pinned to a size that a request can really have. A dynamic axis (ORT reports it
-    as a name, torch as "batch". Both can be None or a placeholder that is not positive) becomes
-    1. This is the smallest value that is still valid. The warmup feeds and the example of
-    /schema then agree."""
+    """A fixed axis keeps its size. A dynamic axis (a name, None or a placeholder) becomes 1, so
+    the warmup feeds and the /schema example agree."""
     return dim if isinstance(dim, int) and dim > 0 else 1
 
 
@@ -57,21 +51,13 @@ class BackendMeta:
     outputs: list[IOSpec]
 
     def to_dict(self) -> dict:
-        return {
-            "name": self.name,
-            "device": self.device,
-            "inputs": [i.to_dict() for i in self.inputs],
-            "outputs": [o.to_dict() for o in self.outputs],
-        }
+        return asdict(self)
 
 
 class Backend(Protocol):
     name: BackendName
     input_names: list[str]
-    # The execution provider that verify() compared the graph against (always CPU today,
-    # because verify.load_session is CPU only). None if the verdict never ran numerics. The
-    # places in engine.py that create sessions set it, when the verdict is known. The banner
-    # reads it to print a "Verified on" row (U6).
+    # The execution provider that verify() compared against (CPU), or None without numerics.
     verified_provider: str | None
 
     def infer(self, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]: ...
@@ -80,14 +66,9 @@ class Backend(Protocol):
 
 
 def verified_provider_for(verdict: ExportVerdict) -> str | None:
-    """See `Backend.verified_provider`. It is called one time, from engine._build_backend,
-    directly after a backend is constructed. Each serving-state builder (including a `--workers`
-    torch worker) therefore gets it in the same way."""
     return _CPU_EP if verdict.numerics is not None else None
 
 
-# The positional name that output_names() gives to the first output. TextIO.predictions reads it
-# (M5). Callers therefore do not need to carry the "output_0" literal by hand.
 FIRST_OUTPUT_NAME = "output_0"
 
 
@@ -115,11 +96,8 @@ def _ort_providers(device: str) -> list[str]:
 
 
 def _require_cuda_provider(session: ort.InferenceSession, requested: list[str]) -> None:
-    """ONNX Runtime lists CUDAExecutionProvider as available when the onnxruntime-gpu wheel is
-    installed. It removes it from a session without a message if the CUDA or cuDNN libraries
-    that the wheel was built for cannot be loaded. The session then runs on the CPU. --device
-    cuda is a promise about where the model runs. If the promise fails, fail with a clear error,
-    like the check of torch for missing CUDA."""
+    """ORT drops the CUDA provider silently when the CUDA or cuDNN libraries do not load, and
+    runs on the CPU. --device cuda promises the GPU, so fail instead."""
     if requested[0] != _CUDA_EP:
         return
     actual = session.get_providers()[0]
@@ -134,8 +112,7 @@ def _require_cuda_provider(session: ort.InferenceSession, requested: list[str]) 
 
 
 def _session_options(intra_op_threads: int, inter_op_threads: int) -> ort.SessionOptions:
-    """Maximum graph optimization is always on. A thread count of 0 means "let ONNX Runtime
-    choose". This is also its own default, so it is safe to always set it."""
+    """Full graph optimization. A thread count of 0 lets ORT choose."""
     options = ort.SessionOptions()
     options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
     options.intra_op_num_threads = intra_op_threads
@@ -166,16 +143,13 @@ class OnnxRuntimeBackend:
         self.provider = self.session.get_providers()[0]
         self.input_names = [i.name for i in self.session.get_inputs()]
         self.onnx_output_names = [o.name for o in self.session.get_outputs()]
-        # The output keys are positional. The responses then look the same for both backends.
+        # Positional output keys, the same for both backends.
         self.output_names = output_names(len(self.onnx_output_names))
         self.verified_provider: str | None = None
 
     def infer(self, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-        # Use run_with_ort_values and not run(). A bf16 output has no numpy dtype of its own
-        # (OrtValue.numpy() raises "No corresponding Numpy type"). The normal session.run()
-        # can therefore never return one. Only the OrtValue form exposes DLPack. Torch
-        # understands DLPack for bf16. _widen_ort_value can then use the same float32 wire
-        # contract (B1) as TorchBackend.infer.
+        # run() cannot return a bf16 output (no numpy dtype). OrtValues expose DLPack, which
+        # _widen_ort_value takes through torch.
         ort_inputs = {name: ort.OrtValue.ortvalue_from_numpy(arr) for name, arr in inputs.items()}
         try:
             outputs = self.session.run_with_ort_values(self.onnx_output_names, ort_inputs)
@@ -224,17 +198,15 @@ class TorchBackend:
         self.module = module.eval().to(self.device)
         self.input_names = list(input_names)
         self.verified_provider: str | None = None
-        # bf16 and fp16 models take float32 on the wire. The module itself stays in its own
-        # dtype. Floating inputs are cast to it here, and outputs are widened again on the way
-        # out (B1). Downshift does not produce modules with mixed dtypes. The first parameter
-        # that downshift finds wins.
+        # bf16 and fp16 models take float32 on the wire: cast floating inputs to the dtype of
+        # the first floating parameter, and widen the outputs again.
         self._param_dtype = next(
             (p.dtype for p in self.module.parameters() if p.is_floating_point()), torch.float32
         )
         self._input_specs = [IOSpec(n, None, None) for n in self.input_names]
         self._output_specs: list[IOSpec] = []
         if example_inputs is not None:
-            # One pass over the example fills in the dtypes and shapes for /metadata.
+            # One pass over the example gives the dtypes and shapes for /metadata.
             specs = dynamic_shapes or (_BATCH_AXIS,) * len(self.input_names)
             self._input_specs = [
                 _spec_from_tensor(n, t, spec)
@@ -247,9 +219,7 @@ class TorchBackend:
         missing = [n for n in self.input_names if n not in inputs]
         if missing:
             raise InferenceInputError(f"missing inputs: {missing}")
-        # torch.from_numpy needs an array that is C-contiguous and writable. np.require copies
-        # only if one of these is missing. (Base64 inputs arrive as frombuffer views that are
-        # read-only.)
+        # torch.from_numpy needs a C-contiguous, writable array (base64 views are read-only).
         args = []
         for n in self.input_names:
             t = torch.from_numpy(np.require(inputs[n], requirements=["C", "W"])).to(self.device)
@@ -271,17 +241,15 @@ class TorchBackend:
         return BackendMeta(self.name, self.device, self._input_specs, self._output_specs)
 
 
-# Without the dynamic_shapes of an adapter, downshift treats axis 0 as the batch axis.
+# Without an adapter's dynamic_shapes, axis 0 is the batch axis.
 _BATCH_AXIS = {0: "batch"}
 
 
 def _dynamic_shape(
     shape: tuple[int, ...], spec: dict | None = _BATCH_AXIS
 ) -> list[int | str | None]:
-    """The shape as ORT reports it: a dynamic axis by its name, and each other axis by its size.
-    `spec` is the {axis: torch.export.Dim} of an adapter for this input (None: nothing is
-    dynamic). An input such as the edge_index [2, E] of a graph then keeps its fixed 2 at the
-    start."""
+    """The shape as ORT reports it: a dynamic axis by its Dim name, others by size. `spec` is
+    {axis: Dim} for this input (None: nothing is dynamic)."""
     dynamic = spec or {}
     return [
         getattr(dynamic[i], "__name__", str(dynamic[i])) if i in dynamic else size
@@ -290,10 +258,8 @@ def _dynamic_shape(
 
 
 def _widen_ort_value(value: ort.OrtValue) -> np.ndarray:
-    """An ORT output as a numpy array that is ready for the wire. bf16 and fp16 are widened to
-    float32 (B1), as in TorchBackend.infer. fp16 goes through numpy, which has the dtype. bf16
-    has none (OrtValue.numpy() raises "No corresponding Numpy type"). It therefore takes the
-    DLPack bridge into torch. Only newer onnxruntime builds expose this on OrtValue."""
+    """An ORT output for the wire, with bf16 and fp16 widened to float32. bf16 has no numpy
+    dtype, so it goes through DLPack into torch (newer onnxruntime builds only)."""
     data_type = value.data_type()
     if data_type == "tensor(float16)":
         widened: np.ndarray = value.numpy().astype(np.float32)

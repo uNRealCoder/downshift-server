@@ -51,9 +51,7 @@ OutputEncodingField = Annotated[
 # Dtype names
 # --------------------------------------------------------------------------------------------------
 
-# ORT reports dtypes as "tensor(float)". Map those names to numpy names. bfloat16 has no numpy
-# dtype of its own. The wire contract for it is float32, the same as for the torch backend
-# (B1). It therefore maps there too.
+# ORT dtype names ("tensor(float)") to numpy names. bfloat16 is float32 on the wire.
 _ORT_DTYPES = {
     "float": "float32",
     "float16": "float16",
@@ -70,9 +68,7 @@ _TENSOR_RE = re.compile(r"^tensor\((\w+)\)$")
 
 
 def normalize_dtype(dtype: str | None) -> str | None:
-    """Turn "tensor(float)", "tensor(float32)" or "float32" into a numpy dtype name. None if it
-    is unknown. The torch backend spells dtypes in the numpy way inside "tensor(...)". ORT uses
-    its own spelling."""
+    """ "tensor(float)", "tensor(float32)" or "float32" -> "float32". None if unknown."""
     if dtype is None:
         return None
     match = _TENSOR_RE.match(dtype)
@@ -231,7 +227,7 @@ class VerdictInfo(BaseModel):
     # Does each row give the same output with other rows? None: not checked (row_reason says why).
     row_independent: bool | None = None
     row_reason: str | None = None
-    # No onnx_path. to_dict() has one, but it is a location on the disk of the server.
+    # No onnx_path: it is a location on the server's disk.
 
 
 class IOSpecInfo(BaseModel):
@@ -250,9 +246,8 @@ class BackendInfo(BaseModel):
 
 
 class AxisInfo(BaseModel):
-    """One dynamic axis: what the server accepts (`served_*`, the bounds of the export Dim),
-    next to what verification ran (`sampled_*`, None if verify did not run). `name` is the Dim
-    name that `--axis-max` takes. See downshift.core.axes."""
+    """One dynamic axis: the bounds the server accepts next to the sizes verification ran.
+    `name` is what `--axis-max` takes. See downshift.core.axes."""
 
     input: str
     axis: int
@@ -304,27 +299,16 @@ class MetadataResponse(BaseModel):
 
 
 class AxisBound(BaseModel):
-    """The min and max that the export of the adapter traced this axis for (the bounds of
-    torch.export.Dim).
-
-    They exist only for axes that an adapter made dynamic on a model that downshift exported
-    itself. A bare `.onnx` file with no reference model has none (TensorSchema.bounds is None
-    then).
-    """
+    """The (min, max) that the export traced a dynamic axis for. A bare .onnx has none."""
 
     min: int
     max: int
 
 
 class TensorSchema(BaseModel):
-    """One input or output as /schema describes it.
-
-    In `shape`, an int is a fixed size and a string is a dynamic axis. The string is a name that
-    the adapter chose ("batch", "seq") or the plain word "dynamic". `example_shape` is that
-    shape with each dynamic axis pinned to 1. `example_request` used it. `bounds`, if known, has
-    the same length as `shape`. It has one AxisBound for each dynamic axis that the export
-    of downshift traced, and None for the other axes.
-    """
+    """One input or output. In `shape`, an int is a fixed size and a string a dynamic axis
+    ("batch", "seq" or "dynamic"). `example_shape` pins dynamic axes to 1. `bounds` has an
+    AxisBound for each traced dynamic axis and None for the others."""
 
     name: str
     dtype: str | None = None
@@ -430,8 +414,7 @@ class IndexResponse(BaseModel):
 
 class ReadyResponse(BaseModel):
     ready: bool
-    # The current phase of the loader while the app is not ready (U4). None when it is ready, or
-    # when the app was built with state= directly (no loader, so no not-ready window to report).
+    # The loader's phase while not ready. None when ready or without a loader.
     phase: str | None = None
 
 
@@ -449,7 +432,7 @@ def _from_base64(
             f"input {name!r}: base64 input needs dtype and shape "
             "(the shape cannot be inferred from bytes)"
         )
-    # np.dtype(">f4").name is plain "float32". The byte order is therefore checked on the spec of the client.
+    # np.dtype(">f4").name is "float32": check the byte order on the client's spelling.
     if str(typed.dtype).startswith(">"):
         raise ValueError(
             f"input {name!r}: dtype {typed.dtype!r} is big-endian; base64 input must be little-endian"
@@ -458,7 +441,7 @@ def _from_base64(
     if any(dim < 0 for dim in typed.shape):
         raise ValueError(f"input {name!r}: shape {typed.shape} has a negative dimension")
     expected = math.prod(typed.shape) * dtype.itemsize
-    # Checked before the decoding. The shape says how much data goes to the backend.
+    # Checked before decoding: the shape says how much data the backend gets.
     if expected > max_bytes:
         raise ValueError(
             f"input {name!r}: {expected} bytes exceeds the server limit of {max_bytes} bytes"
@@ -482,15 +465,9 @@ def to_numpy(
     *,
     max_bytes: int = DEFAULT_MAX_INPUT_BYTES,
 ) -> np.ndarray:
-    """Convert a JSON input to an ndarray.
-
-    `expected_dtype` is what the backend declared (an ORT "tensor(...)" name, a numpy name, or
-    None). A dtype in the payload has priority. If nothing is declared, integer lists become
-    int64 and all other lists become float32. Torch models expect this.
-
-    A TypedArray whose `data` is a string is base64 of the raw little-endian buffer. It must
-    have dtype and shape. It decodes to at most `max_bytes`.
-    """
+    """A JSON input as an ndarray. The dtype is the payload's, else `expected_dtype` (the
+    backend's declaration), else int64 for integer lists and float32 for others. A TypedArray
+    with string `data` is little-endian base64 of at most `max_bytes`."""
     explicit_dtype: str | None = None
     explicit_shape: list[int] | None = None
     if isinstance(value, dict):

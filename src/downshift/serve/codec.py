@@ -1,11 +1,7 @@
-"""The wire codecs for binary tensor I/O: base64 and safetensors.
+"""The wire codecs for binary tensors: base64 and safetensors.
 
-Base64 uses pybase64 (SIMD) if it is installed. Otherwise, it uses the standard library.
-
-The binascii of CPython runs at about 230 MB/s. It is most of the cost of a base64 request
-after the JSON codec is out of the way. pybase64 is about 12x faster in both directions. The
-call signatures are the same in both cases, so callers never know which one they got. If the
-codec allows it, decoding gives a writable buffer. Torch can then wrap it without a copy.
+Base64 uses pybase64 (SIMD, about 12x faster than binascii) if it is installed, with the same
+signatures. Its decoder gives a writable buffer that torch can wrap without a copy.
 """
 
 import json
@@ -70,11 +66,8 @@ def _is_int(value: object) -> bool:
 def decode_safetensors(
     body: bytes, *, max_input_bytes: int
 ) -> tuple[dict[str, np.ndarray], dict[str, str]]:
-    """Parse a safetensors body into numpy views without a copy, plus its `__metadata__`.
-
-    We wrote this reader by hand, by design. The header is JSON and the payload is raw bytes.
-    Nothing here can execute code. It raises ValueError for all malformed input.
-    """
+    """Parse a safetensors body into numpy views (no copy) and its `__metadata__`. A reader of
+    our own: JSON and raw bytes, nothing that can execute code. ValueError for bad input."""
     if len(body) < 8:
         raise ValueError("safetensors body is shorter than its 8-byte header length")
     header_len = int.from_bytes(body[:8], "little")
@@ -158,10 +151,9 @@ def encode_safetensors(
     header: dict[str, Any] = {}
     if metadata:
         header["__metadata__"] = metadata
-    # Byte views of each array (contiguous, little-endian). The join below is then the only copy.
-    chunks: list[np.ndarray] = []
+    chunks: list[np.ndarray] = []  # byte views: the join below is the only copy
     offset = 0
-    # The reference writer sorts by descending itemsize and then by name. This keeps the tensors aligned.
+    # Descending itemsize, then name, as the reference writer does: keeps tensors aligned.
     for name, array in sorted(arrays.items(), key=lambda kv: (-kv[1].dtype.itemsize, kv[0])):
         dtype = array.dtype.newbyteorder("<") if array.dtype.itemsize > 1 else array.dtype
         wire = _SAFETENSORS_NAMES.get(dtype)

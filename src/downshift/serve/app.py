@@ -2,6 +2,7 @@
 
 import contextvars
 import hmac
+import inspect
 import logging
 import threading
 import time
@@ -9,7 +10,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import asdict
-from typing import Any
+from typing import Any, cast
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
@@ -18,10 +19,10 @@ from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 import downshift
+from downshift._imports import import_object
 from downshift.core.phase import CURRENT_PROGRESS, LoadProgress
 from downshift.logs import request_id_var
 from downshift.serve.engine import ServingState
-from downshift.serve.middleware import load_middleware
 from downshift.serve.options import ExecutionChoice
 from downshift.serve.predict import (
     BINARY_REQUEST_TYPES,
@@ -48,16 +49,23 @@ from downshift.sources import LABEL_KINDS, display_source, hide_paths
 logger = logging.getLogger("downshift.serve")
 access_logger = logging.getLogger("downshift.access")
 
-NOT_READY_RETRY_AFTER = 2  # the number of seconds that a client waits before it asks again
+NOT_READY_RETRY_AFTER = 2  # seconds
 
-# Probes: the API key does not apply to them, and downshift logs them at DEBUG. They then do not flood the default output.
+# The probes: no API key, and logged at DEBUG.
 _PROBE_PATHS = frozenset({"/health", "/ready"})
+
+# The largest body that --execution inline parses on the event loop. A chunked body (no
+# Content-Length) always goes to the pools.
+INLINE_MAX_BODY_BYTES = 64 * 1024
+
+_UNSUPPORTED_MEDIA_TYPE = (
+    "unsupported Content-Type; send JSON (application/json) or safetensors "
+    f"({SAFETENSORS_MEDIA_TYPE}, or application/octet-stream)"
+)
 
 
 def _route_path(scope: Scope) -> str:
-    """The path relative to the place where this app is mounted. From Starlette 0.33,
-    scope["path"] keeps the mount prefix (app_for(...) is made to be mounted). "/model/health"
-    must therefore still count as the /health probe."""
+    """The path without the mount prefix, so "/model/health" is still the /health probe."""
     path: str = scope["path"]
     return path.removeprefix(scope.get("root_path", ""))
 
@@ -75,8 +83,6 @@ def _body_too_large(observed: int, limit: int) -> JSONResponse:
 
 
 def _not_ready_error() -> HTTPException:
-    """/metadata, /schema and the predict routes raise this while an app that a loader built
-    has no ServingState yet (see the loader parameter of build_app)."""
     return HTTPException(
         503, "model is not ready", headers={"Retry-After": str(NOT_READY_RETRY_AFTER)}
     )
@@ -93,8 +99,7 @@ def _capacity_error(state: ServingState) -> HTTPException:
 
 
 async def _read_body_limited(request: Request, limit: int) -> bytes | JSONResponse:
-    """request.stream(), with a running total. It gives a 413 when the total passes `limit`. It
-    does not first collect the whole body (P2 - request.body() does this)."""
+    """The streamed body, or a 413 as soon as the running total passes `limit`."""
     chunks: list[bytes] = []
     total = 0
     async for chunk in request.stream():
@@ -103,17 +108,6 @@ async def _read_body_limited(request: Request, limit: int) -> bytes | JSONRespon
             return _body_too_large(total, limit)
         chunks.append(chunk)
     return b"".join(chunks)
-
-
-# The largest body that --execution inline parses on the event loop. A chunked body (no
-# Content-Length) always goes to the pools.
-INLINE_MAX_BODY_BYTES = 64 * 1024
-
-
-_UNSUPPORTED_MEDIA_TYPE = (
-    "unsupported Content-Type; send JSON (application/json) or safetensors "
-    f"({SAFETENSORS_MEDIA_TYPE}, or application/octet-stream)"
-)
 
 
 def _content_type(request: Request) -> str:
@@ -126,14 +120,9 @@ async def _predict(
     graph: bool,
     admitted_at: float,
 ) -> Response:
-    """An admitted predict: the content type, then --max-body-bytes, then run_predict on the raw
-    body.
-
-    If Content-Length is more than the limit, the server refuses the request without a read of
-    the body. It reads a chunked body while it arrives. It refuses it when the running total
-    passes the limit (P2), and not after the whole body arrived. The timings of each stage are in
-    the state of the scope. RequestIdMiddleware reads them again from there for the request line
-    (U1)."""
+    """An admitted predict: check the content type and --max-body-bytes (before reading, if
+    Content-Length is given), then run_predict on the raw body. The stage timings go to the
+    scope state, for the access log."""
     content_type = _content_type(request)
     binary = content_type in BINARY_REQUEST_TYPES
     if content_type and not binary and "json" not in content_type:
@@ -169,15 +158,9 @@ async def _predict(
 
 
 class PredictRoute(APIRoute):
-    """/predict and /predict/graph. _predict serves them directly from the raw body. FastAPI does
-    not resolve the body. run_predict parses it (orjson), validates it (the pydantic model of the
-    route), and prepares it in one prep-pool hop. It never does this on the event loop (P3). The
-    endpoint functions only document the JSON body in the OpenAPI schema.
-
-    Downshift first admits a slot (P1). An overloaded server answers 503 without a buffer or a
-    parse of one byte. Downshift releases the slot in `finally`. Each exit (413, 400, a
-    validation error, a client that disconnects) therefore releases it exactly one time.
-    """
+    """/predict and /predict/graph, served from the raw body: FastAPI does not parse it, and
+    run_predict does so off the event loop. A slot is admitted first, so an overloaded server
+    answers 503 before it reads a byte. `finally` releases the slot on every exit."""
 
     def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
         graph = self.path == "/predict/graph"
@@ -206,8 +189,7 @@ async def predict_graph(req: GraphPredictRequest | None = None) -> Response:
     raise NotImplementedError
 
 
-# The predict routes: an orjson response. PredictResponse stays in the OpenAPI schema, without
-# the validation of response_model again over each output.
+# PredictResponse documents the JSON body without a response_model validation of each output.
 _BINARY_BODY = {"schema": {"type": "string", "format": "binary"}}
 _PREDICT_ROUTE: dict[str, Any] = {
     "response_class": NumpyJSONResponse,
@@ -229,9 +211,8 @@ _PREDICT_ROUTE: dict[str, Any] = {
 
 
 def _routes(request: Request) -> dict[str, str]:
-    """{name: "METHOD /path"} for each route of the app, plus the OpenAPI pages. It reads the
-    app, so the index never lists a route that is not there. The paths include the mount
-    prefix (root_path)."""
+    """{name: "METHOD /path"} for each route of the app (with the mount prefix), plus the
+    OpenAPI pages."""
     app = request.app
     prefix = request.scope.get("root_path", "")
     routes = {
@@ -247,12 +228,7 @@ def _routes(request: Request) -> dict[str, str]:
 
 
 def require_serving(request: Request) -> ServingState:
-    """The loaded model, or a 503.
-
-    Each route that needs a ServingState depends on this. A route that you add later therefore
-    cannot forget the guard by omission of a copy of it. /ready is not a caller, by design. Its
-    answer is that the model is not loaded. This is not an error.
-    """
+    """The loaded model, or a 503. A dependency of each route that needs the model."""
     current: ServingState | None = request.app.state.serving
     if current is None:
         raise _not_ready_error()
@@ -260,18 +236,10 @@ def require_serving(request: Request) -> ServingState:
 
 
 class RequestIdMiddleware:
-    """This is pure ASGI and not BaseHTTPMiddleware. BaseHTTPMiddleware buffers the whole
-    response body to let a handler rewrite headers. This code does not need these extra copies.
-    The middleware reads X-Request-Id or makes one, stores it on request.state, and returns it
-    in the response. "See the server log" then has a search key.
-
-    It also binds the ID to `request_id_var` for the request. Each log line that downshift
-    emits while it serves the request then has the ID. With `access_log`, it writes the one
-    request line (U1): method, path, status, duration and, for the predict routes, the split
-    of parse, codec and infer. The routes leave the split in the state of the scope as
-    "timings_ms". The level is WARNING from status 400, DEBUG for the probes /health and /ready
-    (a 503 from /ready during the load is its normal answer), and INFO for all other requests.
-    """
+    """Pure ASGI (BaseHTTPMiddleware would buffer each response). It takes X-Request-Id or
+    makes one, binds it to `request_id_var` for the log lines, and returns it. With
+    `access_log`, it writes one line for each request: WARNING from status 400, DEBUG for the
+    probes, INFO otherwise, with the stage timings of a predict."""
 
     def __init__(self, app: ASGIApp, access_log: bool = True) -> None:
         self.app = app
@@ -299,7 +267,7 @@ class RequestIdMiddleware:
         try:
             await self.app(scope, receive, send_with_request_id)
         except Exception:
-            # ServerErrorMiddleware, outside this middleware, turns it into the 500 response.
+            # ServerErrorMiddleware, outside this one, turns it into the 500 response.
             if status is None:
                 status = 500
             raise
@@ -336,11 +304,8 @@ class RequestIdMiddleware:
 
 
 class ApiKeyMiddleware:
-    """DOWNSHIFT_SERVER_API_KEY (U7). Downshift reads it through settings.py, so it also applies
-    to app_for() (ruling 5). None (unset) means no authentication. The caller already gave a
-    warning about this at build_app time. This is pure ASGI, like RequestIdMiddleware.
-    /health and /ready are exempt, so a probe never needs the key.
-    """
+    """Pure ASGI: every route except the probes needs "Authorization: Bearer <api_key>".
+    None turns it off."""
 
     def __init__(self, app: ASGIApp, api_key: str | None) -> None:
         self.app = app
@@ -354,9 +319,8 @@ class ApiKeyMiddleware:
 
         header = Headers(scope=scope).get("authorization", "")
         scheme, _, token = header.partition(" ")
-        # Starlette decodes header bytes as latin-1. Latin-1 therefore gives the raw bytes of the
-        # client back. compare_digest on a str that is not ASCII would raise an error (a 500) and
-        # would not fail the check.
+        # Starlette decodes headers as latin-1, so this gives back the client's bytes.
+        # compare_digest on a non-ASCII str would raise (a 500) instead of failing the check.
         if scheme.lower() != "bearer" or not hmac.compare_digest(
             token.encode("latin-1"), self._key_bytes
         ):
@@ -370,15 +334,28 @@ class ApiKeyMiddleware:
         await self.app(scope, receive, send)
 
 
+def load_middleware(app: FastAPI, specs: Sequence[str]) -> None:
+    """Attach each "pkg.module:attr" spec: a middleware class built as cls(app) (pure ASGI or
+    BaseHTTPMiddleware), or an async (request, call_next) function."""
+    for spec in specs:
+        obj = import_object(spec)
+        if inspect.isclass(obj):
+            app.add_middleware(cast(Any, obj))
+        elif inspect.iscoroutinefunction(obj):
+            app.middleware("http")(obj)
+        else:
+            raise ValueError(
+                f"{spec!r} is not middleware. Expected a middleware class (pure ASGI or "
+                "BaseHTTPMiddleware) or an async function that takes (request, call_next). "
+                f"Got {type(obj).__name__}"
+            )
+
+
 def _loader_lifespan(
     loader: Callable[[], ServingState],
 ) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
-    """Run `loader` on a background thread. It starts when the app begins to serve (and not when
-    build_app is called). The result goes to app.state.serving. If the loader raises an error,
-    app.state.serving stays None forever, as far as this function can see. The caller
-    (serve_cmd) makes sure that this ends the process. It holds the uvicorn.Server and sets
-    should_exit itself before it raises the error again.
-    """
+    """Run `loader` on a background thread when the app starts to serve, and put its result on
+    app.state.serving. If it raises, the state stays None: the caller must end the process."""
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -386,18 +363,12 @@ def _loader_lifespan(
         app.state.load_progress = progress
 
         def run() -> None:
-            # This runs in a new Context (see below). This set() is therefore visible only to the
-            # call stack of this thread. The calls that report the phase inside the builders of
-            # engine.py (U4) read it again with CURRENT_PROGRESS.get(). Downshift does not pass
-            # a parameter through each builder and through the loader closure of the CLI.
+            # In the thread's own Context, report() calls deep in core reach `progress`.
             CURRENT_PROGRESS.set(progress)
             try:
                 app.state.serving = loader()
             except Exception:
-                # Not logged at the error or exception level. A caller with its own reporting
-                # path (serve_cmd raises this error again on the main thread) would otherwise
-                # print the traceback two times. Once here without a condition, and once with
-                # the gate --log-level debug. --log-level debug still sees it here.
+                # The caller reports the error. Log it only at DEBUG, to print it once.
                 logger.debug("model failed to load; /ready will not turn 200", exc_info=True)
 
         thread = threading.Thread(
@@ -418,20 +389,11 @@ def build_app(
     api_key: str | None = API_KEY,
     access_log: bool = True,
 ) -> FastAPI:
-    """With `state`, the app serves it immediately (library use, tests). With `loader` instead,
-    the app binds with no ServingState. /health is 200 immediately. /ready is 503. /metadata,
-    /schema and the predict routes are 503 until the loader gives one. (The lifespan starts the
-    loader on a background thread when the app is served.)
+    """The app over `state`, or over the result of `loader`. With a loader, the app binds at
+    once: /health is 200, and /ready and the model routes are 503 until the loader finishes.
 
-    If you set `api_key`, every route except /health and /ready needs "Authorization: Bearer
-    <api_key>" (U7). It defaults to DOWNSHIFT_SERVER_API_KEY (settings.API_KEY). The
-    environment variable then reaches app_for() and this function in the same way (ruling 5).
-    To override that default for a library caller, pass a value (or None to turn it off). An
-    empty string counts as unset. DOWNSHIFT_SERVER_API_KEY="" must not make "Bearer " a valid
-    credential.
-
-    `access_log` False removes the one request line that RequestIdMiddleware writes on the
-    `downshift.access` logger (U1). The request ID is still set and returned.
+    `api_key` defaults to DOWNSHIFT_SERVER_API_KEY. None or "" turns it off (with a warning).
+    `access_log=False` drops the request lines of `downshift.access`.
     """
     if (state is None) == (loader is None):
         raise ValueError("build_app needs exactly one of state or loader")
@@ -450,24 +412,17 @@ def build_app(
         lifespan=_loader_lifespan(loader) if loader is not None else None,
     )
     app.state.serving = state
-    # Starlette makes the *last* registered middleware the outermost layer. The registration
-    # order here is therefore from back to front. The user middleware of load_middleware goes
-    # first (innermost, directly next to the routes, so it sees only authenticated traffic).
-    # ApiKeyMiddleware is next (the gate). RequestIdMiddleware is last (outermost). The access
-    # log and the X-Request-Id header then cover 401 responses and all other responses in the
-    # same way.
+    # The last middleware added is the outermost. User middleware sits next to the routes and
+    # sees only authenticated traffic. The request ID wraps everything, the 401s included.
     load_middleware(app, middleware)
     app.add_middleware(ApiKeyMiddleware, api_key=api_key)
     app.add_middleware(RequestIdMiddleware, access_log=access_log)
 
     @app.exception_handler(Exception)
     async def _unhandled_exception(request: Request, exc: Exception) -> JSONResponse:
-        # ServerErrorMiddleware dispatches this handler. It is outside RequestIdMiddleware
-        # (Starlette always makes it the outermost layer). Its response therefore bypasses our
-        # send wrapper. Set the header here too, directly on the response. Do not rely on that
-        # wrapper for this one path.
+        # This runs outside RequestIdMiddleware, which has already reset request_id_var and
+        # cannot add its header here.
         request_id = getattr(request.state, "request_id", None)
-        # RequestIdMiddleware has already reset request_id_var when this code runs.
         token = request_id_var.set(request_id)
         try:
             logger.exception(
@@ -516,9 +471,7 @@ def build_app(
 
     @app.get("/metadata", response_model=MetadataResponse)
     async def metadata(current: ServingState = Depends(require_serving)) -> MetadataResponse:
-        # Free-text fields quote the path that an exception received (the "Load model from ..."
-        # of ORT, the "Can't load tokenizer for ..." of transformers). A client gets the name
-        # only.
+        # Free text can quote local paths (ORT and transformers errors): show names only.
         located = () if current.source_kind in LABEL_KINDS else (current.source,)
         paths = (*located, current.verdict.onnx_path, current.hf_source)
         from downshift.serve.describe import axes_info, limits_info
@@ -547,11 +500,7 @@ def build_app(
     async def schema(
         request: Request, current: ServingState = Depends(require_serving)
     ) -> SchemaResponse:
-        """What to POST: the name, dtype and shape of each input, and an example body.
-
-        It is cheap to build for each request (it reads the IO that the backend declares and
-        fills a small example). Nothing is cached, so it always matches the running graph.
-        """
+        """What to POST: the name, dtype and shape of each input, and an example body."""
         from downshift.serve.describe import describe
 
         return describe(current, f"{str(request.base_url).rstrip('/')}/predict")
