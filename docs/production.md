@@ -145,8 +145,8 @@ The result cache keeps the output of single rows. A row that arrives again skips
 
 - The cache is on by default. It keeps 100 rows in each worker process. To change this, set `--result-cache-rows N`. `0` turns the cache off.
 - A row enters the cache when it arrives for the second time. A bulk load of rows that arrive one time does not push out the rows that arrive often.
-- The cache needs a model with independent rows. A row must give the same output with any other rows in its batch. Downshift checks this at boot. The `Rows` line of the banner shows the result. `/metadata` has it as `verdict.row_independent`. A model such as `x - x.mean(0)` is not independent. A model that returns one vector for each token is not independent. For these models, the cache is off and the banner says why. If you set `--result-cache-rows` for such a model, `serve` stops with exit code `4`.
-- If two requests ask for the same new row at the same time, the model runs one time.
+- The cache needs a model with independent rows. A row must give the same output with any other rows in its batch. Downshift checks this at boot, with two different rows that run alone and together. The check finds a model whose rows change each other by more than the tolerance. It cannot prove that a small effect is absent. If the numerics check failed, the rows are not checked and the cache is off. The `Rows` line of the banner shows the result. `/metadata` has it as `verdict.row_independent`. A model such as `x - x.mean(0)` is not independent. A model that returns one vector for each token is not independent. For these models, the cache is off and the banner says why. If you set `--result-cache-rows` for such a model, `serve` stops with exit code `4`.
+- If two requests ask for the same new row at the same time, the model runs one time. The second request waits for the first. This wait ends at `--request-timeout`, and the request then gets a `503`. If the first request fails or the client leaves, the second request computes the row itself.
 - The cache counts rows and not bytes. Its memory is the number of rows times the size of one output row. If the output rows are large, set a smaller number. The memory of the cache is part of the memory of the worker.
 - Each worker process has its own cache. With `--workers 4` and the default, the server keeps up to 400 rows.
 - `/predict/graph` does not use the cache.
@@ -167,7 +167,7 @@ The result cache keeps the output of single rows. A row that arrives again skips
   Each inference in progress holds its own activation memory. For a large model whose big requests run out of memory together, decrease the value.
 - **`--max-queue N`** (default 64) is the number of predicts that can wait beyond `--max-concurrency`. When `max-concurrency + max-queue` requests are admitted, the next request gets an immediate `503` with `Retry-After: 1`. The body says how many requests run and how many wait. The request does not join an unbounded queue. Such a queue would time out on the client side later.
   `--max-queue` counts requests and not rows. A request with many rows counts as one.
-- **`--request-timeout SECONDS`** (default `30`, `0` turns it off) sets how long an admitted predict can wait in the queue for its turn. The clock starts when the request is admitted. It therefore counts the time in the queue. After this time, the request gets a `503` and does not start. This limit never interrupts a request that already runs.
+- **`--request-timeout SECONDS`** (default `30`, `0` turns it off) sets how long an admitted predict can wait in the queue for its turn. The clock starts when the request is admitted. It therefore counts the time in the queue, and the time that the request waits for a row of another request (the result cache). After this time, the request gets a `503` and does not start. This limit never interrupts a request that already runs.
 
 The `Capacity` row of the banner shows all three:
 
