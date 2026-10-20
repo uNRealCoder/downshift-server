@@ -1,21 +1,27 @@
 """The result cache on the serving path: boot rules, then the request path."""
 
+import asyncio
 import base64
 import dataclasses
 import threading
 import time
+from concurrent.futures import Future
 
 import numpy as np
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from safetensors.numpy import load as st_load
 from safetensors.numpy import save as st_save
 from transformers import BertForSequenceClassification
 
+from downshift.core.axes import DimBound
 from downshift.loading import LoadSpec, load_model
+from downshift.serve import predict
 from downshift.serve.app import build_app
 from downshift.serve.engine import prepare_serving
 from downshift.serve.options import ServeOptions
+from downshift.serve.result_cache import Lookup
 from downshift.settings import DEFAULT_RESULT_CACHE_ROWS
 from tests.models import hf_repo
 
@@ -291,6 +297,128 @@ def test_a_waiter_computes_the_row_itself_when_the_owner_fails():
 
     assert sorted(r.status_code for r in results) == [200, 500]
     assert spy.rows == [1, 1]
+
+
+def test_a_partial_hit_is_not_checked_against_the_batch_bound_again():
+    state = _state("clean_mlp")
+    state.axis_bounds = {"x": {0: DimBound("batch", 3, 100)}}  # the export traced 3 to 100 rows
+    client = TestClient(build_app(state))
+    for _ in range(2):
+        assert _post(client, _x(1.0, 2.0, 3.0)).status_code == 200
+
+    partial = _post(client, _x(1.0, 2.0, 4.0))  # two hits: the model sees one row
+
+    assert partial.status_code == 200
+    assert partial.headers["X-Downshift-Cache"] == "partial"
+    assert _post(client, _x(1.0, 2.0)).status_code == 400, "the whole batch is still checked"
+
+
+def _fake_plan(cache, request, arrays, *, pending=None, claim=()):
+    keys = [b"k0"]
+    found = Lookup(pending=pending or {})
+    owned = []
+    if claim:
+        found = cache.lookup(list(claim))
+        owned = list(claim)
+    return predict._CachePlan(request, arrays, keys, found, None, owned)
+
+
+def test_a_request_that_leaves_during_the_prep_hop_releases_its_rows(monkeypatch):
+    state = _state("clean_mlp")
+    cache = state.result_cache
+    request = predict._Request()
+
+    def slow_prepare(*_args):
+        time.sleep(0.3)  # the thread claims the row after the client has left
+        return _fake_plan(cache, request, None, claim=[b"k0"])
+
+    monkeypatch.setattr(predict, "_cache_prepare", slow_prepare)
+
+    async def go():
+        task = asyncio.ensure_future(
+            predict._run_cached(
+                state,
+                cache,
+                b"",
+                request,
+                binary=False,
+                run_here=False,
+                admitted_at=time.monotonic(),
+                timings_ms={},
+                accept_safetensors=False,
+            )
+        )
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(0.5)
+
+    asyncio.run(go())
+
+    assert cache.lookup([b"k0"]).missing == [0], "the claim was released"
+
+
+def test_a_waiter_that_leaves_does_not_cancel_the_row_of_its_owner():
+    state = _state("clean_mlp")
+    future: Future = Future()
+
+    async def go():
+        waiter = asyncio.ensure_future(predict._await_row(state, future, time.monotonic()))
+        await asyncio.sleep(0.05)
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+
+    asyncio.run(go())
+
+    assert not future.cancelled()
+    future.set_result({})  # the owner can still give the row
+
+
+def test_a_waiter_gives_up_at_the_request_timeout():
+    state = _state("clean_mlp", request_timeout=0.2)
+
+    async def go():
+        await predict._await_row(state, Future(), time.monotonic())
+
+    with pytest.raises(HTTPException) as info:
+        asyncio.run(go())
+
+    assert info.value.status_code == 503
+    assert "--request-timeout" in info.value.detail
+
+
+def test_a_waiter_that_retries_can_get_a_whole_response(monkeypatch):
+    # The owner failed. The retry gets an output with no row axis (a backend that breaks the
+    # contract). This is a whole response, and not a missing row.
+    state = _state("clean_mlp")
+    cache = state.result_cache
+    arrays = {"x": np.ones((1, 16), dtype=np.float32)}
+    request = predict._Request(tensors=arrays)
+    failed: Future = Future()
+    failed.set_exception(RuntimeError("owner failed"))
+    monkeypatch.setattr(
+        predict,
+        "_cache_prepare",
+        lambda *_a: _fake_plan(cache, request, arrays, pending={0: failed}),
+    )
+    monkeypatch.setattr(predict, "_infer", lambda _s, _f: ({"output_0": np.float32(1.0)}, 0.0))
+
+    async def go():
+        return await predict._run_cached(
+            state,
+            cache,
+            b"",
+            request,
+            binary=False,
+            run_here=False,
+            admitted_at=time.monotonic(),
+            timings_ms={},
+            accept_safetensors=False,
+        )
+
+    assert asyncio.run(go()).status_code == 200
 
 
 def test_a_graph_model_serves_with_no_cache(gcn_client):

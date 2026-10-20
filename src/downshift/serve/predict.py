@@ -8,7 +8,7 @@ import contextvars
 import logging
 import time
 from collections.abc import Callable
-from concurrent.futures import Executor
+from concurrent.futures import Executor, Future
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -164,15 +164,19 @@ def _shape_violation(state: ServingState, feeds: dict[str, np.ndarray]) -> str |
     return None
 
 
-def _bound_violation(state: ServingState, feeds: dict[str, np.ndarray]) -> str | None:
+def _bound_violation(
+    state: ServingState, feeds: dict[str, np.ndarray], skip_batch_axis: bool = False
+) -> str | None:
     """U2: the first input whose shape is outside an axis that the export of downshift
-    traced. None if each known bound is satisfied (also if no bound is known)."""
+    traced. None if each known bound is satisfied (also if no bound is known).
+    `skip_batch_axis` is for the rows of a request that missed the cache. The caller checked
+    the whole batch, and the rows that missed are fewer."""
     for name, arr in feeds.items():
         bounds = state.axis_bounds.get(name)
         if not bounds:
             continue
         for axis, bound in bounds.items():
-            if axis >= arr.ndim:
+            if axis >= arr.ndim or (skip_batch_axis and axis == 0):
                 continue
             size = arr.shape[axis]
             if not (bound.min <= size <= bound.max):
@@ -260,7 +264,7 @@ class _Request:
 
 
 def _prepare_feeds(
-    state: ServingState, request: _Request
+    state: ServingState, request: _Request, skip_batch_axis: bool = False
 ) -> tuple[dict[str, np.ndarray], float, GraphLayout | None]:
     """Turn a validated request into the input arrays of the graph (base64 decode,
     to_numpy, tokenize), and do the checks that need them: vocabulary, edge index and axis
@@ -300,7 +304,7 @@ def _prepare_feeds(
     edge_violation = None if layout is not None else edge_index_violation(feeds)
     if edge_violation is not None:
         raise HTTPException(400, edge_violation)
-    violation = _shape_violation(state, feeds) or _bound_violation(state, feeds)
+    violation = _shape_violation(state, feeds) or _bound_violation(state, feeds, skip_batch_axis)
     if violation is not None:
         raise HTTPException(400, violation)
     return feeds, (time.perf_counter() - start) * 1000, layout
@@ -648,12 +652,38 @@ def _cache_prepare(
             if arrays is not None and len(found.missing) == len(keys):
                 feeds = arrays
             else:
-                feeds, _, _ = _prepare_feeds(state, _subset(request, arrays, found.missing))
+                feeds, _, _ = _prepare_feeds(
+                    state, _subset(request, arrays, found.missing), skip_batch_axis=True
+                )
     except BaseException as exc:
         cache.fail(claimed, exc)
         raise
     timings_ms["prep"] = round((time.perf_counter() - start) * 1000, 2)
     return _CachePlan(request, arrays, keys, found, feeds, claimed)
+
+
+def _release_claims(cache: ResultCache, prep: asyncio.Future[_CachePlan]) -> None:
+    """The request left before it got its plan. Give its claimed rows to the waiters as an
+    error, so that they compute the rows themselves."""
+    if not prep.cancelled() and prep.exception() is None:
+        cache.fail(prep.result().owned, RuntimeError("the request did not finish"))
+
+
+async def _await_row(state: ServingState, future: Future[Row], admitted_at: float) -> Row:
+    """The row that another request computes. The wait ends at --request-timeout, counted from
+    the admission, like the wait for an inference slot. `asyncio.wait` does not cancel the
+    future if this request leaves. (`asyncio.wrap_future` would: the owner could not give its
+    row, and the other waiters would get a cancellation.)"""
+    wrapped = asyncio.wrap_future(future)
+    wrapped.add_done_callback(lambda f: f.cancelled() or f.exception())  # no unread errors
+    timeout = state.options.request_timeout
+    remaining = None if timeout <= 0 else max(timeout - (time.monotonic() - admitted_at), 0.0)
+    done, _ = await asyncio.wait({wrapped}, timeout=remaining)
+    if not done:
+        raise HTTPException(
+            503, f"request waited for a row past the {timeout:.1f}s --request-timeout"
+        )
+    return wrapped.result()
 
 
 async def _run_cached(
@@ -679,7 +709,14 @@ async def _run_cached(
         request = parsed or _parse(state, body, False, binary, timings_ms)
         return _cache_prepare(state, cache, request, timings_ms, use_lookup)
 
-    plan: _CachePlan = await _run_in(pool, "prep_wait", timings_ms, prepare)
+    # The prep thread claims rows in the lookup. If the client leaves during this hop, the thread
+    # still runs to the end. The shield keeps it running, and the callback releases its claims.
+    prep = asyncio.ensure_future(_run_in(pool, "prep_wait", timings_ms, prepare))
+    try:
+        plan: _CachePlan = await asyncio.shield(prep)
+    except asyncio.CancelledError:
+        prep.add_done_callback(lambda t: _release_claims(cache, t))
+        raise
     owned = plan.owned
     rows: dict[int, Row] = dict(plan.found.hits)
     served = len(plan.found.hits)  # the rows that this request did not compute
@@ -721,16 +758,23 @@ async def _run_cached(
         retry: list[int] = []
         for i, future in plan.found.pending.items():
             try:
-                rows[i] = await asyncio.wrap_future(future)
+                rows[i] = await _await_row(state, future, admitted_at)
                 served += 1
+            except HTTPException:
+                raise
             except Exception:  # noqa: BLE001 - any failure of the owner means "compute it here"
                 retry.append(i)
         if retry:
             subset = _subset(plan.request, plan.arrays, retry)
             feeds = await _run_in(
-                pool, "prep_wait", timings_ms, lambda: _prepare_feeds(state, subset)[0]
+                pool,
+                "prep_wait",
+                timings_ms,
+                lambda: _prepare_feeds(state, subset, skip_batch_axis=True)[0],
             )
-            await compute(feeds, retry)
+            done = await compute(feeds, retry)
+            if done is not None:
+                return done
     except BaseException as exc:
         cache.fail(
             owned,

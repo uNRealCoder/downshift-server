@@ -358,7 +358,7 @@ Status codes:
 | `500` | `{"detail": "inference failed on the server; see the server log", "request_id": "..."}` | An unhandled exception on the server. The real error is only in the server log. |
 | `503` | `{"detail": "model is not ready"}`, header `Retry-After: 2` | No `ServingState` exists yet. |
 | `503` | `{"detail": "server is at capacity (N running, M queued)"}`, header `Retry-After: 1` | `--max-concurrency + --max-queue` predicts are already admitted. |
-| `503` | `{"detail": "request waited X.Xs in queue, past the Y.Ys --request-timeout"}`, no `Retry-After` | The predict was admitted, but it waited longer than `--request-timeout` before the inference started. Downshift checks this after the body is prepared, and again when the inference starts. |
+| `503` | `{"detail": "request waited X.Xs in queue, past the Y.Ys --request-timeout"}`, no `Retry-After` | The predict was admitted, but it waited longer than `--request-timeout` before the inference started. Downshift checks this after the body is prepared, and again when the inference starts. A request that waits for a row of another request (the result cache) gets the same `503` at the same limit. The text is `request waited for a row past the Y.Ys --request-timeout`. |
 
 A `200` response has this header: `Server-Timing: parse;dur=<ms>, prep_wait;dur=<ms>, prep;dur=<ms>, infer_wait;dur=<ms>, infer;dur=<ms>, encode;dur=<ms>` (see "Headers"). Every response, on every route and with every status code, has `X-Request-Id`. If the client sent the header, downshift returns it. Otherwise, downshift makes an ID of 16 hexadecimal characters.
 
