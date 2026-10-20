@@ -154,8 +154,6 @@ class ServeArgs:
         options["backend"] = BackendChoice(options["backend"])
         options["output_encoding"] = OutputEncoding(options["output_encoding"])
         options["execution"] = ExecutionChoice(options["execution"])
-        if options.get("output_tol"):  # JSON gives lists for the pairs
-            options["output_tol"] = {n: (t[0], t[1]) for n, t in options["output_tol"].items()}
         data["options"] = ServeOptions(**options)
         if data.get("artifact") is not None:
             data["artifact"] = ArtifactHandoff(**data["artifact"])

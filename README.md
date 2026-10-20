@@ -300,7 +300,7 @@ A `500` body includes the same `request_id`. Every log line written while the se
 
 The server admits a predict, or refuses it with a `503`, before it reads the body. An overloaded server does not buffer or parse a request that it will refuse.
 
-`serve` runs the same gate as `check`. It also accepts `-k/--samples`, `--dynamic`, `--adapter`, `--inputs`, `--model-class`, `--unsafe-load`, `--atol`/`--rtol`, `--output-tol`, `--seed` and `--vary`. The sections below describe them.
+`serve` runs the same gate as `check`. It also accepts `-k/--samples`, `--dynamic`, `--adapter`, `--inputs`, `--model-class`, `--unsafe-load`, `--atol`/`--rtol`, `--seed` and `--vary`. The sections below describe them.
 
 ### Logging
 
@@ -342,7 +342,7 @@ The default tolerances depend on the narrowest floating dtype in the parameters 
 2. float64 wins only if it is the only floating dtype. A model that mixes float32 and float64 has the precision of float32.
 3. Otherwise, float32 is the default.
 
-To change the tolerance for one dtype, set a variable such as `DOWNSHIFT_TOL_FLOAT32_ATOL=1e-3` or `DOWNSHIFT_TOL_FLOAT16_RTOL=0.05`. To change it for one run, use `--atol` and `--rtol` on `check`, `export` and `serve`. To use other bounds for one output, use `--output-tol output_1=1e-3:1e-2`. The default samples are synthetic: random values at the edge shapes of the model. To verify on inputs like your real traffic, use `--vary`. The `Tolerance` row of the `check` report shows the dtype that selected the default. If a flag overrides it, the row shows `(--atol/--rtol)`.
+To change the tolerance for one dtype, set a variable such as `DOWNSHIFT_TOL_FLOAT32_ATOL=1e-3` or `DOWNSHIFT_TOL_FLOAT16_RTOL=0.05`. To change it for one run, use `--atol` and `--rtol` on `check`, `export` and `serve`. The default samples are synthetic: random values at the edge shapes of the model. To verify on inputs like your real traffic, use `--vary`. The `Tolerance` row of the `check` report shows the dtype that selected the default. If a flag overrides it, the row shows `(--atol/--rtol)`.
 
 The gate can also run alone. Use it to gate CI and to write artifacts.
 
@@ -405,7 +405,7 @@ Useful options:
 - `--dynamic "x:0,edge_index:1"` sets the dynamic axes. The default is axis 0 of every input.
 - `--adapter generic|pyg|hf` skips the detection of the adapter.
 - `--inputs pkg.module:fn` supplies example inputs.
-- `--atol` and `--rtol` override the tolerance. `--output-tol NAME=ATOL[:RTOL]` (repeatable) sets the bounds of one output.
+- `--atol` and `--rtol` override the tolerance.
 - `--seed N` (default 0) makes the verification samples reproducible.
 - `--vary pkg.module:fn` supplies your own `fn(i) -> inputs` instead of the sampler of downshift. `fn(0)` must return the example inputs.
 

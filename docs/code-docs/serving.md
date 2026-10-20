@@ -41,7 +41,6 @@ class ServeOptions:
     request_timeout: float = DEFAULT_REQUEST_TIMEOUT  # 30.0
     atol: float | None = None
     rtol: float | None = None
-    output_tol: dict[str, tuple[float, float | None]] | None = None
     result_cache_rows: int | None = None  # None: 100 for independent rows, else off
     seed: int = 0
     vary: str | None = None
@@ -77,7 +76,6 @@ Every default comes from `downshift.settings`. The `DOWNSHIFT_*` environment var
 | `max_queue` | `int` | `64` | The number of additional predicts that can be admitted and wait beyond `max_concurrency`. |
 | `request_timeout` | `float` | `30.0` | The number of seconds that an admitted predict can wait in the queue. After this time, it gets a `503` and does not run. `0` turns the check off. |
 | `atol` / `rtol` | `float \| None` | `None` | The override of the tolerance. Downshift forwards it to the gate. `None` means "by dtype". |
-| `output_tol` | `dict[str, tuple[float, float \| None]] \| None` | `None` | `--output-tol`. The `(atol, rtol)` of named outputs (`output_0` and so on). An `rtol` of `None` keeps the base rtol. |
 | `result_cache_rows` | `int \| None` | `None` | `--result-cache-rows`. The number of rows in the result cache of each worker. `None` is `100` for a model with `verdict.row_independent` and off for other models. `0` is off. A number for a model that is not row-independent is a `ValueError` at boot. |
 | `seed` | `int` | `0` | The seed of the verification samples. Downshift forwards it to the gate. |
 | `vary` | `str \| None` | `None` | A `pkg.module:fn` that replaces the verification sampler of the adapter. |

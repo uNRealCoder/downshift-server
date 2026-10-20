@@ -88,35 +88,6 @@ def parse_axis_max(items: Iterable[str]) -> dict[str, int]:
     return result
 
 
-def parse_output_tol(items: Iterable[str]) -> dict[str, tuple[float, float | None]]:
-    """Turn "output_1=1e-3:1e-2" (NAME=ATOL[:RTOL]; or a comma list of these, as the environment
-    gives it) into {name: (atol, rtol or None)}. Any other input raises ValueError, so the CLI
-    reports a usage error."""
-    result: dict[str, tuple[float, float | None]] = {}
-    for item in items:
-        for entry in filter(None, (e.strip() for e in item.split(","))):
-            name, _, value = entry.partition("=")
-            atol_text, _, rtol_text = value.partition(":")
-            try:
-                atol = float(atol_text)
-                rtol = float(rtol_text) if rtol_text else None
-            except ValueError:
-                atol, rtol = -1.0, None
-            if not name.strip() or not atol >= 0 or (rtol is not None and not rtol >= 0):
-                raise ValueError(
-                    f"bad output tolerance {entry!r}; expected NAME=ATOL or NAME=ATOL:RTOL "
-                    "with numbers of 0 or more"
-                )
-            result[name.strip()] = (atol, rtol)
-    return result
-
-
-def _env_output_tol(
-    name: str, default: dict[str, tuple[float, float | None]]
-) -> dict[str, tuple[float, float | None]]:
-    return _env_cast(name, default, lambda raw: parse_output_tol([raw]), "list of NAME=ATOL[:RTOL]")
-
-
 def _env_axis_max(name: str, default: dict[str, int]) -> dict[str, int]:
     return _env_cast(name, default, lambda raw: parse_axis_max([raw]), "list of NAME=N")
 
@@ -163,10 +134,6 @@ EXECUTION = _env_choice(
 # names that the boot banner and /schema list. If it is empty, each axis keeps the bound that
 # the adapter exported.
 AXIS_MAX = _env_axis_max("DOWNSHIFT_AXIS_MAX", {})
-
-# The bounds of the numerics verification for named outputs ("output_1=1e-3:1e-2"). The names
-# are the names of /predict and /metadata. An output that is not named uses the base bounds.
-OUTPUT_TOL = _env_output_tol("DOWNSHIFT_OUTPUT_TOL", {})
 
 # A directory where downshift saves verified exports and reuses them at the next boot (`serve`
 # and `export`). If it is unset, downshift never writes to disk. The in-process memo is then the

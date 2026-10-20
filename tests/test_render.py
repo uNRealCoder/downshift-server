@@ -644,25 +644,3 @@ def test_print_banner_shows_the_cache_row(caplog):
     state.cache_off_reason = None
     render.print_banner(state, "127.0.0.1", 8000)
     assert "--result-cache-rows 0" in caplog.text
-
-
-def test_a_model_with_two_outputs_shows_the_error_of_each(caplog):
-    from downshift.core.verify import OutputNumerics
-
-    outputs = [
-        OutputNumerics("output_0", 1e-7, 1e-6, 1e-4, 1e-3, 0),
-        OutputNumerics("output_1", 3.2e-4, 1e-3, 1e-3, 1e-3, 0, overridden=True),
-    ]
-    render.print_verdict(_verdict(numerics=_numerics(True, outputs=outputs)), "model")
-
-    assert "output_0" in caplog.text and "max abs 1.0e-07" in caplog.text
-    assert "max abs 3.2e-04  atol 1e-03, rtol 1e-03  (--output-tol)" in caplog.text
-
-
-def test_a_model_with_one_output_has_no_output_rows(caplog):
-    from downshift.core.verify import OutputNumerics
-
-    outputs = [OutputNumerics("output_0", 1e-7, 1e-6, 1e-4, 1e-3, 0)]
-    render.print_verdict(_verdict(numerics=_numerics(True, outputs=outputs)), "model")
-
-    assert "max abs 1.0e-07" not in caplog.text

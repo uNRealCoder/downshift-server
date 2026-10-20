@@ -58,7 +58,6 @@ downshift check MODEL [OPTIONS]
 | `--dynamic NAME:AXIS[,...]` | - | axis 0 of every input | The dynamic axes, for example `"x:0,edge_index:1"`. |
 | `--atol FLOAT` | - | by output dtype | Overrides the absolute tolerance. |
 | `--rtol FLOAT` | - | by output dtype | Overrides the relative tolerance. |
-| `--output-tol NAME=ATOL[:RTOL]` (repeatable) | `DOWNSHIFT_OUTPUT_TOL` | none | Other bounds for one output. `NAME` is `output_0`, `output_1` and so on, as in `/predict`. If you give no `RTOL`, the rtol stays at its default. `--atol` and `--rtol` set the bounds of the outputs that you do not name. A name that the model does not have is a usage error (exit code `4`). The environment variable is a comma list, for example `output_0=1e-5,output_1=1e-3:1e-2`. |
 | `--seed INT` | - | `0` | The seed for the generation of verification samples. |
 | `--vary pkg.module:fn` | - | none | `fn(i) -> inputs`. It replaces the sampler of the adapter. `fn(0)` must return the example inputs. |
 | `--pooling mean\|cls\|max\|mean_sqrt_len\|lasttoken\|weightedmean\|none` | - | what the repo declares | For Hugging Face encoder repos. It overrides the pooling in `modules.json` of the repo. It also sets a pooling if the repo declares none. `none` serves the token vectors as they are. Refer to "Embedding models" in `http-api.md`. |
@@ -75,8 +74,6 @@ downshift check MODEL [OPTIONS]
 | float64 | `DOWNSHIFT_TOL_FLOAT64_ATOL` | `DOWNSHIFT_TOL_FLOAT64_RTOL` | `1e-6` / `1e-5` |
 
 If you give `--atol` or `--rtol`, they have priority over these variables.
-
-`--output-tol` sets the bounds for one output. Use it if the outputs of a model need different bounds. Example: the logits need `1e-3` and the embedding needs `1e-5`. One bound for all outputs hides the error of the tight output. The `check` report and the banner show the error of each output, if the model has more than one output.
 
 The default samples of the check are synthetic. They are random values at the edge shapes of the model. To verify on inputs that look like your real traffic, use `--vary`.
 
@@ -117,7 +114,7 @@ This command checks the model, selects a backend from the verdict, and serves th
 downshift serve MODEL [OPTIONS]
 ```
 
-The adapter and verification flags of `check` also apply to `serve`, with the same defaults. These flags are `-k`/`--samples`, `--dynamic`, `--adapter`, `--inputs`, `--model-class`, `--unsafe-load`, `--atol`, `--rtol`, `--output-tol`, `--seed`, `--vary`, `--pooling` and `--normalize`. `serve` runs the same gate before it selects a backend. These flags are only for `serve`:
+The adapter and verification flags of `check` also apply to `serve`, with the same defaults. These flags are `-k`/`--samples`, `--dynamic`, `--adapter`, `--inputs`, `--model-class`, `--unsafe-load`, `--atol`, `--rtol`, `--seed`, `--vary`, `--pooling` and `--normalize`. `serve` runs the same gate before it selects a backend. These flags are only for `serve`:
 
 | Flag | Env var | Default | Meaning |
 |---|---|---|---|
@@ -195,7 +192,6 @@ Each line has the form `time LEVEL logger: message`. If the line belongs to a re
 | `DOWNSHIFT_MAX_INPUT_BYTES`, `DOWNSHIFT_MAX_BODY_BYTES` | 256 MiB, 32 MiB | `--max-input-bytes`, `--max-body-bytes` |
 | `DOWNSHIFT_MAX_CONCURRENCY`, `DOWNSHIFT_MAX_QUEUE`, `DOWNSHIFT_REQUEST_TIMEOUT` | `4`, `64`, `30` | `--max-concurrency`, `--max-queue`, `--request-timeout` |
 | `DOWNSHIFT_RESULT_CACHE_ROWS` | unset (`100`, or off) | `--result-cache-rows` |
-| `DOWNSHIFT_OUTPUT_TOL` | unset | `--output-tol` |
 | `DOWNSHIFT_EXECUTION`, `DOWNSHIFT_PREP_THREADS` | `threadpool`, `min(4, usable CPUs)` | `--execution`, `--prep-threads` |
 | `DOWNSHIFT_WORKERS` | `1` | `--workers` (CLI only) |
 | `DOWNSHIFT_SERVER_API_KEY` | unset | Requires `Authorization: Bearer <key>` on every route except `/health` and `/ready`. If it is unset or empty, downshift logs one startup warning that the endpoints are unauthenticated. There is no flag, because the key is a secret. `build_app(api_key=...)` and `app_for(api_key=...)` read it by default. |
