@@ -1,7 +1,8 @@
-"""The inference of dynamic shapes, and the `--dynamic` override.
+"""Dynamic shapes: the default rule, the `--dynamic` override, `--axis-max`, and the sample
+resizing that verification uses.
 
-Default rule: axis 0 of each tensor input is dynamic, and all of them share one Dim (the batch
-case). Adapters override this where it is wrong. Example: the independent N and E of PyG.
+Default rule: axis 0 of each tensor input is dynamic, and all inputs share one Dim (the batch
+case). Adapters override this where it is wrong (PyG has independent node and edge counts).
 """
 
 from typing import Any
@@ -16,58 +17,41 @@ DEFAULT_DIM_MAX = 1 << 16
 
 
 def alternative_sizes(base_size: int, lo: int = 1, hi: int | None = None) -> list[int]:
-    """The sizes to test a dynamic axis with, without the size at export time.
-
-    Downshift drops candidates outside [lo, hi]. The bounds of a Dim (from dim_bounds) are
-    therefore never violated. hi=None means no upper bound.
-    """
+    """The sizes to test a dynamic axis with, other than the export size, inside [lo, hi]."""
     candidates = {1, 2, 3, base_size + 1, base_size * 2} - {base_size}
-    candidates = {c for c in candidates if c >= lo}
-    if hi is not None:
-        candidates = {c for c in candidates if c <= hi}
-    return sorted(candidates)
+    return sorted(c for c in candidates if c >= lo and (hi is None or c <= hi))
 
 
 def pick_size(candidates: list[int]) -> int:
-    """Draw one candidate size from the global RNG of torch.
-
-    verify() runs each sample inside torch.random.fork_rng() after torch.manual_seed(seed). A
-    draw from the global RNG therefore carries --seed into a sampler. The Adapter protocol does
-    not need a new parameter. Each sampler uses this function and not `random`. `random` would
-    get its seed one time, at prepare(), and would never see the seed of verify().
-    """
+    """Draw one size from the global torch RNG. verify() seeds it inside fork_rng(), so this
+    carries --seed into each sampler. Do not use `random` here."""
     return int(candidates[torch.randint(len(candidates), ())])
 
 
 def dim_bounds(spec: dict[int, Any] | None, axis: int) -> tuple[int, int]:
-    """(min, max) for one axis of a dynamic_shapes entry, for example {0: Dim("n", min=1, max=64)}.
-
-    If the axis is not dynamic, or the Dim does not expose the attributes in this torch
-    version, it returns (1, DEFAULT_DIM_MAX). This is the one place where that can happen. It
-    guards against that risk.
-    """
-    fallback = (1, DEFAULT_DIM_MAX)
-    if not spec or axis not in spec:
-        return fallback
-    dim = spec[axis]
-    lo = getattr(dim, "min", None)
-    hi = getattr(dim, "max", None)
+    """(min, max) of one axis of a dynamic_shapes entry. (1, DEFAULT_DIM_MAX) if the axis is
+    not dynamic or the Dim has no bounds."""
+    dim = (spec or {}).get(axis)
+    lo, hi = getattr(dim, "min", None), getattr(dim, "max", None)
     if lo is None or hi is None:
-        return fallback
+        return 1, DEFAULT_DIM_MAX
     return lo, hi
 
 
+def dim_name(dim: Any, axis: int) -> str:
+    return getattr(dim, "__name__", str(axis))
+
+
 def dynamic_bounds(input_names: tuple[str, ...], dynamic_shapes: tuple) -> AxisBounds:
-    """For each input and each dynamic axis: (Dim name, min, max) as the export traced it. These
-    are the served bounds that core/axes.py reports and that the request check enforces."""
-    bounds: AxisBounds = {}
-    for name, spec in zip(input_names, dynamic_shapes, strict=True):
-        if spec:
-            bounds[name] = {
-                axis: DimBound(dim_name(dim, axis), *dim_bounds(spec, axis))
-                for axis, dim in spec.items()
-            }
-    return bounds
+    """For each input and dynamic axis: the (Dim name, min, max) that the export traced."""
+    return {
+        name: {
+            axis: DimBound(dim_name(dim, axis), *dim_bounds(spec, axis))
+            for axis, dim in spec.items()
+        }
+        for name, spec in zip(input_names, dynamic_shapes, strict=True)
+        if spec
+    }
 
 
 def infer_dynamic_shapes(inputs: tuple) -> tuple:
@@ -89,42 +73,29 @@ def parse_dynamic_spec(spec: str) -> dict[str, list[int]]:
 def apply_dynamic_override(
     input_names: tuple[str, ...], inputs: tuple, override: dict[str, list[int]]
 ) -> tuple:
-    """Build a dynamic_shapes tuple from an explicit {name: [axes]} spec. Each (name, axis)
-    pair gets its own independent Dim."""
+    """A dynamic_shapes tuple from {name: [axes]}. Each (name, axis) gets its own Dim."""
     unknown = set(override) - set(input_names)
     if unknown:
         raise ValueError(f"--dynamic names {sorted(unknown)} not in inputs {list(input_names)}")
-    shapes: list[dict[int, Any] | None] = []
-    for name, tensor in zip(input_names, inputs, strict=True):
-        axes = override.get(name)
-        if not axes or not isinstance(tensor, torch.Tensor):
-            shapes.append(None)
-            continue
-        shapes.append(
-            {axis: torch.export.Dim(f"{name}_{axis}", min=1, max=DEFAULT_DIM_MAX) for axis in axes}
-        )
-    return tuple(shapes)
-
-
-def dim_name(dim: Any, axis: int) -> str:
-    return getattr(dim, "__name__", str(axis))
+    return tuple(
+        {axis: torch.export.Dim(f"{name}_{axis}", min=1, max=DEFAULT_DIM_MAX) for axis in axes}
+        if (axes := override.get(name)) and isinstance(tensor, torch.Tensor)
+        else None
+        for name, tensor in zip(input_names, inputs, strict=True)
+    )
 
 
 def lower_axis_max(dynamic_shapes: tuple, axis_max: dict[str, int] | None) -> tuple:
-    """Build each named Dim in `dynamic_shapes` again. The name and the minimum stay the same.
-    The maximum becomes `axis_max[name]`. Dims that several inputs share stay shared.
-
-    An unknown name, or a value outside the [min, max] of the Dim, raises ValueError. The
-    CLI reports this as a usage error. The ceiling is the value that the adapter set (for
-    Hugging Face, the position limit of the model). --axis-max can therefore only narrow a
-    bound. It can never widen it.
-    """
+    """Lower the maximum of each Dim named in `axis_max`. Shared Dims stay shared. An unknown
+    name, or a value outside the [min, max] of the Dim, raises ValueError: --axis-max can only
+    narrow a bound."""
     if not axis_max:
         return dynamic_shapes
-    bounds: dict[str, tuple[int, int]] = {}
-    for spec in dynamic_shapes:
-        for axis, dim in (spec or {}).items():
-            bounds[dim_name(dim, axis)] = dim_bounds(spec, axis)
+    bounds = {
+        dim_name(dim, axis): dim_bounds(spec, axis)
+        for spec in dynamic_shapes
+        for axis, dim in (spec or {}).items()
+    }
     unknown = sorted(set(axis_max) - set(bounds))
     if unknown:
         raise ValueError(
@@ -148,11 +119,8 @@ def lower_axis_max(dynamic_shapes: tuple, axis_max: dict[str, int] | None) -> tu
 
 
 def resize_axis(tensor: torch.Tensor, axis: int, size: int) -> torch.Tensor:
-    """Tile or slice `axis` to `size`. The result stays close to the example and is not pure
-    noise. For floats, downshift tiles the rows of the example and adds noise that follows
-    its spread. A varied sample then looks like a plausible input. Integers (usually indices)
-    stay inside the observed range. A 0-d tensor has no axis to resize, and it comes back
-    unchanged."""
+    """Tile or slice `axis` to `size`, so the sample stays like the example. Floats get noise
+    that follows their spread. Integers (usually indices) stay in the observed range."""
     if tensor.ndim == 0 or tensor.shape[axis] == size:
         return tensor
     moved = tensor.movedim(axis, 0)
@@ -172,9 +140,8 @@ def resize_axis(tensor: torch.Tensor, axis: int, size: int) -> torch.Tensor:
 def pin_vary_fn(
     inputs: tuple, dynamic_shapes: tuple, axis_max: dict[str, int], inner: VaryFn | None = None
 ) -> VaryFn:
-    """A verification sampler whose sample 1 is exactly at the --axis-max values. Each dynamic
-    axis whose Dim is named in `axis_max` gets that size. The other axes keep the size of the
-    example. The other samples come from `inner`, or from the default shared-axis-0 sampler."""
+    """A sampler whose sample 1 is exactly at the --axis-max sizes. The other samples come
+    from `inner` (default: the shared axis-0 sampler)."""
     if inner is None:
         from downshift.core.verify import make_shared_axis0_vary_fn
 
@@ -197,8 +164,8 @@ def pin_vary_fn(
 
 
 def safe_capture_inputs(inputs: tuple, dynamic_shapes: tuple) -> tuple:
-    """torch.export specializes a dimension of size 1 to a constant, also if it is marked as
-    dynamic. Double each such axis for the trace only. Verification still uses the real sizes."""
+    """torch.export makes a dynamic axis of size 1 a constant. Double such axes for the trace
+    only. Verification still uses the real sizes."""
     safe = []
     for t, spec in zip(inputs, dynamic_shapes, strict=True):
         if isinstance(t, torch.Tensor) and spec:

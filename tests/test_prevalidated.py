@@ -2,7 +2,7 @@
 
 import downshift
 from downshift.core import verify as verify_mod
-from downshift.core.prevalidated import intake
+from downshift.core.verdict import intake
 from tests.models import clean_mlp
 
 
@@ -41,7 +41,7 @@ def test_intake_with_reference_fails_via_onnx_runtime_not_a_crash(exported_mlp, 
     def boom(onnx_model):
         raise RuntimeError("NOT_IMPLEMENTED : Could not find an implementation for Gemm(13)")
 
-    monkeypatch.setattr(verify_mod, "_to_session", boom)
+    monkeypatch.setattr(verify_mod, "new_session", boom)
 
     verdict = intake(path, reference=model, example_inputs=clean_mlp.make_inputs())
 

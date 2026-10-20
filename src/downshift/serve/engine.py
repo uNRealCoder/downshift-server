@@ -18,13 +18,13 @@ from downshift.adapters.text import TextIO
 from downshift.core.axes import AxisBounds
 from downshift.core.feeds import example_feeds
 from downshift.core.phase import Phase, report
-from downshift.core.prevalidated import intake
 from downshift.core.shapes import dynamic_bounds
 from downshift.core.verdict import (
     BackendName,
     ExportVerdict,
     Status,
     build_verdict,
+    intake,
     prepare_model,
     unverified_verdict,
 )

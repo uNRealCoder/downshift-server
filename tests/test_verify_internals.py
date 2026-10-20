@@ -10,9 +10,9 @@ from downshift.core.shapes import resize_axis
 from downshift.core.verify import (
     OnnxRuntimeError,
     _compare_sample,
-    _to_session,
     as_tensor_list,
     default_tolerances,
+    load_session,
     make_shared_axis0_vary_fn,
     verify,
 )
@@ -29,7 +29,7 @@ def test_resize_dim0_is_a_noop_for_scalars_and_matching_sizes():
 
 def test_to_session_accepts_raw_bytes(exported_mlp):
     onnx_path, _, _ = exported_mlp
-    session = _to_session(onnx_path.read_bytes())
+    session = load_session(onnx_path.read_bytes())
     assert isinstance(session, ort.InferenceSession)
 
 
@@ -140,7 +140,7 @@ def test_verify_records_a_note_and_fails_when_output_shapes_differ(monkeypatch):
         def run(self, output_names, feeds):
             return [np.zeros((1, 3), dtype=np.float32)]
 
-    monkeypatch.setattr(verify_mod, "_to_session", lambda onnx_model: MismatchedSession())
+    monkeypatch.setattr(verify_mod, "load_session", lambda onnx_model: MismatchedSession())
 
     report = verify(model, "unused.onnx", inputs, vary_fn=lambda i: inputs, k=1)
 
@@ -168,7 +168,7 @@ def test_verify_wraps_a_session_creation_failure_as_onnx_runtime_error(monkeypat
     def boom(onnx_model):
         raise RuntimeError("bad graph\nsome onnxruntime detail")
 
-    monkeypatch.setattr(verify_mod, "_to_session", boom)
+    monkeypatch.setattr(verify_mod, "new_session", boom)
 
     with pytest.raises(OnnxRuntimeError, match="bad graph"):
         verify(
@@ -190,7 +190,7 @@ def test_verify_wraps_a_session_run_failure_as_onnx_runtime_error(monkeypatch):
                 "NOT_IMPLEMENTED : Could not find an implementation for Gemm(13)\nmore detail"
             )
 
-    monkeypatch.setattr(verify_mod, "_to_session", lambda onnx_model: FailingSession())
+    monkeypatch.setattr(verify_mod, "load_session", lambda onnx_model: FailingSession())
 
     with pytest.raises(OnnxRuntimeError, match="Gemm"):
         verify(
@@ -224,7 +224,7 @@ def test_verify_wraps_a_torch_model_exception_as_value_error(monkeypatch):
                 raise RuntimeError("only batch 1 is supported")
             return x * 2
 
-    monkeypatch.setattr(verify_mod, "_to_session", lambda onnx_model: _EchoSession())
+    monkeypatch.setattr(verify_mod, "load_session", lambda onnx_model: _EchoSession())
     base_inputs = (torch.randn(1, 3),)
 
     def vary(i: int) -> tuple:
@@ -241,7 +241,7 @@ def test_verify_names_the_sampler_and_bounds_when_a_generated_sample_fails(monke
                 raise RuntimeError("only batch 1 is supported")
             return x * 2
 
-    monkeypatch.setattr(verify_mod, "_to_session", lambda onnx_model: _EchoSession())
+    monkeypatch.setattr(verify_mod, "load_session", lambda onnx_model: _EchoSession())
     base_inputs = (torch.randn(1, 3),)
     dynamic_shapes = ({0: torch.export.Dim("n", min=1, max=8)},)
 
@@ -260,7 +260,7 @@ def test_verify_keeps_the_original_wording_when_sample_0_fails(monkeypatch):
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             raise RuntimeError("nope")
 
-    monkeypatch.setattr(verify_mod, "_to_session", lambda onnx_model: _EchoSession())
+    monkeypatch.setattr(verify_mod, "load_session", lambda onnx_model: _EchoSession())
     inputs = (torch.randn(1, 3),)
 
     with pytest.raises(ValueError, match="Try --dynamic or --inputs") as excinfo:
@@ -294,7 +294,7 @@ def test_default_tolerances_prefers_float32_over_float64_when_mixed():
 
 
 def test_verify_records_tolerance_dtype_and_seed_on_the_report(monkeypatch):
-    monkeypatch.setattr(verify_mod, "_to_session", lambda onnx_model: _EchoSession())
+    monkeypatch.setattr(verify_mod, "load_session", lambda onnx_model: _EchoSession())
     model = clean_mlp.make_model().double()
     inputs = tuple(
         t.double() if isinstance(t, torch.Tensor) else t for t in clean_mlp.make_inputs()
@@ -309,7 +309,7 @@ def test_verify_records_tolerance_dtype_and_seed_on_the_report(monkeypatch):
 
 
 def test_atol_rtol_override_the_dtype_default(monkeypatch):
-    monkeypatch.setattr(verify_mod, "_to_session", lambda onnx_model: _EchoSession())
+    monkeypatch.setattr(verify_mod, "load_session", lambda onnx_model: _EchoSession())
     model = clean_mlp.make_model()
     inputs = clean_mlp.make_inputs()
 
@@ -322,7 +322,7 @@ def test_atol_rtol_override_the_dtype_default(monkeypatch):
 
 
 def test_seed_makes_samples_reproducible(monkeypatch):
-    monkeypatch.setattr(verify_mod, "_to_session", lambda onnx_model: _EchoSession())
+    monkeypatch.setattr(verify_mod, "load_session", lambda onnx_model: _EchoSession())
     model = clean_mlp.make_model()
     inputs = clean_mlp.make_inputs()
     dynamic_shapes = ({0: torch.export.Dim("n", min=1, max=64)},)
@@ -346,7 +346,7 @@ def test_verify_records_sample_shapes_and_worst_mismatch(monkeypatch):
         def run(self, output_names, feeds):
             return [feeds["x"] * 2 + np.array([[0.0, 50.0]], dtype=np.float32)]
 
-    monkeypatch.setattr(verify_mod, "_to_session", lambda onnx_model: OffOnSecondElement())
+    monkeypatch.setattr(verify_mod, "load_session", lambda onnx_model: OffOnSecondElement())
     inputs = (torch.tensor([[1.0, 100.0]]),)
 
     report = verify(Double(), "unused.onnx", inputs, k=1, vary_fn=lambda i: inputs)
@@ -368,7 +368,7 @@ def test_verify_shape_generalization_is_none_when_the_baseline_sample_fails(monk
         def run(self, output_names, feeds):
             return [feeds["x"] * 0]
 
-    monkeypatch.setattr(verify_mod, "_to_session", lambda onnx_model: AlwaysWrong())
+    monkeypatch.setattr(verify_mod, "load_session", lambda onnx_model: AlwaysWrong())
     model = clean_mlp.make_model()
     inputs = clean_mlp.make_inputs()
     dynamic_shapes = ({0: torch.export.Dim("n", min=1, max=64)},)

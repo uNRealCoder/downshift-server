@@ -1,10 +1,5 @@
-"""AxisFact: for each dynamic axis, what the server accepts, next to what the verification
-tested.
-
-`served_*` are the bounds of the export `Dim` (the request check enforces them). `sampled_*` is
-the range of sizes that verify() ran through both backends. It is None if verify did not run.
-This module has no torch import, so the CLI and the schemas can import it.
-"""
+"""For each dynamic axis: what the server accepts (`served_*`, the export Dim) next to what
+verification ran (`sampled_*`, None if it did not run). No torch import: the CLI uses this."""
 
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
@@ -12,7 +7,7 @@ from typing import NamedTuple
 
 
 class DimBound(NamedTuple):
-    """One dynamic axis's Dim name and the (min, max) torch.export traced it for (U2)."""
+    """The Dim name and (min, max) of one dynamic axis, as torch.export traced it."""
 
     name: str
     min: int
@@ -24,9 +19,7 @@ AxisBounds = dict[str, dict[int, DimBound]]
 
 
 def axis_bounds_to_json(bounds: AxisBounds) -> dict[str, list[list]]:
-    """[[axis, name, min, max], ...] for each input. This is the form in the serving.json of the
-    export cache and in the `serve --workers N` handoff. A process that has no Prepared to
-    derive them uses it."""
+    """[[axis, name, min, max], ...] for each input."""
     return {
         name: [[axis, b.name, b.min, b.max] for axis, b in axes.items()]
         for name, axes in bounds.items()
@@ -55,16 +48,7 @@ class AxisFact:
 
     @classmethod
     def from_dict(cls, data: dict) -> "AxisFact":
-        sampled_min, sampled_max = data.get("sampled_min"), data.get("sampled_max")
-        return cls(
-            input=str(data["input"]),
-            axis=int(data["axis"]),
-            name=str(data["name"]),
-            served_min=int(data["served_min"]),
-            served_max=int(data["served_max"]),
-            sampled_min=None if sampled_min is None else int(sampled_min),
-            sampled_max=None if sampled_max is None else int(sampled_max),
-        )
+        return cls(**data)
 
 
 def classify_outputs(
@@ -73,10 +57,8 @@ def classify_outputs(
     x_index: int,
     edge_index_index: int,
 ) -> list[str]:
-    """The class of each output: "node" (axis 0 follows the node count of x across samples),
-    "edge" (follows the edge count of edge_index), "fixed" (axis 0 never changes) or "unknown".
-    To tell node from edge, downshift needs at least two samples where N != E. With fewer
-    samples, all classes are "unknown"."""
+    """For each graph output: "node" (axis 0 follows the node count), "edge" (follows the edge
+    count), "fixed" or "unknown". Telling node from edge needs two samples with N != E."""
     if not output_shapes or len(sample_shapes) != len(output_shapes):
         return []
     n_outputs = len(output_shapes[0])
@@ -105,9 +87,8 @@ def axis_facts(
     input_names: Sequence[str],
     sample_shapes: Sequence[Sequence[Sequence[int]]] | None,
 ) -> list[AxisFact]:
-    """One fact for each dynamic axis, in the order of the inputs. `sample_shapes` is
-    NumericsReport.sample_shapes ([sample][input] -> shape). None or empty means that verify
-    did not run, so each sampled_* is None."""
+    """One fact for each dynamic axis, in input order. `sample_shapes` is [sample][input] ->
+    shape, or None if verify did not run."""
     facts: list[AxisFact] = []
     for index, name in enumerate(input_names):
         for axis, (dim_name, served_min, served_max) in sorted(bounds.get(name, {}).items()):
@@ -118,13 +99,13 @@ def axis_facts(
             ]
             facts.append(
                 AxisFact(
-                    input=name,
-                    axis=axis,
-                    name=dim_name,
-                    served_min=served_min,
-                    served_max=served_max,
-                    sampled_min=min(sizes) if sizes else None,
-                    sampled_max=max(sizes) if sizes else None,
+                    name,
+                    axis,
+                    dim_name,
+                    served_min,
+                    served_max,
+                    min(sizes) if sizes else None,
+                    max(sizes) if sizes else None,
                 )
             )
     return facts

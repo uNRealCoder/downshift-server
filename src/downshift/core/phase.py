@@ -1,7 +1,4 @@
-"""The boot phases, and the progress value from which the serve loader reads them again. This
-module imports nothing heavy. core (which the loader calls) and the CLI (which must stay free
-of torch for `--help`) can both use it.
-"""
+"""The boot phases, and how the loader thread reports them to /ready. No heavy imports."""
 
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -11,9 +8,8 @@ __all__ = ["CURRENT_PROGRESS", "LoadProgress", "Phase", "report"]
 
 
 class Phase(StrEnum):
-    """A boot phase. These are the keys of ServingState.timings (serve/engine.py and
-    core/verdict.py), the rows of the Boot banner of the CLI (in the order of declaration), and
-    the `phase` field of /ready (LoadProgress below)."""
+    """A boot phase: a key of ServingState.timings, a part of the Boot row (in this order), and
+    the `phase` of /ready."""
 
     load = "load"
     export = "export"
@@ -24,25 +20,20 @@ class Phase(StrEnum):
 
 @dataclass
 class LoadProgress:
-    """What GET /ready reports while there is no ServingState yet (U4): the phase that the
-    background loader thread is in. See CURRENT_PROGRESS."""
+    """The phase that /ready reports while the loader thread runs."""
 
     phase: Phase = Phase.load
 
 
-# The loader lifespan of build_app sets it, in a new contextvars.Context that it gives to the
-# loader thread. report() is called from the thread that loads (this includes the export and the
-# verification in core). It then reaches the LoadProgress that /ready reads. Downshift does not
-# need to pass a parameter through each builder, through core, and through the loader closure
-# of the CLI (see _loader_lifespan in serve/app.py).
+# Set in the loader thread's own Context (serve/app.py), so report() calls deep in core reach
+# the LoadProgress of /ready without a parameter through each builder.
 CURRENT_PROGRESS: ContextVar[LoadProgress | None] = ContextVar(
     "downshift_load_progress", default=None
 )
 
 
 def report(phase: Phase) -> None:
-    """Tell /ready which phase the loader is in. It does nothing if nothing listens (library
-    use, and `check` and `export` of the CLI)."""
+    """Tell /ready which phase the loader is in. A no-op outside a serve loader."""
     progress = CURRENT_PROGRESS.get()
     if progress is not None:
         progress.phase = phase

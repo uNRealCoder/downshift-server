@@ -1,11 +1,7 @@
-"""The row check: does each row of a batch give the same output when it runs with other rows?
+"""The row check: does a row give the same output alone and in a batch with other rows?
 
-The result cache and (later) dynamic batching serve one row on its own or joined with rows of
-other requests. This is only safe if a row does not change its output when its batch changes.
-A model that is not row-independent is, for example, `x - x.mean(0)`, or a model whose output
-has a sequence axis that follows the length of the longest row.
-
-The check is a fact about the model. Downshift measures it at export, next to the numerics.
+The result cache serves rows on their own, so it needs this. `x - x.mean(0)` fails it, and so
+does an output whose sequence axis follows the longest row.
 """
 
 from collections.abc import Callable
@@ -22,11 +18,8 @@ Runner = Callable[[tuple], list[np.ndarray]]
 
 
 def batch_axis(prepared: Prepared, numerics: NumericsReport) -> str | None:
-    """None if the model has a batch axis. Otherwise the reason why it has none.
-
-    A batch axis exists if each input has a dynamic axis 0 with the same Dim, and if axis 0 of
-    each output follows the batch size of the sample while no other axis of the output changes.
-    """
+    """None if all inputs share one dynamic axis-0 Dim, and axis 0 of each output follows
+    it while no other output axis changes. Otherwise the reason."""
     names = set()
     for name, spec in zip(prepared.input_names, prepared.dynamic_shapes, strict=True):
         dim = spec.get(0) if spec else None
@@ -59,8 +52,7 @@ def _row(sample: tuple, i: int) -> tuple:
 
 
 def _text_rows(prepared: Prepared, first: tuple, second: tuple) -> tuple[tuple, list[tuple]] | None:
-    """Two rows with different lengths, cut from two samples. Each row alone has no padding.
-    The joined batch pads the shorter row on the padding side of the tokenizer."""
+    """Two unpadded rows of different lengths, and their batch padded on the tokenizer's side."""
     if prepared.input_names != ("input_ids", "attention_mask"):
         return None
     side = getattr(getattr(prepared.model, "model", None), PADDING_SIDE_ATTR, "right")
@@ -85,8 +77,8 @@ def _text_rows(prepared: Prepared, first: tuple, second: tuple) -> tuple[tuple, 
 
 
 def two_row_sample(prepared: Prepared, seed: int = 0) -> tuple[tuple, list[tuple]] | str:
-    """`(joined, [row_a, row_b])` with two different rows, or the reason why downshift cannot
-    make them. `joined` holds both rows as one batch. Each row is a batch of one."""
+    """`(joined, [row_a, row_b])`: two rows as batches of one and together, or the reason
+    why downshift cannot make them."""
     vary = prepared.vary_fn or make_shared_axis0_vary_fn(prepared.inputs, prepared.dynamic_shapes)
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(seed)
@@ -103,8 +95,8 @@ def two_row_sample(prepared: Prepared, seed: int = 0) -> tuple[tuple, list[tuple
 def rows_agree(
     run: Runner, joined: tuple, rows: list[tuple], atol: float, rtol: float
 ) -> str | None:
-    """None if row i of the joined output equals the output of row i alone, under the rule of
-    `np.isclose`. Otherwise the first difference, as text."""
+    """None if each row of the joined output is close to that row run alone. Otherwise the
+    first difference, as text."""
     together = run(joined)
     for i, row in enumerate(rows):
         alone = run(row)
@@ -143,12 +135,9 @@ def session_runner(session, input_names: tuple[str, ...]) -> Runner:
 def check_rows(
     prepared: Prepared, numerics: NumericsReport, session
 ) -> tuple[bool | None, str | None]:
-    """`(row_independent, reason)`. True and None if the rows agree on both backends. False and
-    the reason if they do not. None and the reason if downshift could not check it.
-
-    The check runs two rows. It finds a model whose rows change each other by more than the
-    tolerance. It cannot prove the absence of a small effect. If the numerics failed, the model
-    is not served, and the check does not run."""
+    """`(row_independent, reason)`: True if two rows agree alone and joined on both backends,
+    False if not, None if downshift could not check. Two rows cannot prove that a small
+    effect is absent."""
     if not numerics.passed:
         return None, "not checked: the numerics check failed"
     try:
@@ -167,9 +156,6 @@ def check_rows(
             reason = rows_agree(run, joined, rows, atol, rtol)
             if reason is not None:
                 return False, reason
-    except Exception as exc:  # noqa: BLE001 - a failed check is a fact of the verdict, not a crash
-        return (
-            None,
-            f"not checked: {type(exc).__name__}: {str(exc).splitlines()[0] if str(exc) else ''}",
-        )
+    except Exception as exc:  # noqa: BLE001 - a fact of the verdict, not a crash
+        return None, f"not checked: {type(exc).__name__}: {(str(exc).splitlines() or [''])[0]}"
     return True, None

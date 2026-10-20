@@ -1,12 +1,5 @@
-"""Run torch.export and torch.onnx.export, and say which strategy worked.
-
-Downshift runs torch.export itself (strict=False, then strict=True). The strategy that works
-is then a value that downshift returns. It is not text that downshift takes from the console
-output. torch.onnx.export does all of the ONNX translation. Downshift only gives it the
-ExportedProgram.
-
-Note for torch 2.14: the dynamo exporter documents only the two strict modes. There is no
-draft_export step and no TorchScript fallback.
+"""Run torch.export (strict=False, then strict=True) and torch.onnx.export on the result, and
+say which strategy worked.
 """
 
 import contextlib
@@ -33,12 +26,7 @@ _REGISTRATION_LOGGER = "torch.onnx._internal.exporter._registration"
 
 @contextlib.contextmanager
 def _quiet_registration_warnings() -> Iterator[None]:
-    """torch.onnx logs a warning for each missing torchvision operation on every export. The
-    user cannot act on it.
-
-    The scope is one capture() call. Downshift does not set it at import. A library must not
-    change the logging configuration of another package only because someone imports it.
-    """
+    """Silence the torch.onnx warning about missing torchvision ops, for one capture() only."""
     logger = logging.getLogger(_REGISTRATION_LOGGER)
     previous = logger.level
     logger.setLevel(logging.ERROR)
@@ -50,15 +38,9 @@ def _quiet_registration_warnings() -> Iterator[None]:
 
 @contextlib.contextmanager
 def _capture_torch_output(sink: io.StringIO) -> Iterator[None]:
-    """Collect what torch prints while it exports, into `sink`.
-
-    When a data-dependent guard fails, torch prints complete FX graphs directly to stderr. Keep
-    this out of the terminal of the user. The exception message is what matters. A swap of
-    sys.stderr is global for the process, so downshift does it only on the main thread (the own
-    check and export of the CLI). The serve loader runs on another thread next to a live server.
-    The stderr writers of that server must not be swallowed. In that case, downshift collects
-    only the logging of torch.
-    """
+    """Collect what torch prints during the export (whole FX graphs on a failed guard). The
+    sys.stderr swap is process-wide, so it happens only on the main thread. On the serve loader
+    thread, next to a live server, only the torch loggers are collected."""
     if threading.current_thread() is threading.main_thread():
         with contextlib.redirect_stderr(sink):
             yield
@@ -77,21 +59,19 @@ class CaptureResult:
     success: bool
     capture_strategy: str | None  # a _STRATEGIES name. None if nothing traced
     onnx_program: "torch.onnx.ONNXProgram | None" = None
-    onnx_bytes: bytes = field(default=b"", repr=False)  # model_proto.SerializeToString(), one time
-    # Set in place of onnx_bytes if the weights went to external data. `tmpdir` owns the files.
+    onnx_bytes: bytes = field(default=b"", repr=False)
+    # In place of onnx_bytes if the weights went to external data. `tmpdir` owns the files.
     onnx_path: Path | None = None
     tmpdir: tempfile.TemporaryDirectory | None = field(default=None, repr=False)
     opset: int | None = None
     op_types: dict[str, int] = field(default_factory=dict)  # histogram, highest count first
-    exception: Exception | None = None  # the exception that build_verdict quotes as the reason
+    exception: Exception | None = None  # quoted as the reason
     exceptions: list[tuple[str, Exception]] = field(default_factory=list)  # each strategy tried
-    stderr: str = ""  # what torch printed during the attempt. Useful at debug level
+    stderr: str = ""  # what torch printed, for the debug log
 
 
 def op_type_histogram(nodes: Iterable[Any]) -> dict[str, int]:
-    """Operation types by count, in descending order. Two paths produce a verdict: a new export
-    here, and the read of a pre-built .onnx file by intake(). Both report this same shape on
-    ExportVerdict.op_types. They therefore share one definition of it."""
+    """Operation types by count, highest first."""
     counts = Counter(node.op_type for node in nodes)
     return dict(sorted(counts.items(), key=lambda kv: kv[1], reverse=True))
 
@@ -128,9 +108,7 @@ def capture(
             return CaptureResult(
                 success=False,
                 capture_strategy=None,
-                # The reason quotes the first failure (strict=False). unsupported_ops comes
-                # from all failures. The message of strict=True is often only "no strategy
-                # worked". It loses what strict=False said about the real operation.
+                # Quote strict=False: the strict=True message often hides the real op.
                 exception=exceptions[0][1] if exceptions else None,
                 exceptions=exceptions,
                 stderr=captured.getvalue(),
@@ -147,7 +125,7 @@ def capture(
             )
 
     if onnx_program is None:
-        # The type stub allows None for the legacy path. With an ExportedProgram, it is never None.
+        # Only the legacy path returns None, but the type stub allows it.
         return CaptureResult(
             success=False,
             capture_strategy=strategy_used,
@@ -159,9 +137,6 @@ def capture(
     onnx_path: Path | None = None
     tmpdir: tempfile.TemporaryDirectory | None = None
     if _weights_nbytes(exported_program) > limit:
-        # One protobuf has a limit of 2 GiB. Above the threshold, the weights go to a data file
-        # next to the .onnx file. The directory stays alive through the result (then the
-        # verdict).
         tmpdir = tempfile.TemporaryDirectory(prefix="downshift-", ignore_cleanup_errors=True)
         onnx_path = Path(tmpdir.name) / "model.onnx"
         onnx_program.save(onnx_path, external_data=True)
