@@ -44,13 +44,14 @@ All modules are in `src/downshift/`. Some leaf modules use only the standard lib
 | `hf_repo.py` | Reads a downloaded Hugging Face repo: `load_config`, `load_pretrained` (with its task head), the pooling recipe, and the tokenizer and labels for text input. Downshift imports it only if transformers is installed. |
 | `cli/main.py` | The three commands: `check`, `export` and `serve`. |
 | `cli/options.py` | The typer option types (`Annotated` aliases and `LogLevel`). |
-| `cli/runtime.py` | `ServeArgs`, `_collect_serve_args`, the `--workers` handoff, and `_tls_config` (the TLS settings of `serve`). |
+| `cli/runtime.py` | `ServeArgs`, the `--workers` handoff (`ArtifactHandoff`, `_run_workers` and the worker app factory), and `_tls_config` (the TLS settings of `serve`). |
 | `cli/render.py` | The banner, the reports, the warnings and the errors. All are logged as plain text. |
-| `core/` | The gate. `verdict.py` has `check`, `prepare_model` and `build_verdict`. The other files are `capture.py`, `verify.py`, `prevalidated.py` (`intake`), `manifest.py`, `shapes.py`, `inputs.py` and `phase.py`. `phase.py` has the `Phase` enum (`load`, `export`, `verify`, `session`, `warmup`). The enum drives the `Boot` timings, `/ready` and the banner. |
+| `core/` | The gate. `verdict.py` has `check`, `intake`, `prepare_model` and `build_verdict`. The other files are `capture.py`, `verify.py`, `rows.py`, `axes.py`, `manifest.py`, `shapes.py`, `feeds.py`, `memo.py`, `export_cache.py` and `phase.py`. `phase.py` has the `Phase` enum (`load`, `export`, `verify`, `session`, `warmup`). The enum drives the `Boot` timings, `/ready` and the banner. |
 | `adapters/` | `base.py` has the `Adapter` protocol, `Prepared` and `Family`. The other files are `registry.py`, `generic.py`, `pyg.py` and `hf.py`. The Hugging Face parts are `text.py` (tokenizing and class probabilities), `pooling.py` (the `--pooling` choices) and `embedding.py` (the pooling recipe and the graph that applies it). |
 | `serve/options.py` | `ServeOptions` and `BackendChoice`. |
-| `serve/engine.py` | `ServingState`, `prepare_serving` and the warmup. |
-| `serve/app.py` | `build_app`, the routing, the request-id and API-key middleware, and `PredictRoute` (admission, body limits and content types for the predict routes). |
+| `serve/engine.py` | `ServingState`, the two builders (`prepare_serving` for a new export, `state_from_entry` for an earlier export), and the warmup. |
+| `serve/reuse.py` | `prepare_serving_reusing`: the lookup of an earlier export in the memo and the disk cache. |
+| `serve/app.py` | `build_app`, the routing, the request-id and API-key middleware, the loading of `--middleware`, and `PredictRoute` (admission, body limits and content types for the predict routes). |
 | `serve/predict.py` | The request path of `/predict` and `/predict/graph`. It has two thread hops. First, the prep pool parses and validates the body, and converts and checks it. Then the inference pool runs the inference and encodes the result. |
 | `serve/describe.py` | The answer to `GET /schema`. |
-| `serve/backends.py`, `serve/schemas.py`, `serve/codec.py`, `serve/middleware.py` | The two backends, the request and response models, the base64 and safetensors codecs, and the loading of `--middleware`. |
+| `serve/backends.py`, `serve/schemas.py`, `serve/codec.py` | The two backends, the request and response models, and the base64 and safetensors codecs. |

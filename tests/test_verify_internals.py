@@ -27,7 +27,7 @@ def test_resize_dim0_is_a_noop_for_scalars_and_matching_sizes():
     assert resize_axis(tensor, 0, 4) is tensor
 
 
-def test_to_session_accepts_raw_bytes(exported_mlp):
+def test_load_session_accepts_raw_bytes(exported_mlp):
     onnx_path, _, _ = exported_mlp
     session = load_session(onnx_path.read_bytes())
     assert isinstance(session, ort.InferenceSession)

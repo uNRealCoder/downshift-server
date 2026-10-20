@@ -166,7 +166,7 @@ Properties:
 - `forced_onnx` is `True` when `--force-onnx` is set and the verdict is `DEGRADED`.
 - `declared_dtypes` is a `cached_property`. It is `{input_name: dtype}`, read once from `backend.metadata().inputs`. Downshift uses it to interpret ambiguous JSON input on each request, without deriving it again.
 
-A `--workers N` worker can rebuild from the ONNX artifact of the parent. It derives `source_kind` again from the spec (`loading.source_kind`). It therefore reports the kind of the original model.
+A `--workers N` worker builds its state from the export of the parent. It takes `source_kind` from the handoff (`ArtifactHandoff.kind`). It therefore reports the kind of the original model.
 
 `WarmupStats`:
 
@@ -182,7 +182,10 @@ class WarmupStats:
 
 ```python
 def prepare_serving(
-    loaded: LoadedModel, opts: ServeOptions | None = None, reference: LoadedModel | None = None
+    loaded: LoadedModel,
+    opts: ServeOptions | None = None,
+    reference: LoadedModel | None = None,
+    tokenizer_from: str | None = None,
 ) -> ServingState
 ```
 
@@ -197,28 +200,32 @@ def prepare_serving(
 
 While `prepare_serving` runs, `core.phase.report(Phase.x)` tells `/ready` which phase the loader is in. Outside an app that a loader built, this call does nothing.
 
-## `serving_state_from_artifact`
+## `state_from_entry`
 
 ```python
-def serving_state_from_artifact(
-    source: str,
-    onnx_path: Path,
-    verdict: ExportVerdict,
+def state_from_entry(
+    entry: ExportEntry,
+    load: Loader,
     opts: ServeOptions,
-    input_names: tuple[str, ...],
-    notes: list[str] | None = None,
-    example_inputs: tuple | None = None,
-    axis_bounds: dict[str, dict[int, DimBound]] | None = None,
+    tokenizer_from: str | None,
+    *,
+    source: str,
+    kind: str,
+    reused: str | None = None,
+    loaded: LoadedModel | None = None,
+    reference: LoadedModel | None = None,
 ) -> ServingState
 ```
 
-This function rebuilds a `ServingState` in a `serve --workers N` worker. It starts from the ONNX graph and the verdict that the parent process already exported and verified. There is no capture and no verification. It makes a new `OnnxRuntimeBackend` session over `onnx_path`, and it does a warmup pass.
+This function builds a `ServingState` from an export that already ran. It has two callers:
 
-- `input_names` and `notes` come from the parent. The verdict that the parent ships has no `prepared`, so the worker cannot derive them.
-- The axis names and bounds of the adapter (`axis_bounds`) also come from the parent. The parent ships them as JSON with `axis_bounds_to_json`. `/schema` and the `400` for an axis out of range need them.
-- If the parent had `example_inputs`, they come from the `.npz` sidecar that the parent wrote. Otherwise, `warmup()` synthesizes them.
+- A hit in the export cache (`serve/reuse.py`). `reused` names the tier: `"memory"` or `"disk"`.
+- A `serve --workers N` worker. The entry is the export that the parent process verified (`ArtifactHandoff`).
 
-`serving_state_from_torch_artifact(loaded, verdict, opts, notes=None)` is the equivalent for torch. The worker reloads the model itself, because downshift does not ship torch weights between processes. It prepares the model, but it uses the verdict that the parent already verified.
+There is no capture and no verification. The function selects the backend again from the verdict of the entry, with `choose_backend`.
+
+- For ONNX Runtime, it makes a session over the graph of the entry. The input names, the axis bounds and the example inputs come from the entry. If the entry has no example inputs, `warmup()` synthesizes them.
+- For torch, it needs the model. Downshift does not send torch weights between processes. If `loaded` has no model, the function calls `load()`. It then prepares the model, but it uses the verdict of the entry.
 
 ## `warmup` and `synthesize_feeds`
 
@@ -255,7 +262,7 @@ You must give exactly one of `state` and `loader`. Otherwise, `build_app` raises
 
 In both modes, `GET /` returns `200`. The response gives `ready`, the model (when the model is ready) and the routes. `_routes` in `serve/app.py` reads the routes from `app.routes` for each request. The list therefore always agrees with the app. Each path includes the mount prefix (`root_path`).
 
-`middleware` is a sequence of `pkg.module:Attr` specs (`--middleware`, repeatable). `load_middleware` (`serve/middleware.py`) attaches them in order. Each spec must resolve to one of these:
+`middleware` is a sequence of `pkg.module:Attr` specs (`--middleware`, repeatable). `load_middleware` (`serve/app.py`) attaches them in order. Each spec must resolve to one of these:
 
 - A middleware class that is built as `cls(app)`: pure ASGI, or a subclass of `starlette.middleware.base.BaseHTTPMiddleware`.
 - An `async (request, call_next)` coroutine function.

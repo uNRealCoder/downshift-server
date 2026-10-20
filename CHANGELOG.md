@@ -16,6 +16,12 @@ All notable changes to this project are documented here. Format follows
 - The export cache of 0.5.x exports again one time. The version of downshift is part of its key, and 0.6.0 adds the row check to the verdict.
 - A bare `serve` or `app_for` on a model with independent rows now has the result cache on. To keep the old behavior, set `--result-cache-rows 0`.
 - `/predict` with the cache on does the encoding on a prep thread and not on an inference thread.
+- The code is simpler. The behavior of the CLI, the HTTP API, the environment variables and the names in `downshift.__all__` does not change. Some internal modules moved. If your code imports them, change the import:
+  - `downshift.core.prevalidated.intake` is now `downshift.core.verdict.intake`. `downshift.intake` does not change.
+  - `downshift.core.inputs.synthesize` is removed. `downshift.core.verdict.prepare_model` raises the same error.
+  - `downshift.serve.middleware.load_middleware` is now `downshift.serve.app.load_middleware`.
+  - `downshift.serve.engine.serving_state_from_artifact` and `serving_state_from_torch_artifact` are removed. Use `downshift.serve.engine.state_from_entry`.
+  - `downshift.core.verify.quiet_ort_logging` is removed. `new_session` silences the ONNX Runtime logger itself.
 
 ### Fixed
 

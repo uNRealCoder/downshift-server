@@ -9,7 +9,6 @@ This page describes every name in `downshift.__all__`: the functions that run th
 - `downshift.core.verdict`
 - `downshift.core.verify`
 - `downshift.adapters.base`
-- `downshift.core.prevalidated`
 - `downshift.serve`
 
 It then caches the result in `globals()` of `downshift`. Each later access is a plain attribute lookup. There is no more call to `__getattr__`.
