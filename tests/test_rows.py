@@ -37,6 +37,7 @@ def test_a_model_that_reads_the_batch_mean_is_not_independent():
     assert "when it runs with other rows" in reason
 
 
+@pytest.mark.needs_torch_26
 def test_token_outputs_have_no_batch_axis():
     prepared, numerics, session = _rows_of(tiny_bert.make_model(), tiny_bert.make_inputs())
 
@@ -47,6 +48,7 @@ def test_token_outputs_have_no_batch_axis():
     assert "output_0 axis 1 changes" in reason
 
 
+@pytest.mark.needs_torch_26
 @pytest.mark.parametrize(("side", "independent"), [("right", True), ("left", False)])
 def test_padding_is_part_of_the_check(side, independent):
     # BERT has absolute position ids. Left padding moves a row to other positions, so the
