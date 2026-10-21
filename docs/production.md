@@ -87,7 +87,7 @@ Downshift uses the boot to make requests fast. Each predict pays only for its ow
 2. **Prep pool** (`--prep-threads`): parse and validate the body, convert it to arrays or tokenize the text, check the shapes and bounds.
 3. **Inference pool** (`--max-concurrency`): run the model, then encode the response on the same thread.
 
-The `Server-Timing` header of each predict response gives each stage: `parse`, `prep_wait`, `prep`, `infer_wait`, `infer` and `encode`, and `cache` if the result cache is on. You can see it with `curl -sD - -o /dev/null` or in the network tab of a browser. The access log line has the same values as `timings_ms`.
+With `--server-timing` (or `DOWNSHIFT_SERVER_TIMING=1`), the `Server-Timing` header of each predict response gives each stage: `parse`, `prep_wait`, `prep`, `infer_wait`, `infer` and `encode`, and `cache` if the result cache is on. You can see it with `curl -sD - -o /dev/null` or in the network tab of a browser. The header is off by default, because the timings and a fast cache hit tell a client about the server and about the requests of other clients. The access log line has the same values as `timings_ms`, with the header on or off.
 
 These levers change the numbers, approximately in the order of the gain (16 logical cores, `bench/results/v0.5.0/REPORT.md`):
 
@@ -125,7 +125,7 @@ The result cache keeps the output of single rows. A row that arrives again skips
 - If two requests ask for the same new row at the same time, the model runs one time and the second request waits. If the first request fails or leaves, the second one computes the row.
 - It counts rows, not bytes. Its memory is the number of rows times the size of one output row.
 - `/predict/graph` does not use it.
-- Each response has `X-Downshift-Cache: hit`, `partial` or `miss`. `Cache-Control: no-cache` skips the lookup for one request. The server still stores the rows.
+- Each response has `X-Downshift-Cache: hit`, `partial` or `miss`. To use a different name, set `DOWNSHIFT_CACHE_HEADER`. `Cache-Control: no-cache` skips the lookup for one request. The server still stores the rows.
 
 **Warning for a server with more than one tenant.** A hit is faster than a miss. A client can use the time to learn that another client sent the same text. If your clients must not learn this about each other, set `--result-cache-rows 0`.
 

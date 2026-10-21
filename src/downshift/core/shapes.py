@@ -12,7 +12,8 @@ import torch
 from downshift.adapters.base import VaryFn
 from downshift.core.axes import AxisBounds, DimBound
 
-# The maximum of each Dim that downshift makes itself (the default rule, --dynamic, PyG).
+# The default maximum of each Dim that downshift makes itself (the default rule, --dynamic,
+# PyG). --axis-max can raise it.
 DEFAULT_DIM_MAX = 1 << 16
 
 
@@ -85,10 +86,15 @@ def apply_dynamic_override(
     )
 
 
-def lower_axis_max(dynamic_shapes: tuple, axis_max: dict[str, int] | None) -> tuple:
-    """Lower the maximum of each Dim named in `axis_max`. Shared Dims stay shared. An unknown
-    name, or a value outside the [min, max] of the Dim, raises ValueError: --axis-max can only
-    narrow a bound."""
+def lower_axis_max(
+    dynamic_shapes: tuple,
+    axis_max: dict[str, int] | None,
+    limits: dict[str, int] | None = None,
+) -> tuple:
+    """Set the maximum of each Dim named in `axis_max`, lower or higher than its default.
+    Shared Dims stay shared. `limits` are hard limits of the model ({Dim name: largest size},
+    for example the position limit of a Hugging Face model): a value above one raises
+    ValueError. So do an unknown name and a value below the minimum of the Dim."""
     if not axis_max:
         return dynamic_shapes
     bounds = {
@@ -102,9 +108,13 @@ def lower_axis_max(dynamic_shapes: tuple, axis_max: dict[str, int] | None) -> tu
             f"--axis-max names {unknown} are not axes of this model. Its axes are {sorted(bounds)}"
         )
     for name, n in axis_max.items():
-        lo, hi = bounds[name]
-        if n > hi:
-            raise ValueError(f"--axis-max {name}={n} is above the limit of {hi} for that axis")
+        lo = bounds[name][0]
+        hi = (limits or {}).get(name)
+        if hi is not None and n > hi:
+            raise ValueError(
+                f"--axis-max {name}={n} is above the limit of {hi} that this model sets for "
+                f"that axis. Use {name}={hi} or less"
+            )
         if n < lo:
             raise ValueError(f"--axis-max {name}={n} is below the minimum of {lo} for that axis")
     lowered = {

@@ -152,8 +152,15 @@ def test_health_gets_its_own_request_id_too(mlp_client):
     assert resp.headers["x-request-id"]
 
 
-def test_predict_reports_server_timing(mlp_client):
+def test_predict_has_no_server_timing_by_default(mlp_client):
     resp = mlp_client.post("/predict", json=MLP_INPUT)
+    assert resp.status_code == 200, resp.text
+    assert "server-timing" not in resp.headers
+
+
+def test_predict_reports_server_timing_when_it_is_on(mlp_state):
+    client = TestClient(build_app(_with_options(mlp_state, server_timing=True)))
+    resp = client.post("/predict", json=MLP_INPUT)
     assert resp.status_code == 200, resp.text
     timing = resp.headers["server-timing"]
     for stage in ("parse", "prep_wait", "prep", "infer_wait", "infer", "encode"):
@@ -851,7 +858,7 @@ def _loop_probe(state, monkeypatch) -> dict[str, list[bool]]:
 
 
 def _inline_client(mlp_state, execution) -> TestClient:
-    return TestClient(build_app(_with_options(mlp_state, execution=execution)))
+    return TestClient(build_app(_with_options(mlp_state, execution=execution, server_timing=True)))
 
 
 def test_metadata_reports_the_execution_mode(mlp_client, mlp_state):

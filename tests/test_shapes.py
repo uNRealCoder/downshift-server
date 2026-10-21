@@ -115,10 +115,16 @@ def test_lower_axis_max_rejects_unknown_name_listing_the_axes():
         lower_axis_max((spec,), {"nodes": 5})
 
 
-def test_lower_axis_max_rejects_a_value_above_the_ceiling():
+def test_lower_axis_max_raises_a_default_bound():
+    spec = {0: torch.export.Dim("batch", min=1, max=64)}
+    (raised,) = lower_axis_max((spec,), {"batch": 100_000})
+    assert raised[0].max == 100_000
+
+
+def test_lower_axis_max_rejects_a_value_above_a_hard_limit():
     spec = {0: torch.export.Dim("seq", min=1, max=64)}
-    with pytest.raises(ValueError, match="seq=65 is above the limit of 64"):
-        lower_axis_max((spec,), {"seq": 65})
+    with pytest.raises(ValueError, match="seq=65 is above the limit of 64.*Use seq=64 or less"):
+        lower_axis_max((spec,), {"seq": 65}, limits={"seq": 64})
 
 
 def test_generic_axis_max_lowers_dim0_and_pins_sample_one():
@@ -130,6 +136,17 @@ def test_generic_axis_max_lowers_dim0_and_pins_sample_one():
     (fact,) = verdict.axes
     assert fact.served_max == 20
     assert [shapes[0][0] for shapes in verdict.numerics.sample_shapes][1] == 20
+
+
+def test_generic_axis_max_raises_dim0_above_the_default_and_verifies_there():
+    verdict = downshift.check(
+        clean_mlp.make_model(), clean_mlp.make_inputs(), axis_max={"dim0": 70_000}, k=2
+    )
+
+    assert verdict.status == "CLEAN", verdict.reason
+    (fact,) = verdict.axes
+    assert fact.served_max == 70_000
+    assert verdict.numerics.sample_shapes[1][0][0] == 70_000
 
 
 def test_axis_max_applies_to_dynamic_override_axes():

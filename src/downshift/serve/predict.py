@@ -18,6 +18,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError
 
+from downshift import settings
 from downshift.core.axes import DimBound
 from downshift.serve.backends import FIRST_OUTPUT_NAME, InferenceInputError
 from downshift.serve.codec import b64encode, decode_safetensors, encode_safetensors
@@ -56,7 +57,6 @@ SAFETENSORS_MEDIA_TYPE = "application/vnd.safetensors"
 BINARY_REQUEST_TYPES = frozenset({SAFETENSORS_MEDIA_TYPE, "application/octet-stream"})
 # The Server-Timing stages, in the order of the request.
 STAGES = ("parse", "prep_wait", "prep", "infer_wait", "infer", "encode")
-CACHE_HEADER = "X-Downshift-Cache"
 
 # The dtypes that OPT_SERIALIZE_NUMPY of orjson writes directly from the array buffer (orjson >= 3.9).
 _ORJSON_DTYPES = frozenset(
@@ -326,7 +326,8 @@ def _encode_response(
     accept_safetensors: bool = False,
     layout: GraphLayout | None = None,
 ) -> Response:
-    """The response for `outputs`, with the Server-Timing header of all stages.
+    """The response for `outputs`, with the Server-Timing header of all stages if the
+    server_timing option is on.
 
     A safetensors body has each output under its own name, with `predictions` and the
     embedding recipe as JSON in `__metadata__`. A graph batch (`layout`) is split first: JSON
@@ -367,6 +368,8 @@ def _encode_response(
             body["predictions"] = predictions
         response = NumpyJSONResponse(body)
     timings_ms["encode"] = round((time.perf_counter() - start) * 1000, 2)
+    if not state.options.server_timing:
+        return response
     stages = [f"{stage};dur={timings_ms.get(stage, 0.0):.2f}" for stage in STAGES]
     if "cache" in timings_ms:  # only a server with the cache on has this stage
         hits, total = int(timings_ms["cache_hits"]), int(timings_ms["cache_rows"])
@@ -743,7 +746,7 @@ async def _run_cached(
 
     response: Response = await _run_in(pool, "encode_wait", timings_ms, finish)
     computed = len(plan.keys) - served
-    response.headers[CACHE_HEADER] = (
+    response.headers[settings.CACHE_HEADER] = (
         "hit" if computed == 0 else "miss" if served == 0 else "partial"
     )
     return response
@@ -767,7 +770,7 @@ async def run_predict(
 
     `binary` is a safetensors body. `inline` (--execution inline, a small JSON body) does all
     of it on the event loop, except tokenization. `timings_ms` collects the milliseconds of
-    each stage for Server-Timing and the access log.
+    each stage for the access log and the optional Server-Timing header.
     """
     parsed = _parse(state, body, graph, binary, timings_ms) if inline else None
     run_here = parsed is not None and parsed.text is None

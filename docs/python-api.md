@@ -52,7 +52,7 @@ def check(
 - `atol` and `rtol`: override the absolute and relative tolerance. `None` (the default for both) selects the tolerance from the floating dtype of the model. Refer to `downshift.core.verify.default_tolerances` and `settings.TOLERANCES`.
 - `seed`: seeds the generator of verification samples. `verify()` runs under `torch.random.fork_rng`, so the global RNG state of the caller does not change.
 - `vary`: a `fn(i) -> inputs` that replaces the sampler of the adapter. Downshift imports a string in the same way as for `--vary`. `fn(0)` must return the example inputs.
-- `axis_max`: `{axis_name: N}`. It lowers a named dynamic axis to `N` and uses one verification sample at exactly `N`. Refer to `--axis-max`.
+- `axis_max`: `{axis_name: N}`. It sets the largest size of a named dynamic axis to `N`, lower or higher than the default, and uses one verification sample at exactly `N`. A limit of the model (the position limit of a Hugging Face model) cannot be raised. Refer to `--axis-max`.
 - `cache`: if `True` (the default), downshift keeps a CLEAN or DEGRADED result in the export memo of the process (the last two). A later `export()` or `app_for()` of the same model and options then skips the export and the verification. `check()` itself always runs the gate. Set `False` to keep nothing.
 
 `check` returns an `ExportVerdict`. It raises `ValueError` in these cases:

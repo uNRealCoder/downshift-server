@@ -58,6 +58,7 @@ class ServeOptions:
     request_timeout: float = settings.REQUEST_TIMEOUT  # queue seconds. 0 = none
     # Rows in the result cache. None = the default, but only for a model with independent rows. 0 = off
     result_cache_rows: int | None = settings.RESULT_CACHE_ROWS
+    server_timing: bool = settings.SERVER_TIMING  # add the Server-Timing header to predicts
     atol: float | None = None  # None means "by the floating dtype of the model"
     rtol: float | None = None
     seed: int = 0  # makes the verification samples reproducible

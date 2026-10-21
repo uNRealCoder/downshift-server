@@ -50,6 +50,9 @@ def cli_env(target: str) -> dict[str, str]:
     env = os.environ.copy()
     paths = [str(ROOT)] if target == "installed" else [str(SRC), str(ROOT)]
     env["PYTHONPATH"] = os.pathsep.join(paths)
+    # The stage columns of the report read Server-Timing, which is off by default since 0.6.0.
+    # An environment variable and not --server-timing: older targets do not know the flag.
+    env["DOWNSHIFT_SERVER_TIMING"] = "1"
     return env
 
 

@@ -213,3 +213,29 @@ def test_a_bad_request_id_header_name_says_what_to_use(monkeypatch: pytest.Monke
     monkeypatch.setenv("DOWNSHIFT_REQUEST_ID_HEADER", "X Request Id")
     with pytest.raises(ValueError, match="not a valid HTTP header name.*X-Correlation-Id"):
         importlib.reload(settings)
+
+
+def test_server_timing_is_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DOWNSHIFT_SERVER_TIMING", raising=False)
+    assert importlib.reload(settings).SERVER_TIMING is False
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"), [("1", True), ("On", True), ("0", False), ("no", False)]
+)
+def test_server_timing_is_read_from_the_env(monkeypatch: pytest.MonkeyPatch, raw, expected) -> None:
+    monkeypatch.setenv("DOWNSHIFT_SERVER_TIMING", raw)
+    assert importlib.reload(settings).SERVER_TIMING is expected
+
+
+def test_a_bad_boolean_env_var_raises_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DOWNSHIFT_SERVER_TIMING", "maybe")
+    with pytest.raises(ValueError, match="DOWNSHIFT_SERVER_TIMING.*maybe.*boolean"):
+        importlib.reload(settings)
+
+
+def test_cache_header_defaults_and_reads_the_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DOWNSHIFT_CACHE_HEADER", raising=False)
+    assert importlib.reload(settings).CACHE_HEADER == "X-Downshift-Cache"
+    monkeypatch.setenv("DOWNSHIFT_CACHE_HEADER", "X-Result-Cache")
+    assert importlib.reload(settings).CACHE_HEADER == "X-Result-Cache"

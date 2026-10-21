@@ -662,8 +662,8 @@ def test_check_axis_max_lowers_the_served_bound():
 
 @pytest.mark.parametrize(
     "value",
-    ["seq=4", "dim0=999999", "dim0", "dim0=abc", "dim0=0"],
-    ids=["unknown-name", "above-ceiling", "no-value", "non-int", "zero"],
+    ["seq=4", "dim0", "dim0=abc", "dim0=0"],
+    ids=["unknown-name", "no-value", "non-int", "zero"],
 )
 def test_check_bad_axis_max_is_usage_error(value):
     result = run("check", CLEAN, "--axis-max", value, "--json")
@@ -730,6 +730,18 @@ def test_serve_passes_result_cache_rows_and_it_survives_workers(monkeypatch):
     _serve_captured(monkeypatch, "--result-cache-rows", "12", "--workers", "2")
     args = runtime.ServeArgs.from_json(os.environ[runtime._SERVE_ARGS_ENV])
     assert args.options.result_cache_rows == 12
+
+
+def test_serve_server_timing_flag_reaches_the_options_and_the_workers(monkeypatch):
+    _, captured = _serve_captured(monkeypatch)
+    assert captured["app"].state.serving.options.server_timing is False
+
+    _, captured = _serve_captured(monkeypatch, "--server-timing")
+    assert captured["app"].state.serving.options.server_timing is True
+
+    _serve_captured(monkeypatch, "--server-timing", "--workers", "2")
+    args = runtime.ServeArgs.from_json(os.environ[runtime._SERVE_ARGS_ENV])
+    assert args.options.server_timing is True
 
 
 BOUNDS = {

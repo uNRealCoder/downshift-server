@@ -41,7 +41,7 @@ Downshift fetches nothing. A Hugging Face hub id (`org/repo`) gives an error tha
 | `--adapter NAME\|path/to/adapter.py[:attr]` | - | detect | `generic`, `pyg`, `hf`, or your own adapter. Refer to [`adapters.md`](adapters.md). |
 | `-k`, `--samples INT` | `DOWNSHIFT_SAMPLES` | `8` | The number of verification samples. |
 | `--dynamic NAME:AXIS[,...]` | - | axis 0 of each input | The dynamic axes, for example `"x:0,edge_index:1"`. Each axis gets its own dimension, with the name `<input>_<axis>`. |
-| `--axis-max NAME=N` (repeatable) | `DOWNSHIFT_AXIS_MAX` | the bound of the export | Serve at most `N` along the named axis, and verify one sample at exactly `N`. The banner and `/schema` list the names. Generic models use `dim0` (or `<input>_<axis>` with `--dynamic`), Hugging Face models use `batch` and `seq`, PyG models use `num_nodes` and `num_edges`. The value can only lower a bound. The variable takes `NAME=N,NAME=N`. |
+| `--axis-max NAME=N` (repeatable) | `DOWNSHIFT_AXIS_MAX` | the bound of the export | Serve at most `N` along the named axis, and verify one sample at exactly `N`. The banner and `/schema` list the names. Generic models use `dim0` (or `<input>_<axis>` with `--dynamic`), Hugging Face models use `batch` and `seq`, PyG models use `num_nodes` and `num_edges`. `N` can lower or raise the default bound (for example `batch=4096`, or `num_nodes=65536` for PyG). It cannot go above a limit of the model: the position limit of a Hugging Face model sets the largest `seq`. A large `N` makes the verification sample large too. The variable takes `NAME=N,NAME=N`. |
 | `--atol FLOAT`, `--rtol FLOAT` | - | by dtype | Override the tolerance. Refer to "Tolerances" below. |
 | `--seed INT` | - | `0` | The seed of the verification samples. |
 | `--vary pkg.module:fn` | - | none | `fn(i) -> inputs`. It replaces the sampler of the adapter. `fn(0)` must return the example inputs. The default samples are synthetic: random values at the edge shapes. To verify on inputs like your real traffic, give `--vary`. |
@@ -164,6 +164,7 @@ downshift export my_pkg.models:build -o artifacts/ --name classifier
 | `--export-cache-dir DIR` | `DOWNSHIFT_EXPORT_CACHE_DIR` | none | As for `export`. A repeat boot of the same model skips the export and the verification. |
 | `--ssl-certfile PATH` | `DOWNSHIFT_SSL_CERTFILE` | none | A PEM certificate or chain. If you give it, the server uses HTTPS. |
 | `--ssl-keyfile PATH` | `DOWNSHIFT_SSL_KEYFILE` | none | The PEM private key. Not necessary if the certificate file contains the key. For an encrypted key, set `DOWNSHIFT_SSL_KEYFILE_PASSWORD`. |
+| `--server-timing` / `--no-server-timing` | `DOWNSHIFT_SERVER_TIMING` | off | Adds the `Server-Timing` header (the milliseconds of each stage) to each predict response. Keep it off on a server that untrusted clients use: the timings show how the server works, and a fast cache hit shows that another client sent the same row. The access log has the timings in both cases. |
 | `--access-log` / `--no-access-log` | - | on | One log line for each request. |
 
 `serve` binds the port first. It then loads, exports, verifies and warms up on a background thread. `/ready` gives `503` until the model is ready. `serve` serves all four verdicts. It exits early only for a usage error (`4`) or a crash (`5`) before the server is ready. Downshift loads the TLS files before the model, so a bad TLS file stops `serve` with exit code `4`.
@@ -200,6 +201,7 @@ Downshift reads these variables one time, when `downshift` is imported. To chang
 | `DOWNSHIFT_MAX_CONCURRENCY`, `DOWNSHIFT_MAX_QUEUE`, `DOWNSHIFT_REQUEST_TIMEOUT` | `4`, `64`, `30` | `--max-concurrency`, `--max-queue`, `--request-timeout` |
 | `DOWNSHIFT_EXECUTION`, `DOWNSHIFT_PREP_THREADS` | `threadpool`, `min(4, CPUs)` | `--execution`, `--prep-threads` |
 | `DOWNSHIFT_RESULT_CACHE_ROWS` | unset (`100`, or off) | `--result-cache-rows` |
+| `DOWNSHIFT_SERVER_TIMING` | `0` | `--server-timing` (`1` or `0`, also `true`, `false`, `yes`, `no`, `on`, `off`) |
 | `DOWNSHIFT_AXIS_MAX` | unset | `--axis-max` (`NAME=N,NAME=N`) |
 | `DOWNSHIFT_EXPORT_CACHE_DIR` | unset | `--export-cache-dir` |
 | `DOWNSHIFT_WORKERS` | `1` | `--workers` (CLI only) |
@@ -207,6 +209,7 @@ Downshift reads these variables one time, when `downshift` is imported. To chang
 | `DOWNSHIFT_SSL_KEYFILE_PASSWORD` | unset | The password of an encrypted key. There is no flag, because a flag shows in the process list. |
 | `DOWNSHIFT_SERVER_API_KEY` | unset | Requires `Authorization: Bearer <key>` on each route except `/health` and `/ready`. There is no flag, because the key is a secret. |
 | `DOWNSHIFT_REQUEST_ID_HEADER` | `X-Request-Id` | The name of the request-ID header. The server reads the ID from this request header and sets it on each response. Use letters, digits and `-` only. An empty value means the default. There is no flag. |
+| `DOWNSHIFT_CACHE_HEADER` | `X-Downshift-Cache` | The name of the result-cache header of `/predict` (`hit`, `partial` or `miss`). Use letters, digits and `-` only. An empty value means the default. There is no flag. |
 | `DOWNSHIFT_TOL_{FLOAT32,FLOAT64,FLOAT16,BFLOAT16}_{ATOL,RTOL}` | refer to "Tolerances" | The default tolerances. |
 
 A bad value (for example `DOWNSHIFT_PORT=abc`) stops the process at start with a message that names the variable. The library functions `check()`, `export()` and `intake()` use `8` as the default of `k`. They do not read `DOWNSHIFT_SAMPLES`.

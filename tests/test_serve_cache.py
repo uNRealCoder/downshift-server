@@ -15,6 +15,7 @@ from safetensors.numpy import load as st_load
 from safetensors.numpy import save as st_save
 from transformers import BertForSequenceClassification
 
+from downshift import settings
 from downshift.core.axes import DimBound
 from downshift.loading import LoadSpec, load_model
 from downshift.serve import predict
@@ -119,7 +120,7 @@ def test_metadata_has_no_cache_when_it_is_off():
 
 @pytest.fixture
 def served():
-    state = _state("clean_mlp")
+    state = _state("clean_mlp", server_timing=True)
     spy = Spy(state)
     return TestClient(build_app(state)), spy, state
 
@@ -238,7 +239,7 @@ def test_server_timing_has_a_cache_stage_with_the_hit_count(served):
 
 
 def test_a_server_with_the_cache_off_has_the_old_header_and_no_cache_header():
-    client = TestClient(build_app(_state("clean_mlp", result_cache_rows=0)))
+    client = TestClient(build_app(_state("clean_mlp", result_cache_rows=0, server_timing=True)))
 
     resp = _post(client, _x(1.0))
 
@@ -483,3 +484,13 @@ def test_a_classifier_answers_predictions_for_hits_and_misses(classifier_repo):
     assert spy.rows == [2, 2]
     assert answers[0]["predictions"] == answers[2]["predictions"]
     assert len(answers[2]["predictions"]) == 2
+
+
+def test_the_cache_header_name_comes_from_the_settings(served, monkeypatch):
+    client, _, _ = served
+    monkeypatch.setattr(settings, "CACHE_HEADER", "X-Result-Cache")
+
+    resp = _post(client, _x(31.0))
+
+    assert resp.headers["x-result-cache"] == "miss"
+    assert "x-downshift-cache" not in resp.headers

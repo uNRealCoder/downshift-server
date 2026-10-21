@@ -50,7 +50,9 @@ from downshift.sources import LABEL_KINDS, display_source, hide_paths
 logger = logging.getLogger("downshift.serve")
 access_logger = logging.getLogger("downshift.access")
 
-NOT_READY_RETRY_AFTER = 2  # seconds
+# The Retry-After seconds of a 503: while the model loads, and when all slots are in use.
+NOT_READY_RETRY_AFTER = 2
+CAPACITY_RETRY_AFTER = 1
 
 # The probes: no API key, and logged at DEBUG.
 _PROBE_PATHS = frozenset({"/health", "/ready"})
@@ -95,7 +97,7 @@ def _capacity_error(state: ServingState) -> HTTPException:
     return HTTPException(
         503,
         f"server is at capacity ({running} running, {queued} queued)",
-        headers={"Retry-After": "1"},
+        headers={"Retry-After": str(CAPACITY_RETRY_AFTER)},
     )
 
 

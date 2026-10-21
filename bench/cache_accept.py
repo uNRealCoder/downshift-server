@@ -47,7 +47,7 @@ def server_ms(response) -> float:
 
 def serve(rows: int | None):
     loaded = load_model(LoadSpec(str(MODEL)))
-    state = prepare_serving(loaded, ServeOptions(result_cache_rows=rows))
+    state = prepare_serving(loaded, ServeOptions(result_cache_rows=rows, server_timing=True))
     calls: list[int] = []
     real = state.backend.infer
 

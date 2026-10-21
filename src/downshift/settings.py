@@ -55,6 +55,20 @@ def _env_float(name: str, default: float) -> float:
     return _env_cast(name, default, float, "float")
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    """1, true, yes or on; 0, false, no or off (any case)."""
+
+    def cast(raw: str) -> bool:
+        value = raw.strip().lower()
+        if value in ("1", "true", "yes", "on"):
+            return True
+        if value in ("0", "false", "no", "off"):
+            return False
+        raise ValueError(raw)
+
+    return _env_cast(name, default, cast, "boolean (1 or 0)")
+
+
 def _env_choice(name: str, default: str, choices: tuple[str, ...], type_name: str) -> str:
     """One of `choices`, so a typo in the environment fails at startup with its own name."""
 
@@ -184,6 +198,14 @@ API_KEY = os.environ.get("DOWNSHIFT_SERVER_API_KEY")
 # The header that carries the request ID: the server reads it from a request and sets it on
 # each response.
 REQUEST_ID_HEADER = _env_header("DOWNSHIFT_REQUEST_ID_HEADER", "X-Request-Id")
+
+# The header of a /predict response that says hit, partial or miss for the result cache.
+CACHE_HEADER = _env_header("DOWNSHIFT_CACHE_HEADER", "X-Downshift-Cache")
+
+# Add the Server-Timing header (the milliseconds of each stage) to each predict response. It is
+# off by default: the timings tell a client how the server works, and a fast cache hit tells it
+# that another client sent the same row. The access log has the timings in both cases.
+SERVER_TIMING = _env_bool("DOWNSHIFT_SERVER_TIMING", False)
 
 # HTTPS. If SSL_CERTFILE is set, `serve` uses TLS. The key can be in the cert file, or in its
 # own file. The password of an encrypted key is an environment variable only, so that it does

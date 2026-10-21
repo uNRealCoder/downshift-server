@@ -18,6 +18,7 @@ from downshift.core.shapes import alternative_sizes, lower_axis_max, pick_size
 from downshift.hf_repo import position_limit
 
 INPUT_NAMES = ("input_ids", "attention_mask")
+DEFAULT_AXIS_MAX = 1 << 12  # the default bound of batch, and of seq without a position limit
 _GUESS_BATCH = 2
 _GUESS_SEQ = 8
 
@@ -56,13 +57,16 @@ class HFAdapter:
         input_ids, attention_mask = example_inputs
         # getattr keeps the type Any; nn.Module attribute access types it as Tensor | Module.
         config = getattr(model, "config")  # noqa: B009
-        # The position embeddings bound the sequence; a looser bound trips export guards.
+        # The position embeddings bound the sequence: a hard limit, and a looser bound trips
+        # export guards. The batch bound and a seq bound without a position limit are defaults
+        # that --axis-max can raise.
         longest = position_limit(config)
-        max_seq = longest or 1 << 12
-        batch = torch.export.Dim("batch", min=1, max=1 << 12)
+        max_seq = longest or DEFAULT_AXIS_MAX
+        batch = torch.export.Dim("batch", min=1, max=DEFAULT_AXIS_MAX)
         seq = torch.export.Dim("seq", min=1, max=max_seq)
         spec = {0: batch, 1: seq}
-        dynamic_shapes = lower_axis_max((spec, spec), axis_max)
+        limits = {"seq": longest} if longest is not None else None
+        dynamic_shapes = lower_axis_max((spec, spec), axis_max, limits)
         vocab = int(config.vocab_size)
         inputs = (input_ids, attention_mask)
         return Prepared(
@@ -85,7 +89,7 @@ class HFAdapter:
 def make_vary_fn(
     base_inputs: tuple,
     vocab_size: int,
-    max_seq: int = 1 << 12,
+    max_seq: int = DEFAULT_AXIS_MAX,
     longest: int | None = None,
     axis_max: dict[str, int] | None = None,
     padding_side: str = "right",

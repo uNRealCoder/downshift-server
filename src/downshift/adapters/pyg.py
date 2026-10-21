@@ -9,7 +9,13 @@ from torch_geometric.nn import MessagePassing
 
 from downshift.adapters._flatten import build_shim_class
 from downshift.adapters.base import Family, Prepared, VaryFn
-from downshift.core.shapes import alternative_sizes, dim_bounds, lower_axis_max, pick_size
+from downshift.core.shapes import (
+    DEFAULT_DIM_MAX,
+    alternative_sizes,
+    dim_bounds,
+    lower_axis_max,
+    pick_size,
+)
 
 BASE_FIELD_NAMES = ("x", "edge_index")  # edge_attr is added if the input Data has it
 _GUESS_NODES = 8
@@ -62,8 +68,8 @@ class PyGAdapter:
         inputs = tuple(getattr(data, n) for n in names)
         shim = build_shim_class(names)(model, lambda fields: Data(**fields), names)
 
-        n_dim = torch.export.Dim("num_nodes", min=1, max=1 << 16)
-        e_dim = torch.export.Dim("num_edges", min=1, max=1 << 16)
+        n_dim = torch.export.Dim("num_nodes", min=1, max=DEFAULT_DIM_MAX)
+        e_dim = torch.export.Dim("num_edges", min=1, max=DEFAULT_DIM_MAX)
         axis_by_field = {"x": {0: n_dim}, "edge_index": {1: e_dim}, "edge_attr": {0: e_dim}}
         dynamic_shapes = lower_axis_max(tuple(axis_by_field[n] for n in names), axis_max)
 

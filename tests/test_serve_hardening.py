@@ -593,7 +593,8 @@ def test_a_request_queued_for_inference_still_times_out(mlp_state, monkeypatch):
     assert len(calls) == 1
 
 
-def test_server_timing_and_the_access_log_carry_the_wait_stages(mlp_state):
+def test_server_timing_and_the_access_log_carry_the_wait_stages(mlp_state, monkeypatch):
+    monkeypatch.setattr(mlp_state.options, "server_timing", True)
     resp = TestClient(build_app(mlp_state, api_key=None)).post("/predict", json=MLP_INPUT)
 
     assert resp.status_code == 200
