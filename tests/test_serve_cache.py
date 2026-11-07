@@ -15,10 +15,12 @@ from safetensors.numpy import save as st_save
 from transformers import BertForSequenceClassification
 
 from downshift import settings
+from downshift.adapters.text import TextIO
 from downshift.core.axes import DimBound
 from downshift.loading import LoadSpec, load_model
 from downshift.serve import predict
 from downshift.serve.app import build_app
+from downshift.serve.backends import InferenceInputError
 from downshift.serve.engine import prepare_serving
 from downshift.serve.options import ServeOptions
 from downshift.serve.result_cache import Lookup
@@ -36,11 +38,18 @@ def _state(spec: str, **opts):
 class Spy:
     """Counts the calls of the backend and the rows in each call."""
 
-    def __init__(self, state, delay: float = 0.0, fail_first: bool = False) -> None:
+    def __init__(
+        self,
+        state,
+        delay: float = 0.0,
+        fail_first: bool = False,
+        error: Exception = RuntimeError("boom"),
+    ) -> None:
         self.rows: list[int] = []
         self._real = state.backend.infer
         self._delay = delay
         self._fail = fail_first
+        self._error = error
         self._lock = threading.Lock()
         state.backend.infer = self
 
@@ -50,7 +59,7 @@ class Spy:
             fail, self._fail = self._fail, False
         time.sleep(self._delay)
         if fail:
-            raise RuntimeError("boom")
+            raise self._error
         return self._real(inputs)
 
 
@@ -299,6 +308,17 @@ def test_a_waiter_computes_the_row_itself_when_the_owner_fails():
     assert spy.rows == [1, 1]
 
 
+def test_a_waiter_never_sees_the_client_error_of_its_owner():
+    state = _state("clean_mlp")
+    spy = Spy(state, delay=0.4, fail_first=True, error=InferenceInputError("bad row"))
+    client = TestClient(build_app(state))
+
+    results = _run_two(client, _x(12.0))
+
+    assert sorted(r.status_code for r in results) == [200, 400]
+    assert spy.rows == [1, 1]
+
+
 def test_a_partial_hit_is_not_checked_against_the_batch_bound_again():
     state = _state("clean_mlp")
     state.axis_bounds = {"x": {0: DimBound("batch", 3, 100)}}  # the export traced 3 to 100 rows
@@ -451,6 +471,109 @@ def test_a_waiter_that_retries_can_get_a_whole_response(monkeypatch):
         )
 
     assert asyncio.run(go()).status_code == 200
+
+
+def _run_plan(state, cache, request, monkeypatch, plan, infer):
+    monkeypatch.setattr(predict, "_cache_prepare", lambda *_a: plan)
+    monkeypatch.setattr(predict, "_infer", infer)
+
+    async def go():
+        return await predict._run_cached(
+            state,
+            cache,
+            request,
+            body=b"",
+            graph=False,
+            binary=False,
+            accept_safetensors=False,
+            parse=lambda: request,
+            encode=_encoder(state),
+            with_tokens=False,
+            run_here=False,
+            deadline=None,
+            timings_ms={},
+        )
+
+    return asyncio.run(go())
+
+
+def test_a_failure_does_not_free_a_row_that_a_new_owner_claimed(monkeypatch):
+    state = _state("clean_mlp")
+    cache = state.result_cache
+    request = predict._Request()
+    keys = [b"k0", b"k1"]
+    plan = predict._CachePlan(
+        request, None, keys, cache.lookup(keys), {"x": np.zeros((2, 16), np.float32)}, list(keys)
+    )
+    real_complete = cache.complete
+    new_owner: list = []
+
+    def complete(key, row):
+        real_complete(key, row)
+        if key == b"k0":
+            new_owner.append(cache.lookup([b"k0"]))  # another request claims the row
+        else:
+            raise RuntimeError("the owner failed after its first row")
+
+    monkeypatch.setattr(cache, "complete", complete)
+
+    with pytest.raises(RuntimeError, match="after its first row"):
+        _run_plan(
+            state,
+            cache,
+            request,
+            monkeypatch,
+            plan,
+            lambda _s, _f: ({"output_0": np.ones((2, 4), np.float32)}, 0.0),
+        )
+
+    assert new_owner[0].missing == [0]
+    assert cache.lookup([b"k0"]).pending, "the claim of the new owner is still open"
+
+
+def test_an_output_without_a_row_axis_frees_the_claimed_rows(monkeypatch):
+    state = _state("clean_mlp")
+    cache = state.result_cache
+    arrays = {"x": np.ones((1, 16), dtype=np.float32)}
+    request = predict._Request(tensors=arrays)
+    plan = _fake_plan(cache, request, arrays, claim=[b"k0"])
+    plan.feeds = arrays
+
+    response = _run_plan(
+        state,
+        cache,
+        request,
+        monkeypatch,
+        plan,
+        lambda _s, _f: ({"output_0": np.float32(1.0)}, 0.0),
+    )
+
+    assert response.status_code == 200
+    assert cache.lookup([b"k0"]).missing == [0], "the claim was released"
+
+
+def test_a_request_past_its_deadline_claims_no_rows():
+    state = _state("clean_mlp")
+    cache = state.result_cache
+    request = predict._Request(inputs={"x": _x(30.0)})
+
+    with pytest.raises(predict.ApiError) as raised:
+        predict._cache_prepare(state, cache, request, {}, True, time.monotonic() - 10)
+
+    assert raised.value.status_code == 503
+    keys = predict.tensor_keys({"x": np.full((1, 16), 30.0, dtype=np.float32)}, 1)
+    assert cache.lookup(keys).missing == [0]
+
+
+def test_an_empty_text_list_is_a_400():
+    state = _state("clean_mlp")
+    state.text = TextIO(tokenizer=None, max_length=8)
+    client = TestClient(build_app(state))
+
+    response = client.post("/predict", json={"text": []})
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "invalid_input"
 
 
 def test_a_graph_model_serves_with_no_cache(gcn_client):

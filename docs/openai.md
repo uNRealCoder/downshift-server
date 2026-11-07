@@ -85,7 +85,7 @@ response = client.embeddings.create(model="bge-small", input="hello", dimensions
 
 ## Usage
 
-`usage.prompt_tokens` and `usage.total_tokens` are the same number: the count of tokens of all texts, without the padding. A request that the result cache answers has the same count as a request that the model answers.
+`usage.prompt_tokens` and `usage.total_tokens` are the same number: the count of tokens of all texts, without the padding. A request that the result cache answers has the same count as a request that the model answers. The count includes the prompt prefix and the special tokens, because the tokenizer produced them.
 
 ## Errors
 

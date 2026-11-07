@@ -48,6 +48,10 @@ All notable changes to this project are documented here. Format follows
 ### Fixed
 
 - On ONNX Runtime, `--device cuda:N` now serves on GPU `N`. Before, it served on the CPU with no error.
+- With the result cache on, a request no longer gets the error of another request. Before, if the first request for a row failed (for example, a `400` for another row of its batch), each request that waited for that row got the same error. Now each waiting request computes the row itself.
+- With the result cache on, a request that ends late no longer frees a row that a newer request owns. A request that ends with an output without a row axis no longer makes the other requests wait for its rows. A request that is past `--request-timeout` no longer claims rows.
+- `/predict` with `"text": []` now gives `400` (`invalid_input`).
+- The token count in `usage` of `/v1/embeddings` now comes from the tokenizer. Before, a model with no `attention_mask` input gave the padded length, and the count changed with the longest row of the batch.
 - `--request-timeout` now stops the request at the set time. Before, a running step could pass the limit, and the `503` came late.
 - The `--help` of `--workers` said that each worker exports the model. The parent exports and verifies one time, and each worker loads that result.
 - The docs agree with the code again. `docs/cli.md` lists `--axis-max`, `--export-cache-dir`, `--tokenizer-from`, `DOWNSHIFT_AXIS_MAX` and `DOWNSHIFT_EXPORT_CACHE_DIR`, and its steps to add a `serve` option are correct. `docs/serving.md` has the current signatures, `ServingState` fields and backend errors. `docs/python-api.md` says that `check()` never reads the export memo. `docs/production.md` says that each `--workers` worker gives `503` on `/ready` while it loads.

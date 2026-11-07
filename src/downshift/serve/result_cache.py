@@ -90,12 +90,13 @@ class ResultCache:
         if future is not None:
             future.set_result(row)
 
-    def fail(self, keys: list[bytes], exc: BaseException) -> None:
-        """The owner could not compute these rows. The waiters get the same error."""
+    def fail(self, keys: list[bytes]) -> None:
+        """The owner could not compute these rows. The waiters get a neutral error, never the
+        error of the owner, and compute the rows themselves."""
         with self._lock:
             futures = [f for f in (self._flying.pop(key, None) for key in keys) if f is not None]
         for future in futures:
-            future.set_exception(exc)
+            future.set_exception(RuntimeError("the owner of the row failed"))
 
     def stats(self) -> dict[str, int]:
         with self._lock:

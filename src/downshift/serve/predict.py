@@ -13,7 +13,7 @@ from typing import Any
 
 import numpy as np
 import orjson
-from fastapi import HTTPException, Response
+from fastapi import Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError
@@ -119,14 +119,16 @@ def resolve_prompt(state: ServingState, prompt_name: str | None, has_text: bool)
 
 def _text_feeds(
     state: ServingState, text: list[str], declared: dict[str, str | None], prompt: str = ""
-) -> dict[str, np.ndarray]:
-    """Tokenize `text` (each row after `prompt`) into the graph inputs."""
+) -> tuple[dict[str, np.ndarray], list[int]]:
+    """Tokenize `text` (each row after `prompt`) into the graph inputs. Also returns the token
+    count of each row, from the tokenizer output before it is cut to the model inputs."""
     assert state.text is not None  # run_predict refuses a text request without it
     encoded = state.text.encode([prompt + row for row in text] if prompt else text)
     missing = [n for n in state.input_names if n not in encoded]
     if missing:
         raise ValueError(f"the tokenizer does not produce the model's inputs {missing}")
-    return {n: to_numpy(n, encoded[n], declared.get(n)) for n in state.input_names}
+    feeds = {n: to_numpy(n, encoded[n], declared.get(n)) for n in state.input_names}
+    return feeds, _row_tokens(encoded)
 
 
 def _vocab_violation(state: ServingState, feeds: dict[str, np.ndarray]) -> str | None:
@@ -280,6 +282,7 @@ class _Request:
     graphs: list[dict[str, Any]] | None = None
     encoding: OutputEncoding | RequestOutputEncoding | None = None
     dimensions: int | None = None  # /v1/embeddings: keep the first values of each vector
+    tokens: list[int] | None = None  # set by _prepare_feeds for a text request
 
 
 Parse = Callable[[], _Request]
@@ -323,7 +326,9 @@ def _prepare_feeds(
                 state, request.graphs, tensors, state.options.max_input_bytes
             )
         elif request.text is not None:
-            feeds = _text_feeds(state, request.text, state.declared_dtypes, request.prompt)
+            feeds, request.tokens = _text_feeds(
+                state, request.text, state.declared_dtypes, request.prompt
+            )
         else:
             feeds = _tensor_feeds(state, request)
     except (ValueError, TypeError, KeyError) as exc:
@@ -500,9 +505,12 @@ def _json_request(state: ServingState, graph: bool, body: bytes) -> _Request:
             "this model takes tensors only. It was not loaded from a Hugging Face repo "
             "directory with tokenizer files. Send 'inputs' (see GET /schema).",
         )
+    text = as_batch(req.text) if req.text is not None else None
+    if text == []:
+        raise ApiError(400, "invalid_input", "'text' is an empty list. Send at least one text")
     return _Request(
         inputs=req.inputs,
-        text=as_batch(req.text) if req.text is not None else None,
+        text=text,
         prompt=resolve_prompt(state, req.prompt_name, req.text is not None),
         encoding=req.output_encoding,
     )
@@ -595,6 +603,7 @@ class _CachePlan:
     feeds: dict[str, np.ndarray] | None  # for the missing rows only. None if there are none
     owned: list[bytes] = field(default_factory=list)  # the keys that this request claimed
     passthrough: bool = False  # an empty batch: run the model once and skip the cache
+    tokens: list[int] | None = None  # the token count of each row of `feeds`, for a text request
 
 
 def _row_count_violation(state: ServingState, rows: int) -> str | None:
@@ -620,10 +629,12 @@ def _cache_prepare(
     request: _Request,
     timings_ms: dict[str, float],
     use_lookup: bool = True,
+    deadline: float | None = None,
 ) -> _CachePlan:
     """The prep hop of a cached request. A tensor request is checked whole before the lookup,
     so a hit never hides a client error. Only text rows that missed are tokenized. The lookup
-    claims the missed rows; a later failure in this hop releases them."""
+    claims the missed rows; a later failure in this hop releases them. A request that is past
+    its `deadline` claims nothing."""
     start = time.perf_counter()
     arrays: dict[str, np.ndarray] | None = None
     try:
@@ -645,6 +656,7 @@ def _cache_prepare(
     if not keys:
         whole, _, _ = _prepare_feeds(state, request)
         return _CachePlan(request, arrays, keys, Lookup(), whole, passthrough=True)
+    _check_timeout(state, deadline)
     cache_start = time.perf_counter()
     # Cache-Control: no-cache reads and claims nothing. The rows are still stored.
     found = cache.lookup(keys) if use_lookup else Lookup(missing=list(range(len(keys))))
@@ -652,27 +664,28 @@ def _cache_prepare(
     timings_ms["cache"] = round((time.perf_counter() - cache_start) * 1000, 2)
     timings_ms["cache_hits"] = len(found.hits) + len(found.pending)
     timings_ms["cache_rows"] = len(keys)
+    tokens: list[int] | None = None
     try:
         feeds: dict[str, np.ndarray] | None = None
         if found.missing:
             if arrays is not None and len(found.missing) == len(keys):
                 feeds = arrays
             else:
-                feeds, _, _ = _prepare_feeds(
-                    state, _subset(request, arrays, found.missing), skip_batch_axis=True
-                )
-    except BaseException as exc:
-        cache.fail(claimed, exc)
+                subset = _subset(request, arrays, found.missing)
+                feeds, _, _ = _prepare_feeds(state, subset, skip_batch_axis=True)
+                tokens = subset.tokens
+    except BaseException:
+        cache.fail(claimed)
         raise
     timings_ms["prep"] = round((time.perf_counter() - start) * 1000, 2)
-    return _CachePlan(request, arrays, keys, found, feeds, claimed)
+    return _CachePlan(request, arrays, keys, found, feeds, claimed, tokens=tokens)
 
 
 def _release_claims(cache: ResultCache, prep: asyncio.Future[_CachePlan]) -> None:
     """The request left before its plan arrived: fail its claimed rows, so the waiters compute
     them themselves."""
     if not prep.cancelled() and prep.exception() is None:
-        cache.fail(prep.result().owned, RuntimeError("the request did not finish"))
+        cache.fail(prep.result().owned)
 
 
 async def _await_row(future: Future[Row]) -> Row:
@@ -709,7 +722,7 @@ async def _run_cached(
         request = parsed or (
             parse() if parse is not None else _parse(state, body, graph, binary, timings_ms)
         )
-        return _cache_prepare(state, cache, request, timings_ms, use_lookup)
+        return _cache_prepare(state, cache, request, timings_ms, use_lookup, deadline)
 
     # If the client leaves during prep, the thread still finishes and claims rows: release them.
     prep = asyncio.ensure_future(_run_in(pool, "prep_wait", timings_ms, prepare))
@@ -723,7 +736,9 @@ async def _run_cached(
     rows: dict[int, Row] = dict(plan.found.hits)
     served = len(plan.found.hits)  # the rows that this request did not compute
 
-    async def compute(feeds: dict[str, np.ndarray], indexes: list[int]) -> Response | None:
+    async def compute(
+        feeds: dict[str, np.ndarray], indexes: list[int], tokens: list[int] | None
+    ) -> Response | None:
         """Run the model on `feeds` (the rows `indexes`) and give each row to the cache."""
 
         def infer_rows() -> Response | None:
@@ -732,7 +747,10 @@ async def _run_cached(
             timings_ms["infer"] = round(infer_ms, 2)
             by_row = all(o.ndim and o.shape[0] == len(indexes) for o in outputs.values())
             if plan.passthrough or (not by_row and len(indexes) == len(plan.keys)):
-                # An empty batch, or outputs without a row axis: nothing to cache or join.
+                # An empty batch, or outputs without a row axis: nothing to cache or join. The
+                # waiters of the claimed rows compute them themselves.
+                cache.fail(owned)
+                owned.clear()
                 if encode is not None:
                     return encode(outputs, plan.request, None, None)
                 return _encode_response(
@@ -740,12 +758,13 @@ async def _run_cached(
                 )
             if not by_row:
                 raise RuntimeError("an output of the model does not follow the batch size")
-            tokens = _row_tokens(feeds) if plan.request.text is not None else None
             for n, i in enumerate(indexes):
                 rows[i] = {name: out[n] for name, out in outputs.items()}
                 if tokens is not None:
                     rows[i][TOKENS_KEY] = np.asarray(tokens[n])
                 cache.complete(plan.keys[i], rows[i])
+                if plan.keys[i] in owned:  # a later fail() must not touch a new owner's claim
+                    owned.remove(plan.keys[i])
             return None
 
         done: Response | None = await _run_in(
@@ -756,17 +775,15 @@ async def _run_cached(
     try:
         _check_timeout(state, deadline)
         if plan.feeds is not None:
-            done = await compute(plan.feeds, plan.found.missing)
+            done = await compute(plan.feeds, plan.found.missing, plan.tokens)
             if done is not None:
                 return done
-        # A waiter whose owner failed computes the row itself.
+        # A waiter whose owner failed computes the row itself. It never sees the owner's error.
         retry: list[int] = []
         for i, future in plan.found.pending.items():
             try:
                 rows[i] = await _await_row(future)
                 served += 1
-            except HTTPException:
-                raise
             except Exception:  # noqa: BLE001 - any failure of the owner means "compute it here"
                 retry.append(i)
         if retry:
@@ -777,14 +794,11 @@ async def _run_cached(
                 timings_ms,
                 lambda: _prepare_feeds(state, subset, skip_batch_axis=True)[0],
             )
-            done = await compute(feeds, retry)
+            done = await compute(feeds, retry, subset.tokens)
             if done is not None:
                 return done
-    except BaseException as exc:
-        cache.fail(
-            owned,
-            exc if isinstance(exc, Exception) else RuntimeError("the request did not finish"),
-        )
+    except BaseException:
+        cache.fail(owned)
         raise
 
     def finish() -> Response:
@@ -876,7 +890,7 @@ async def run_predict(
         _check_timeout(state, deadline)
         outputs, infer_ms = _infer(state, feeds)
         timings_ms["infer"] = round(infer_ms, 2)
-        tokens = _row_tokens(feeds) if with_tokens and request.text is not None else None
+        tokens = request.tokens if with_tokens else None
         if encode is not None:
             return encode(outputs, request, tokens, layout)
         return _encode_response(

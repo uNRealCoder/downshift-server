@@ -475,3 +475,22 @@ def test_default_prompt_name_applies_when_a_request_names_none(tmp_path):
     assert np.allclose(
         _embed(client, text=["capital"]), _embed(client, text=["capital"], prompt_name="query")
     )
+
+
+def test_token_counts_come_from_the_tokenizer_not_from_the_padded_model_inputs():
+    from types import SimpleNamespace
+
+    from downshift.serve import predict
+
+    encoded = {
+        "input_ids": np.array([[5, 6, 7, 0], [8, 9, 0, 0]]),
+        "attention_mask": np.array([[1, 1, 1, 0], [1, 1, 0, 0]]),
+    }
+    state = SimpleNamespace(
+        text=SimpleNamespace(encode=lambda _text: encoded), input_names=["input_ids"]
+    )
+
+    feeds, tokens = predict._text_feeds(state, ["a", "b"], {})
+
+    assert list(feeds) == ["input_ids"]
+    assert tokens == [3, 2]
