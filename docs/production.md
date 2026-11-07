@@ -188,6 +188,8 @@ If the model was trained for Matryoshka cuts, start the server with `--matryoshk
 
 To count the requests, start the server with `--metrics` (or `DOWNSHIFT_METRICS=1`). The server then serves the counts on `GET /metrics` as Prometheus text (format 0.0.4). If you do not set the option, the route does not exist (`404`), and the request path counts nothing. `/metrics` follows the API key rule of the other routes: send `Authorization: Bearer <key>`. The probes `/health` and `/ready` are the only routes without a key.
 
+In the 1.0.0 benchmark, `--metrics` cost 14 to 61 microseconds for each request (1.6% to 5.4% of the requests per second at concurrency 1) on three small models. The cost was inside the noise on a larger model. Refer to the [benchmark report](../bench/results/v1.0.0/REPORT.md).
+
 Each series has the label `worker`. Its value is `0`, because `--metrics` needs one worker.
 
 | Name | Type | Labels | Meaning |

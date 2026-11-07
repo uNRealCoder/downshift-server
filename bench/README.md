@@ -28,12 +28,48 @@ A new published run goes in `results/vX.Y.Z/` with the same file names as 0.5.0.
 
 | run | report | raw data |
 |---|---|---|
-| **0.5.0**: naive vs 0.4.0 vs 0.5.0, one session | [`results/v0.5.0/REPORT.md`](results/v0.5.0/REPORT.md) | `results/v0.5.0/`: `results.json`, `results_hf.json`; chart data `chart_runs.csv`, `chart_stages.csv` |
+| **1.0.0**: naive vs 0.5.1 vs 1.0.0, one session; metrics and result cache rows | [`results/v1.0.0/REPORT.md`](results/v1.0.0/REPORT.md) | `results/v1.0.0/`: `results.json`, `results_hf.json`, `rerun_mlp_large.json`; chart data `chart_runs.csv`, `chart_stages.csv` |
+| 0.5.0: naive vs 0.4.0 vs 0.5.0, one session | [`results/v0.5.0/REPORT.md`](results/v0.5.0/REPORT.md) | `results/v0.5.0/`: `results.json`, `results_hf.json`; chart data `chart_runs.csv`, `chart_stages.csv` |
 | 0.4.0: naive vs 0.4.0, behind the launch post *Stop hand-rolling model servers* | [`REPORT_v0.4.0.md`](REPORT_v0.4.0.md), [`BLOG_APPENDIX_v0.4.0.md`](BLOG_APPENDIX_v0.4.0.md) | `results_v0.4.0.json`, `results_hf*_v0.4.0.json` |
 
 The 0.4.0 files were produced by the harness as of commit `02419cf` and are kept unchanged
 because the post links to them. Their numbers are not comparable row-for-row with the 0.5.0 run,
 which re-measured 0.4.0 alongside 0.5.0 in the same session.
+
+## 1.0.0 at a glance
+
+From [`results/v1.0.0/REPORT.md`](results/v1.0.0/REPORT.md) (run 2026-11-07/08, about 57 minutes of
+measuring with the default 3 s windows; 5 s on MiniLM); 16-CPU Windows machine, CPU only, batch 1,
+JSON bodies, 1.0.0rc1 from the checkout against 0.5.1 from PyPI. The result cache is OFF in every
+headline row (`--result-cache-rows 0`): the harness sends one body again and again, so a cache would
+answer from memory. Not run: the `--workers` sweep and Prompt Guard.
+
+- **1.0 matches 0.5.1 on throughput and latency, with no gain.** Concurrency 1, `clean_mlp`: 1114
+  vs 1039 rps, p50 0.77 vs 0.80 ms, p99 1.79 vs 2.02 ms. `tiny_bert`: 633 vs 591 rps, p99 6.7 vs
+  7.4 ms. `scatter_include_self_false`: 1186 vs 1222 rps. Peak rps: `clean_mlp` 1428 vs 1421,
+  `tiny_bert` 1067 vs 1183 (-10%), `scatter_include_self_false` 1387 vs 1443 (-4%). `mlp_large`
+  peak was 765 vs 965 in the main pass but 939 vs 989 (-5%) when measured again (the main-pass row
+  does not fit its own `--metrics` row; see "Notes on this run"). MiniLM, one sentence, c=1/c=8: 185/486 vs
+  199/524 rps (-7%), p50 4.9 vs 4.6 ms.
+- **`--metrics` costs 14 to 61 microseconds a request.** Concurrency 1: `clean_mlp` 1114 to 1054 rps
+  (+51 us, -5.4%), `tiny_bert` 633 to 610 (+61 us, -3.7%), `scatter_include_self_false` 1186 to 1167
+  (+14 us, -1.6%). Peak rps: -7.2%, -0.6%, -5.4%. On `mlp_large` the cost is inside the noise
+  (re-run: peak 939 vs 920 rps, -2%).
+- **The result cache, all hits, is a best case.** `clean_mlp` peak 1824 vs 1428 rps (+28%), p50
+  at c=1 0.69 vs 0.77 ms; `mlp_large` 1742 vs 765 rps (939 in the re-run) and c=1 p50 0.80 vs 2.17 ms;
+  MiniLM short_b1 1456 vs 185 rps at c=1 (p50 0.62 vs 4.89 ms) and 1911 vs 486 at c=8. It does
+  nothing for `tiny_bert` and `scatter_include_self_false`, where the default cache is off (rows
+  `dependent` and `not checked`).
+- **Correctness is unchanged.** Every downshift row matches eager PyTorch to at most 5.8e-07
+  (safetensors rows 4.8e-07 at most); MiniLM 1.3e-07 against `--backend torch`, cosine 1.0.
+  `scatter_include_self_false` is DEGRADED and still serves from torch (error 2.8e-08), where the
+  hand-rolled ONNX server is off by 1.2. Failed requests across every window: 0.
+- **`/health` stays responsive** under load on MiniLM with the cache off: worst p99 27 ms for 1.0.0rc1
+  (24 ms for 0.5.1), against 420 ms for the hand-rolled `async def` server. With the cache on
+  and about 1900 requests/s, the worst `/health` p99 is 194 ms.
+- **The hand-rolled servers win on the tiny fixtures here.** `clean_mlp` peak: ONNX Runtime
+  FastAPI 2069 and `async def` torch 3216 against 1428 for downshift. Downshift wins where it
+  matters: MiniLM 486 vs 141 rps at c=8, and the correct answer on `scatter_include_self_false`.
 
 ## 0.5.0 at a glance
 
@@ -80,7 +116,7 @@ Windows machine, CPU only, peak requests/s at batch 1 unless stated. Chart data:
 From a checkout, in a venv that also has the previous release pip-installed (non-editable):
 
 ```bash
-pip install "downshift-server[all]==0.4.0" aiohttp safetensors   # the "installed" target
+pip install "downshift-server[all]==0.5.1" aiohttp safetensors   # the "installed" target
 ```
 
 The checkout is never installed: every process the harness starts finds it through `PYTHONPATH`
