@@ -64,7 +64,7 @@ def _matryoshka_cut(vectors: np.ndarray, dimensions: int) -> np.ndarray:
     fixed, only the vector can tell."""
     if dimensions > vectors.shape[-1]:
         _check_dimensions(dimensions, vectors.shape[-1])
-    cut = vectors[:, :dimensions]
+    cut = vectors[:, :dimensions].astype(np.float32, copy=False)  # float16 would overflow
     norms = np.linalg.norm(cut, axis=1, keepdims=True)
     return cut / np.where(norms == 0, 1.0, norms)
 

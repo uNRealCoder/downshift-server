@@ -319,6 +319,15 @@ def test_the_encoder_checks_the_range_if_the_width_is_not_known():
     _check_dimensions(5, None)
 
 
+def test_a_float16_vector_is_scaled_without_overflow():
+    vectors = np.full((1, 4), 300.0, dtype=np.float16)  # the square of 300 is above 65504
+
+    cut = _matryoshka_cut(vectors, 4)
+
+    assert np.allclose(cut, 0.5)
+    assert cut.dtype == np.float32
+
+
 def test_a_zero_vector_stays_zero():
     cut = _matryoshka_cut(np.zeros((1, 4), dtype=np.float32), 2)
 
