@@ -46,6 +46,7 @@ dev = [
     "httpx>=0.24",  # FastAPI TestClient
     "safetensors>=0.4",  # reference reader/writer for the binary wire format tests
     "prometheus-client>=0.20",  # parses the /metrics text in the tests
+    "openai>=1.40",  # the client tests of the /v1 routes
 ]
 gnn = [
     "torch-geometric>=2.5",
