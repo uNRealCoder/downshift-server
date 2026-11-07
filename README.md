@@ -7,7 +7,7 @@ Everything that downshift serves is already on the machine: a PyTorch checkpoint
 ```
 $ downshift serve examples.scatter_include_self_false:make_model
 
-2026-10-20 16:20:33 WARNING downshift.serve: DOWNSHIFT_SERVER_API_KEY is not set, so the endpoints (including /metadata) are unauthenticated. Set it to require a fixed API key, or add your own authentication middleware.
+2026-10-20 16:20:33 WARNING downshift.serve: DOWNSHIFT_API_KEY is not set, so the endpoints (including /metadata) are unauthenticated. Set it to require a fixed API key, or add your own authentication middleware.
 2026-10-20 16:20:33 INFO downshift.report: loading examples.scatter_include_self_false:make_model
 2026-10-20 16:20:33 INFO downshift.report: will listen on http://127.0.0.1:8000 (not ready yet)
 2026-10-20 16:20:36 INFO downshift.report: verify: sample 1/8, x [6, 8], segment_ids [6]

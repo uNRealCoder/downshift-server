@@ -60,7 +60,7 @@ The JSON wire formats and the safetensors wire format are part of the contract. 
 | `Server-Timing` | No | Only with `--server-timing`. The stage names are listed in `http-api.md`. |
 | `Retry-After` | No | On a `503` for "not ready" and "at capacity". |
 | `WWW-Authenticate` | No | On a `401`. |
-| `Authorization` | No | `Bearer <key>`, if `DOWNSHIFT_SERVER_API_KEY` is set. |
+| `Authorization` | No | `Bearer <key>`, if `DOWNSHIFT_API_KEY` is set. |
 | `Cache-Control` | No | `no-cache` on a request skips the lookup in the result cache. |
 
 ## OpenAI routes
@@ -114,8 +114,9 @@ Refer to "Environment variables" in [`cli.md`](cli.md). These variables are froz
 - Server: `DOWNSHIFT_HOST`, `DOWNSHIFT_PORT`, `DOWNSHIFT_WORKERS`, `DOWNSHIFT_DEVICE`, `DOWNSHIFT_BACKEND`, `DOWNSHIFT_WARMUP`, `DOWNSHIFT_SAMPLES`.
 - Threads and limits: `DOWNSHIFT_INTRA_OP_THREADS`, `DOWNSHIFT_INTER_OP_THREADS`, `DOWNSHIFT_PREP_THREADS`, `DOWNSHIFT_MAX_INPUT_BYTES`, `DOWNSHIFT_MAX_BODY_BYTES`, `DOWNSHIFT_MAX_CONCURRENCY`, `DOWNSHIFT_MAX_QUEUE`, `DOWNSHIFT_REQUEST_TIMEOUT`, `DOWNSHIFT_EXECUTION`.
 - Request and response: `DOWNSHIFT_OUTPUT_ENCODING`, `DOWNSHIFT_AXIS_MAX`, `DOWNSHIFT_RESULT_CACHE_ROWS`, `DOWNSHIFT_SERVER_TIMING`, `DOWNSHIFT_METRICS`, `DOWNSHIFT_SERVED_MODEL_NAME`, `DOWNSHIFT_MATRYOSHKA`, `DOWNSHIFT_REQUEST_ID_HEADER`, `DOWNSHIFT_CACHE_HEADER`.
-- Security: `DOWNSHIFT_SERVER_API_KEY`, `DOWNSHIFT_SSL_CERTFILE`, `DOWNSHIFT_SSL_KEYFILE`, `DOWNSHIFT_SSL_KEYFILE_PASSWORD`.
+- Security: `DOWNSHIFT_API_KEY`, `DOWNSHIFT_SSL_CERTFILE`, `DOWNSHIFT_SSL_KEYFILE`, `DOWNSHIFT_SSL_KEYFILE_PASSWORD`.
 - Export cache: `DOWNSHIFT_EXPORT_CACHE_DIR`.
+- Deprecated, removed in a later minor release: `DOWNSHIFT_SERVER_API_KEY`. It is the old name of `DOWNSHIFT_API_KEY`. If only the old name is set, downshift uses it and logs one warning. If both are set, `DOWNSHIFT_API_KEY` wins.
 - Tolerances: `DOWNSHIFT_TOL_FLOAT32_ATOL`, `DOWNSHIFT_TOL_FLOAT32_RTOL`, `DOWNSHIFT_TOL_FLOAT64_ATOL`, `DOWNSHIFT_TOL_FLOAT64_RTOL`, `DOWNSHIFT_TOL_FLOAT16_ATOL`, `DOWNSHIFT_TOL_FLOAT16_RTOL`, `DOWNSHIFT_TOL_BFLOAT16_ATOL`, `DOWNSHIFT_TOL_BFLOAT16_RTOL`.
 
 ## Python API

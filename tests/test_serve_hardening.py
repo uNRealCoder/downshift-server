@@ -23,7 +23,7 @@ from downshift.serve.engine import ServeOptions, ServingState, prepare_serving
 from downshift.serve.options import BackendChoice
 
 MLP_INPUT = {"inputs": {"x": [[0.0] * 16]}}
-NOT_SET = "DOWNSHIFT_SERVER_API_KEY is not set"
+NOT_SET = "DOWNSHIFT_API_KEY is not set"
 KEY = "s3cret"
 AUTH = {"Authorization": f"Bearer {KEY}"}
 BODY_LIMIT = 200

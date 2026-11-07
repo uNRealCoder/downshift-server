@@ -6,12 +6,12 @@ Each flag on this page is in [`cli.md`](cli.md#serve), with its environment vari
 
 ## Authentication
 
-Set `DOWNSHIFT_SERVER_API_KEY`. Each route except `/health` and `/ready` then needs `Authorization: Bearer <key>`. The comparison takes constant time. Any other request gets a `401` with `WWW-Authenticate: Bearer`. The probes stay open, so Kubernetes never needs the key.
+Set `DOWNSHIFT_API_KEY`. Each route except `/health` and `/ready` then needs `Authorization: Bearer <key>`. The comparison takes constant time. Any other request gets a `401` with `WWW-Authenticate: Bearer`. The probes stay open, so Kubernetes never needs the key.
 
 ```bash
-export DOWNSHIFT_SERVER_API_KEY="$(openssl rand -hex 32)"
+export DOWNSHIFT_API_KEY="$(openssl rand -hex 32)"
 downshift serve my_pkg.models:build
-curl -s localhost:8000/predict -H "Authorization: Bearer $DOWNSHIFT_SERVER_API_KEY" \
+curl -s localhost:8000/predict -H "Authorization: Bearer $DOWNSHIFT_API_KEY" \
   -H 'content-type: application/json' -d '{"inputs": {"x": [[0.0, 0.1]]}}'
 ```
 

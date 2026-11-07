@@ -24,7 +24,7 @@ If `serve` starts with `--ssl-certfile`, all routes use HTTPS on the same port. 
 
 ## Authentication
 
-Authentication is optional. It uses one shared key. The key is active when `DOWNSHIFT_SERVER_API_KEY` is set. It is also active when you give a value to `build_app(..., api_key=...)` or `app_for(..., api_key=...)`. Both default to the variable. When the key is active, every route except `/health` and `/ready` needs `Authorization: Bearer <key>`.
+Authentication is optional. It uses one shared key. The key is active when `DOWNSHIFT_API_KEY` is set. It is also active when you give a value to `build_app(..., api_key=...)` or `app_for(..., api_key=...)`. Both default to the variable. When the key is active, every route except `/health` and `/ready` needs `Authorization: Bearer <key>`.
 
 Downshift matches the scheme without regard to case. It compares the key in constant time (`hmac.compare_digest`). A missing or wrong credential gives a `401` with the header `WWW-Authenticate: Bearer` and this body:
 
@@ -39,7 +39,7 @@ If the key is unset or an empty string, downshift checks nothing. It logs one `W
 The rest of this page does not repeat the `401` for each route.
 
 ```bash
-curl -s localhost:8000/schema -H "Authorization: Bearer $DOWNSHIFT_SERVER_API_KEY"
+curl -s localhost:8000/schema -H "Authorization: Bearer $DOWNSHIFT_API_KEY"
 ```
 
 ### `GET /`
@@ -352,7 +352,7 @@ Status codes:
 | `400` | `{"detail": "input_ids contains -1, outside the vocabulary [0, 30522)", "code": "invalid_input"}` | A model served from a Hugging Face repo directory has an `input_ids` value outside `[0, vocab_size)`. Downshift checks this before the inference, because ONNX Runtime wraps a negative index and does not refuse it. |
 | `400` | `{"detail": "x axis 1 is 5; this model takes 16", "code": "invalid_input"}` | The rank or a fixed axis is different from the declared inputs of the model. Downshift checks this before the inference on both backends. |
 | `400` | `{"detail": "...", "code": "invalid_input"}` | ONNX Runtime rejected the inputs (`InvalidArgument`). Any other failure inside the inference, on either backend, is a `500`. |
-| `401` | `{"detail": "Authorization header is not set or incorrect", "code": "unauthorized"}`, header `WWW-Authenticate: Bearer` | `DOWNSHIFT_SERVER_API_KEY` is set, and the request has no matching bearer token. This applies to every route except `/health` and `/ready`. |
+| `401` | `{"detail": "Authorization header is not set or incorrect", "code": "unauthorized"}`, header `WWW-Authenticate: Bearer` | `DOWNSHIFT_API_KEY` is set, and the request has no matching bearer token. This applies to every route except `/health` and `/ready`. |
 | `413` | `{"detail": "request body is N bytes; the server limit is M bytes (--max-body-bytes)", "code": "body_too_large"}` | The body is larger than `--max-body-bytes` (default 32 MiB). The server rejects it before it parses it. `N` is the declared `Content-Length`. For a chunked body, `N` is the running total when it passed the limit. |
 | `415` | `{"detail": "unsupported Content-Type; ...", "code": "unsupported_media_type"}` | The body is not JSON and not safetensors (`application/vnd.safetensors` or `application/octet-stream`). |
 | `422` | `{"detail": [...], "code": "invalid_request"}`. `detail` is the validation error list of FastAPI | The body is empty (`missing`), the JSON is malformed (`json_invalid`, with the byte offset in `loc`), or a field fails validation (`loc` starts with `"body"`). |
@@ -504,7 +504,7 @@ To get a safetensors response, send `Accept: application/vnd.safetensors`, or se
 | Header | Direction | Meaning |
 |---|---|---|
 | `X-Request-Id` | Request (optional), response (always) | To use a different name, set `DOWNSHIFT_REQUEST_ID_HEADER` (for example `X-Correlation-Id`). Downshift returns it if the client sent it. Otherwise it makes an ID of 16 hexadecimal characters (`RequestIdMiddleware`). The `request_id` field of a `500` body has the same value. Each server log line that is written while the request is served (including the request line of `downshift.access`) has it too. |
-| `Authorization` | Request | `Bearer <key>`. It is required on every route except `/health` and `/ready` when `DOWNSHIFT_SERVER_API_KEY` is set. |
+| `Authorization` | Request | `Bearer <key>`. It is required on every route except `/health` and `/ready` when `DOWNSHIFT_API_KEY` is set. |
 | `WWW-Authenticate` | Response (`401` only) | `Bearer`. |
 | `Server-Timing` | Response (`/predict`, `/predict/graph` and `/v1/embeddings`, `200` only, only with `--server-timing`) | Off by default. The stages are listed below. Each one has `;dur=<ms>`. The access log line has the same split as `timings_ms`. |
 | `X-Downshift-Cache` | Response (`/predict`, only if the result cache is on) | To use a different name, set `DOWNSHIFT_CACHE_HEADER`. `hit`: the server computed no row for this request. `partial`: it computed some rows. `miss`: it computed all rows. |

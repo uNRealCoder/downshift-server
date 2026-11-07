@@ -3,6 +3,7 @@ them. A flag or keyword argument wins over the environment, which wins over the 
 variables are read once, at import.
 """
 
+import logging
 import math
 import os
 import re
@@ -193,7 +194,21 @@ WORKERS = _env_int("DOWNSHIFT_WORKERS", 1)
 
 # If it is set, every route except /health and /ready needs "Authorization: Bearer <this value>".
 # None (unset) means no authentication, with a startup warning that says so.
-API_KEY = os.environ.get("DOWNSHIFT_SERVER_API_KEY")
+API_KEY = os.environ.get("DOWNSHIFT_API_KEY")
+
+# DOWNSHIFT_SERVER_API_KEY is the old name. It works until the next minor release.
+if "DOWNSHIFT_SERVER_API_KEY" in os.environ:
+    _both = "DOWNSHIFT_API_KEY" in os.environ
+    logging.getLogger("downshift.serve").warning(
+        "DOWNSHIFT_SERVER_API_KEY is the old name and will stop working in a later release. "
+        + (
+            "Both names are set, so downshift uses DOWNSHIFT_API_KEY. Remove the old name."
+            if _both
+            else "Set DOWNSHIFT_API_KEY instead."
+        )
+    )
+    if not _both:
+        API_KEY = os.environ["DOWNSHIFT_SERVER_API_KEY"]
 
 # The header that carries the request ID: the server reads it from a request and sets it on
 # each response.

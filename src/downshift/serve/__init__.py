@@ -37,7 +37,7 @@ def app_for(
     directory for the tokenizer, pooling and labels (as --tokenizer-from). `source` is the
     label of /metadata and /schema. `options` are ServeOptions fields.
 
-    `api_key` defaults to DOWNSHIFT_SERVER_API_KEY; None turns it off. An earlier export of
+    `api_key` defaults to DOWNSHIFT_API_KEY; None turns it off. An earlier export of
     the same model and options is reused from the in-process memo and from
     `export_cache_dir`; `cache=False` skips both.
     """

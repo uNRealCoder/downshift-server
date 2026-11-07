@@ -213,7 +213,7 @@ Downshift reads these variables one time, when `downshift` is imported. To chang
 | `DOWNSHIFT_WORKERS` | `1` | `--workers` (CLI only) |
 | `DOWNSHIFT_SSL_CERTFILE`, `DOWNSHIFT_SSL_KEYFILE` | unset | `--ssl-certfile`, `--ssl-keyfile` (CLI only) |
 | `DOWNSHIFT_SSL_KEYFILE_PASSWORD` | unset | The password of an encrypted key. There is no flag, because a flag shows in the process list. |
-| `DOWNSHIFT_SERVER_API_KEY` | unset | Requires `Authorization: Bearer <key>` on each route except `/health` and `/ready`. There is no flag, because the key is a secret. |
+| `DOWNSHIFT_API_KEY` | unset | Requires `Authorization: Bearer <key>` on each route except `/health` and `/ready`. There is no flag, because the key is a secret. |
 | `DOWNSHIFT_REQUEST_ID_HEADER` | `X-Request-Id` | The name of the request-ID header. The server reads the ID from this request header and sets it on each response. Use letters, digits and `-` only. An empty value means the default. There is no flag. |
 | `DOWNSHIFT_CACHE_HEADER` | `X-Downshift-Cache` | The name of the result-cache header of `/predict` (`hit`, `partial` or `miss`). Use letters, digits and `-` only. An empty value means the default. There is no flag. |
 | `DOWNSHIFT_TOL_{FLOAT32,FLOAT64,FLOAT16,BFLOAT16}_{ATOL,RTOL}` | refer to "Tolerances" | The default tolerances. |

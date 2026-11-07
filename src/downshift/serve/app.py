@@ -461,7 +461,7 @@ def build_app(
     """The app over `state`, or over the result of `loader`. With a loader, the app binds at
     once: /health is 200, and /ready and the model routes are 503 until the loader finishes.
 
-    `api_key` defaults to DOWNSHIFT_SERVER_API_KEY. None or "" turns it off (with a warning).
+    `api_key` defaults to DOWNSHIFT_API_KEY. None or "" turns it off (with a warning).
     `access_log=False` drops the request lines of `downshift.access`.
     `metrics=True` counts the requests and adds GET /metrics. `worker` is the value of the
     `worker` label of each series.
@@ -472,7 +472,7 @@ def build_app(
     api_key = api_key or None
     if api_key is None:
         logger.warning(
-            "DOWNSHIFT_SERVER_API_KEY is not set, so the endpoints (including /metadata) are "
+            "DOWNSHIFT_API_KEY is not set, so the endpoints (including /metadata) are "
             "unauthenticated. Set it to require a fixed API key, or add your own "
             "authentication middleware."
         )
