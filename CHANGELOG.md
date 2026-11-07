@@ -47,6 +47,7 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- On ONNX Runtime, `--device cuda:N` now serves on GPU `N`. Before, it served on the CPU with no error.
 - `--request-timeout` now stops the request at the set time. Before, a running step could pass the limit, and the `503` came late.
 - The `--help` of `--workers` said that each worker exports the model. The parent exports and verifies one time, and each worker loads that result.
 - The docs agree with the code again. `docs/cli.md` lists `--axis-max`, `--export-cache-dir`, `--tokenizer-from`, `DOWNSHIFT_AXIS_MAX` and `DOWNSHIFT_EXPORT_CACHE_DIR`, and its steps to add a `serve` option are correct. `docs/serving.md` has the current signatures, `ServingState` fields and backend errors. `docs/python-api.md` says that `check()` never reads the export memo. `docs/production.md` says that each `--workers` worker gives `503` on `/ready` while it loads.

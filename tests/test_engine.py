@@ -306,6 +306,11 @@ def test_ort_providers_prefers_cuda_when_available(monkeypatch):
         lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"],
     )
     assert backends_mod._ort_providers("cuda") == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    assert backends_mod._ort_providers("cuda:1") == [
+        ("CUDAExecutionProvider", {"device_id": "1"}),
+        "CPUExecutionProvider",
+    ]
+    assert backends_mod._ort_providers("cpu") == ["CPUExecutionProvider"]
 
 
 class _FakeSession:

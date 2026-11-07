@@ -12,7 +12,7 @@ from torch import nn
 
 from downshift.core.feeds import WIDEN_DTYPES, example_feeds, widen_for_wire
 from downshift.core.verdict import BackendName
-from downshift.core.verify import first_line, new_session
+from downshift.core.verify import OrtProvider, first_line, new_session
 
 _CUDA_EP = "CUDAExecutionProvider"
 _CPU_EP = "CPUExecutionProvider"
@@ -78,28 +78,30 @@ def resolve_device(device: str) -> str:
     return device
 
 
-def _ort_providers(device: str) -> list[str]:
+def _ort_providers(device: str) -> list[OrtProvider]:
+    """The providers for `device`. For cuda:N, the CUDA provider gets device_id N."""
+    if not device.startswith("cuda"):
+        return [_CPU_EP]
     available = ort.get_available_providers()
-    if device == "cuda":
-        if _CUDA_EP not in available:
-            raise ValueError(
-                "--device cuda: onnxruntime has no CUDA execution provider available "
-                f"(providers found: {', '.join(available)}). Install onnxruntime-gpu, or "
-                "pass --device cpu"
-            )
-        return [_CUDA_EP, _CPU_EP]
-    return [_CPU_EP]
+    if _CUDA_EP not in available:
+        raise ValueError(
+            f"--device {device}: onnxruntime has no CUDA execution provider available "
+            f"(providers found: {', '.join(available)}). Install onnxruntime-gpu, or "
+            "pass --device cpu"
+        )
+    _, _, index = device.partition(":")
+    return [(_CUDA_EP, {"device_id": index}) if index else _CUDA_EP, _CPU_EP]
 
 
-def _require_cuda_provider(session: ort.InferenceSession, requested: list[str]) -> None:
+def _require_cuda_provider(session: ort.InferenceSession, device: str) -> None:
     """ORT drops the CUDA provider silently when the CUDA or cuDNN libraries do not load, and
     runs on the CPU. --device cuda promises the GPU, so fail instead."""
-    if requested[0] != _CUDA_EP:
+    if not device.startswith("cuda"):
         return
     actual = session.get_providers()[0]
     if actual != _CUDA_EP:
         raise ValueError(
-            f"--device cuda: onnxruntime could not start {_CUDA_EP} and would have served on "
+            f"--device {device}: onnxruntime could not start {_CUDA_EP} and would have served on "
             f"{actual}. onnxruntime-gpu needs the CUDA and cuDNN runtime libraries that it was "
             "built for on the library path of this machine. Its release notes name the CUDA "
             "major version. Downshift silences the load errors of onnxruntime. To see them, "
@@ -132,10 +134,10 @@ class OnnxRuntimeBackend:
             self.session = session
         else:
             assert model is not None
-            providers = _ort_providers(resolve_device(device))
+            device = resolve_device(device)
             options = _session_options(intra_op_threads, inter_op_threads)
-            self.session = new_session(model, providers, options)
-            _require_cuda_provider(self.session, providers)
+            self.session = new_session(model, _ort_providers(device), options)
+            _require_cuda_provider(self.session, device)
         self.provider = self.session.get_providers()[0]
         self.input_names = [i.name for i in self.session.get_inputs()]
         self.onnx_output_names = [o.name for o in self.session.get_outputs()]

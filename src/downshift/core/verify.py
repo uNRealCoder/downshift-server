@@ -114,9 +114,13 @@ def make_shared_axis0_vary_fn(base_inputs: tuple, dynamic_shapes: tuple) -> Vary
     return vary
 
 
+# A provider name, or (name, provider options) such as ("CUDAExecutionProvider", {"device_id": "1"}).
+OrtProvider = str | tuple[str, dict[str, str]]
+
+
 def new_session(
     model: bytes | str | Path,
-    providers: list[str] | None = None,
+    providers: list[OrtProvider] | None = None,
     options: ort.SessionOptions | None = None,
 ) -> ort.InferenceSession:
     """Build an InferenceSession (CPU by default). The C++ logger of ORT would print each
