@@ -62,7 +62,7 @@ def build_manifest(
             {"file": location, "sha256": sha256_file(onnx_path.parent / location)}
             for location in external_data_files(onnx_path)
         ],
-        "source_model": path_basename(str(source_path)) if source_path else None,
+        "source": path_basename(str(source_path)) if source_path else None,
         "source_sha256": sha256_file(source_path)
         if source_path and source_path.is_file()
         else None,

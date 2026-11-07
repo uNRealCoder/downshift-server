@@ -129,6 +129,6 @@ The `Adapter` protocol is frozen: the attribute `name`, and the methods `matches
 
 ## Files
 
-The manifest `<name>.manifest.json` that `export` writes is frozen. Its fields stay, and `format_version` is `1`: `format_version`, `downshift_version`, `created_utc`, `onnx_file`, `onnx_sha256`, `external_data`, `source_model`, `source_sha256`, `versions`, `opset`, `observed_dtype`, `execution_providers_available` and `verdict`.
+The manifest `<name>.manifest.json` that `export` writes is frozen. Its fields stay, and `format_version` is `1`: `format_version`, `downshift_version`, `created_utc`, `onnx_file`, `onnx_sha256`, `external_data`, `source`, `source_sha256`, `versions`, `opset`, `observed_dtype`, `execution_providers_available` and `verdict`.
 
 The export cache (`--export-cache-dir`) is internal. Its entries and `index.json` have `format_version`. If a file has another version, downshift ignores it, writes one warning and exports again. You can delete the directory at any time.

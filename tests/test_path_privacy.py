@@ -133,7 +133,7 @@ def test_manifest_records_names_not_locations(tmp_path):
     text = manifest_path_for(out).read_text()
     manifest = json.loads(text)
     assert manifest["onnx_file"] == "m.onnx"
-    assert manifest["source_model"] == "mlp.pt"
+    assert manifest["source"] == "mlp.pt"
     assert manifest["source_sha256"]
     assert manifest["verdict"]["onnx_path"] == "m.onnx"
     assert "alice-home" not in text
