@@ -286,9 +286,11 @@ def verify(
     rtol: float | None = None,
     seed: int = 0,
     embedding: bool = False,
+    keep_feeds: list[dict[str, np.ndarray]] | None = None,
 ) -> NumericsReport:
     """Compare torch and ONNX Runtime on `samples` inputs. If `embedding` is True, the first
-    output is a pooled embedding. Then each of its rows must also reach the cosine tolerance."""
+    output is a pooled embedding. Then each of its rows must also reach the cosine tolerance.
+    The input feeds of each sample are appended to `keep_feeds`, if you give it."""
     if vary_fn is None:
         if dynamic_shapes is None:
             raise ValueError("verify() needs either dynamic_shapes or an explicit vary_fn")
@@ -359,6 +361,8 @@ def verify(
                     name: t.detach().cpu().numpy()
                     for name, t in zip(input_names, sample, strict=True)
                 }
+                if keep_feeds is not None:
+                    keep_feeds.append(feeds)
                 ort_outs = session.run(None, feeds)
             except Exception as exc:  # noqa: BLE001 - a verdict, not a crash
                 tensor_shapes = [tuple(t.shape) for t in sample if isinstance(t, torch.Tensor)]

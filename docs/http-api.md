@@ -122,7 +122,7 @@ class MetadataResponse(BaseModel):
 | `execution` | The value of `--execution`: `"threadpool"` or `"inline"`. |
 | `boot` | The wall-clock seconds of each phase (`load`, `export`, `verify`, `session` and `warmup`, for the phases that ran). The `Boot` row of the CLI banner prints the same dict. |
 | `warmup` | `{"count", "mean_ms", "synthesized"}` from `WarmupStats`. It is `null` if the warmup did not run. |
-| `serving_numerics` | The serving check on a GPU: `{"provider", "device", "tf32", "samples", "max_abs_err", "min_cosine", "ok", "atol", "rtol"}`. `min_cosine` is `null` unless the model is an embedder. It is `null` (the whole field) if the server serves on the CPU. Refer to "GPU" in [`production.md`](production.md#gpu). |
+| `serving_numerics` | The serving check on a GPU: `{"provider", "device", "tf32", "samples", "samples_total", "max_abs_err", "min_cosine", "ok", "atol", "rtol"}`. `min_cosine` is `null` unless the model is an embedder. It is `null` (the whole field) if the server serves on the CPU. Refer to "GPU" in [`production.md`](production.md#gpu). |
 | `cache` | The result cache of this worker process: `{"max_rows", "entries", "hits", "misses"}`. `hits` and `misses` count rows. It is `null` if the cache is off. With `--workers N`, each worker has its own numbers. |
 
 ```bash

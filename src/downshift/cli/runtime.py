@@ -100,18 +100,20 @@ class ArtifactHandoff:
     def entry(self) -> ExportEntry:
         import numpy as np
 
-        from downshift.core.export_cache import FEED_PREFIX
+        from downshift.core.export_cache import unpack_feeds
         from downshift.core.memo import ExportEntry
 
         feeds = None
+        samples: list[dict[str, np.ndarray]] = []
         if self.feeds_path:
             with np.load(self.feeds_path, allow_pickle=False) as archive:
-                feeds = {name.removeprefix(FEED_PREFIX): archive[name] for name in archive.files}
+                feeds, samples = unpack_feeds(archive)
         return ExportEntry(
             verdict=self.verdict,
             input_names=self.input_names,
             axis_bounds=self.axis_bounds,
             feeds=feeds,
+            samples=samples,
             onnx_path=Path(self.onnx_path) if self.onnx_path else None,
         )
 
@@ -193,6 +195,7 @@ def _build_serving_state(args: ServeArgs, *, keep_graph: bool = False) -> Servin
         from downshift.core.memo import MEMO
 
         state.verdict.onnx_bytes = b""
+        state.verdict.sample_feeds = []
         MEMO.clear()
     return state
 
@@ -240,7 +243,7 @@ def _write_onnx_artifact(state: ServingState) -> tuple[Path, Path | None, Path |
 
     import numpy as np
 
-    from downshift.core.export_cache import FEED_PREFIX
+    from downshift.core.export_cache import pack_feeds
     from downshift.core.feeds import example_feeds
 
     verdict = state.verdict
@@ -248,7 +251,7 @@ def _write_onnx_artifact(state: ServingState) -> tuple[Path, Path | None, Path |
         # The verdict's temporary directory holds external data. Keep it alive until exit.
         _HANDOFF_KEEPALIVE.append(verdict._tmpdir)
     needs_copy = verdict.onnx_path is None
-    needs_feeds = state.example_inputs is not None
+    needs_feeds = state.example_inputs is not None or bool(verdict.sample_feeds)
     if not needs_copy and not needs_feeds:
         assert verdict.onnx_path is not None
         return verdict.onnx_path, None, None
@@ -259,10 +262,13 @@ def _write_onnx_artifact(state: ServingState) -> tuple[Path, Path | None, Path |
         onnx_path.write_bytes(verdict.onnx_bytes)
     feeds_path = None
     if needs_feeds:
-        assert state.example_inputs is not None
         feeds_path = temp_dir / "feeds.npz"
-        feeds = example_feeds(state.input_names, state.example_inputs)
-        np.savez(feeds_path, **{FEED_PREFIX + n: a for n, a in feeds.items()})  # type: ignore[arg-type]  # the numpy stub misreads **kwds
+        example = (
+            example_feeds(state.input_names, state.example_inputs)
+            if state.example_inputs is not None
+            else None
+        )
+        np.savez(feeds_path, **pack_feeds(example, verdict.sample_feeds))  # type: ignore[arg-type]  # the numpy stub misreads **kwds
     return onnx_path, feeds_path, temp_dir
 
 

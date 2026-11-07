@@ -29,7 +29,10 @@ def test_ort_cuda_serving_check_passes_and_the_provider_options_reach_the_sessio
     assert check.tf32 is tf32
     options = state.backend.session.get_provider_options()["CUDAExecutionProvider"]
     assert options["use_tf32"] == ("1" if tf32 else "0")
-    print(f"tf32={tf32} max_abs_err={check.max_abs_err:.3e}")
+    assert check.samples > 1
+    print(
+        f"tf32={tf32} samples={check.samples}/{check.samples_total} max_abs_err={check.max_abs_err:.3e}"
+    )
 
 
 def test_torch_cuda_serving_check_sets_the_tf32_flags():

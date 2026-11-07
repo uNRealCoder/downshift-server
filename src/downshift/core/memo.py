@@ -58,6 +58,8 @@ class ExportEntry:
     input_names: list[str]
     axis_bounds: dict[str, list[list]]
     feeds: dict[str, np.ndarray] | None = None
+    # The input feeds of the verification samples, for the serving check. Empty in an old entry.
+    samples: list[dict[str, np.ndarray]] = field(default_factory=list, repr=False)
     onnx_bytes: bytes = field(default=b"", repr=False)
     onnx_path: Path | None = None
 
@@ -401,6 +403,7 @@ def build_entry(
         input_names=list(input_names),
         axis_bounds=axis_bounds,
         feeds=feeds,
+        samples=verdict.sample_feeds,
         onnx_bytes=verdict.onnx_bytes,
         onnx_path=verdict.onnx_path,
     )

@@ -25,6 +25,7 @@ from downshift.adapters.base import Adapter, Family, Prepared, VaryFn
 from downshift.core import memo
 from downshift.core.axes import AxisFact, axis_facts, classify_outputs
 from downshift.core.capture import capture, op_type_histogram
+from downshift.core.feeds import bound_samples
 from downshift.core.phase import Phase, report
 from downshift.core.rows import check_rows
 from downshift.core.shapes import (
@@ -90,6 +91,8 @@ class ExportVerdict:
     # CPU session of verify, which take_session() gives to the server.
     _tmpdir: object | None = field(default=None, repr=False)
     _session: object | None = field(default=None, repr=False, compare=False)
+    # The input feeds of the verification samples, for the serving check. Not serialized.
+    sample_feeds: list = field(default_factory=list, repr=False, compare=False)
     prepared: Prepared | None = field(default=None, repr=False)
     # For the debug log of a FAILED verdict. Not serialized.
     capture_stderr: str = field(default="", repr=False)
@@ -280,6 +283,7 @@ def _verify_into(
     assert prepared is not None
     report(Phase.verify)
     start = time.perf_counter()
+    kept_feeds: list = []
     try:
         session = load_session(graph)
         numerics = verify(
@@ -293,6 +297,7 @@ def _verify_into(
             rtol=rtol,
             seed=seed,
             embedding=prepared.embedding,
+            keep_feeds=kept_feeds,
         )
         verdict.row_independent, verdict.row_reason = check_rows(prepared, numerics, session)
     except OnnxRuntimeError as exc:
@@ -307,6 +312,7 @@ def _verify_into(
 
     verdict.numerics = numerics
     verdict._session = session
+    verdict.sample_feeds = bound_samples(kept_feeds)
     verdict.axes = axes_for(prepared, numerics)
     err = f"(max abs err {numerics.max_abs_err:.2e})"
     if numerics.passed:

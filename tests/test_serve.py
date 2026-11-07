@@ -966,7 +966,9 @@ def test_metadata_has_no_serving_numerics_on_the_cpu(mlp_client):
 def test_metadata_shows_the_serving_numerics(mlp_state, monkeypatch):
     from downshift.serve.numerics import ServingNumerics
 
-    check = ServingNumerics("CUDAExecutionProvider", "cuda", False, 1, 2e-6, None, True, 1e-4, 1e-3)
+    check = ServingNumerics(
+        "CUDAExecutionProvider", "cuda", False, 1, 1, 2e-6, None, True, 1e-4, 1e-3
+    )
     monkeypatch.setattr(mlp_state, "serving_numerics", check)
     with TestClient(build_app(mlp_state)) as client:
         body = client.get("/metadata").json()["serving_numerics"]

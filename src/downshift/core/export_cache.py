@@ -23,6 +23,7 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -46,6 +47,33 @@ INDEX = "index.json"
 # numpy.savez takes `file` and `allow_pickle` as its own keywords: a prefix keeps an input of
 # that name apart.
 FEED_PREFIX = "in."
+SAMPLE_PREFIX = "s"  # a verification sample is "s<i>.in.<name>"
+
+
+def pack_feeds(
+    feeds: dict[str, np.ndarray] | None, samples: list[dict[str, np.ndarray]]
+) -> dict[str, np.ndarray]:
+    """The arrays of feeds.npz: the example as "in.<name>", sample i as "s<i>.in.<name>"."""
+    packed = {FEED_PREFIX + n: a for n, a in (feeds or {}).items()}
+    for i, sample in enumerate(samples):
+        packed.update({f"{SAMPLE_PREFIX}{i}.{FEED_PREFIX}{n}": a for n, a in sample.items()})
+    return packed
+
+
+def unpack_feeds(
+    archive: Any,
+) -> tuple[dict[str, np.ndarray] | None, list[dict[str, np.ndarray]]]:
+    """The inverse of pack_feeds(): (the example or None, the samples in order)."""
+    feeds: dict[str, np.ndarray] = {}
+    samples: dict[int, dict[str, np.ndarray]] = {}
+    for name in archive.files:
+        if name.startswith(FEED_PREFIX):
+            feeds[name.removeprefix(FEED_PREFIX)] = archive[name]
+        else:
+            index, _, rest = name.removeprefix(SAMPLE_PREFIX).partition(".")
+            samples.setdefault(int(index), {})[rest.removeprefix(FEED_PREFIX)] = archive[name]
+    return feeds or None, [samples[i] for i in sorted(samples)]
+
 
 # A writer that a signal killed leaves a temporary or an old directory. The cache removes it
 # when it is older than this.
@@ -182,14 +210,16 @@ class ExportCache:
         verdict = json.loads((entry_dir / VERDICT).read_text(encoding="utf-8"))
         serving = json.loads((entry_dir / SERVING).read_text(encoding="utf-8"))
         feeds = None
+        samples: list[dict[str, np.ndarray]] = []
         if (entry_dir / FEEDS).exists():
             with np.load(entry_dir / FEEDS, allow_pickle=False) as archive:
-                feeds = {name.removeprefix(FEED_PREFIX): archive[name] for name in archive.files}
+                feeds, samples = unpack_feeds(archive)
         return ExportEntry(
             verdict=verdict,
             input_names=list(serving["input_names"]),
             axis_bounds=serving["axis_bounds"],
             feeds=feeds,
+            samples=samples,
             onnx_path=onnx_path,
         )
 
@@ -219,9 +249,9 @@ class ExportCache:
                 tmp / SERVING,
                 {"input_names": entry.input_names, "axis_bounds": entry.axis_bounds},
             )
-            feeds = entry.feeds
-            if feeds and all(array.dtype.kind != "O" for array in feeds.values()):
-                np.savez(tmp / FEEDS, **{FEED_PREFIX + n: a for n, a in feeds.items()})  # type: ignore[arg-type]  # the numpy stub misreads **kwds
+            packed = pack_feeds(entry.feeds, entry.samples)
+            if packed and all(array.dtype.kind != "O" for array in packed.values()):
+                np.savez(tmp / FEEDS, **packed)  # type: ignore[arg-type]  # the numpy stub misreads **kwds
             self._install(tmp, self.root / key)
         except BaseException:
             shutil.rmtree(tmp, ignore_errors=True)

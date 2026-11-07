@@ -695,15 +695,17 @@ def test_print_booting_is_plain_ascii(caplog):
 
 def test_print_banner_shows_the_gpu_check(caplog):
     check = ServingNumerics(
-        "CUDAExecutionProvider", "cuda:0", False, 1, 3.1e-6, None, True, 1e-4, 1e-3
+        "CUDAExecutionProvider", "cuda:0", False, 3, 8, 3.1e-6, None, True, 1e-4, 1e-3
     )
     render.print_banner(_serving_state(_verdict(), serving_numerics=check), "127.0.0.1", 8000)
     assert "GPU check" in caplog.text
-    assert "CUDAExecutionProvider cuda:0  max abs err 3.1e-06 over 1 samples  OK" in caplog.text
+    assert (
+        "CUDAExecutionProvider cuda:0  max abs err 3.1e-06 over 3 of 8 samples  OK" in caplog.text
+    )
 
 
 def test_print_banner_shows_a_failed_gpu_check_with_tf32(caplog):
-    check = ServingNumerics("torch", "cuda", True, 1, 0.5, 0.9, False, 1e-3, 1e-2)
+    check = ServingNumerics("torch", "cuda", True, 1, 1, 0.5, 0.9, False, 1e-3, 1e-2)
     render.print_banner(_serving_state(_verdict(), serving_numerics=check), "127.0.0.1", 8000)
     assert "min cosine 0.900000  FAILED  (TF32 on)" in caplog.text
 

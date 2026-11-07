@@ -600,7 +600,7 @@ def test_worker_handoff_keeps_inputs_named_like_numpy_savez_keywords():
 
     names = ["file", "allow_pickle"]
     arrays = (torch.ones(2, 3), torch.zeros(2, 1))
-    verdict = SimpleNamespace(_tmpdir=None, onnx_path=None, onnx_bytes=b"graph")
+    verdict = SimpleNamespace(_tmpdir=None, onnx_path=None, onnx_bytes=b"graph", sample_feeds=[])
     state = SimpleNamespace(verdict=verdict, example_inputs=arrays, input_names=names)
 
     onnx_path, feeds_path, temp_dir = runtime._write_onnx_artifact(state)

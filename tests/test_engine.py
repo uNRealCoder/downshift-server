@@ -621,7 +621,7 @@ def test_a_failed_serving_check_of_torch_warns_and_keeps_serving(caplog):
     from downshift.serve.engine import _falls_back
     from downshift.serve.numerics import ServingNumerics
 
-    failed = ServingNumerics("torch", "cuda", True, 1, 0.5, None, False, 1e-3, 1e-2)
+    failed = ServingNumerics("torch", "cuda", True, 1, 1, 0.5, None, False, 1e-3, 1e-2)
     with caplog.at_level(logging.WARNING, logger="downshift.serve"):
         assert _falls_back(failed, backends_mod.BackendName.torch, ServeOptions(), True) is False
 
@@ -663,3 +663,56 @@ def test_tf32_off_sets_the_torch_flags_of_a_cuda_backend(monkeypatch):
     assert torch.backends.cuda.matmul.allow_tf32 is True
     b.TorchBackend(clean_mlp.make_model(), ("x",), device="cuda", tf32=False)
     assert torch.backends.cuda.matmul.allow_tf32 is False
+
+
+def test_a_cache_hit_replays_all_the_verification_samples(off_onnx, exported_mlp, tmp_path):
+    from downshift.core.export_cache import ExportCache
+    from downshift.core.memo import ExportEntry
+    from downshift.serve.engine import state_from_entry
+
+    path, model, verdict = exported_mlp
+    assert len(verdict.sample_feeds) > 1
+    entry = ExportEntry(verdict.to_dict(), ["x"], {}, samples=verdict.sample_feeds, onnx_path=path)
+    cache = ExportCache(tmp_path)
+    cache.put("a" * 64, entry)
+    reread = cache.get("a" * 64)
+    assert reread is not None
+    assert len(reread.samples) == len(verdict.sample_feeds)
+
+    loaded = LoadedModel("m", model=model)
+    state = state_from_entry(
+        reread, lambda: (loaded, None), ServeOptions(warmup=0), None, source="m", kind="x"
+    )
+
+    assert state.serving_numerics is not None
+    assert state.serving_numerics.samples == len(verdict.sample_feeds)
+    assert state.serving_numerics.samples_total == verdict.numerics.samples_tested
+
+
+def test_bound_samples_keeps_the_smallest_and_the_largest_first():
+    from downshift.core.feeds import bound_samples
+
+    samples = [{"x": np.zeros(n, dtype=np.uint8)} for n in (50, 10, 40, 100, 20)]
+
+    kept = bound_samples(samples, limit=170)
+
+    assert [s["x"].size for s in kept] == [10, 40, 100, 20]
+    assert bound_samples(samples, limit=5) == []
+    assert len(bound_samples(samples)) == 5
+    assert bound_samples([]) == []
+
+
+def test_pack_feeds_round_trips_the_example_and_the_samples():
+    from downshift.core.export_cache import pack_feeds, unpack_feeds
+
+    example = {"x": np.ones(2)}
+    samples = [{"x": np.zeros(1)}, {"x": np.zeros(3)}]
+    packed = pack_feeds(example, samples)
+
+    class _Archive(dict):
+        files = property(lambda self: list(self))
+
+    feeds, back = unpack_feeds(_Archive(packed))
+    assert feeds is not None and feeds["x"].tolist() == [1.0, 1.0]
+    assert [s["x"].size for s in back] == [1, 3]
+    assert unpack_feeds(_Archive(pack_feeds(None, []))) == (None, [])

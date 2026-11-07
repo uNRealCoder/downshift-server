@@ -379,28 +379,42 @@ def _build_checked(
     verdict: ExportVerdict,
     opts: ServeOptions,
     timings: dict[str, float],
-    feeds: dict[str, np.ndarray] | None,
+    example: dict[str, np.ndarray] | None,
 ) -> tuple[Backend, ServingNumerics | None]:
-    """The backend, and its serving check if it serves off the CPU and there are example feeds.
+    """The backend, and its serving check if it serves off the CPU and there are feeds. The
+    check replays the verification samples (the example input, if the verdict kept none).
     The reference is the CPU result of the same model: torch for torch, ONNX Runtime for ONNX
     (the verdict compared that one with torch). The check runs at boot only."""
+    feeds = verdict.sample_feeds or ([] if example is None else [example])
     device = resolve_device(opts.device, ort_backend=name == BackendName.onnxruntime)
-    reference: dict[str, np.ndarray] | None = None
+    reference: Backend | None = None
+    references: list[dict[str, np.ndarray]] = []
     start = time.perf_counter()
-    if feeds is not None and name == BackendName.torch and device.startswith("cuda"):
+    if feeds and name == BackendName.torch and device.startswith("cuda"):
         prepared = verdict.prepared
         assert prepared is not None
-        reference = TorchBackend(prepared.model, prepared.input_names, "cpu").infer(feeds)
+        reference = TorchBackend(prepared.model, prepared.input_names, "cpu")
+        references = [reference.infer(sample) for sample in feeds]
     backend = _build_backend(name, verdict, opts, timings)
-    if feeds is None or not serves_off_cpu(backend):
+    if not feeds or not serves_off_cpu(backend):
         return backend, None
     if reference is None:
         source = verdict.onnx_path if verdict.onnx_path is not None else verdict.onnx_bytes
-        reference = OnnxRuntimeBackend(source, "cpu").infer(feeds)
+        reference = OnnxRuntimeBackend(source, "cpu")
+        references = [reference.infer(sample) for sample in feeds]
     atol, rtol = _serving_tolerances(verdict, opts)
     embedding = verdict.numerics is not None and verdict.numerics.tolerance_cosine is not None
+    total = verdict.numerics.samples_tested if verdict.numerics is not None else len(feeds)
     numerics = check_serving(
-        backend, reference, feeds, atol, rtol, device=device, embedding=embedding, tf32=opts.tf32
+        backend,
+        references,
+        feeds,
+        atol,
+        rtol,
+        device=device,
+        embedding=embedding,
+        tf32=opts.tf32,
+        total=total,
     )
     timings[Phase.session] = time.perf_counter() - start
     return backend, numerics
@@ -529,6 +543,7 @@ def state_from_entry(
     verdict = ExportVerdict.from_dict(entry.verdict)
     verdict.onnx_bytes = entry.onnx_bytes
     verdict.onnx_path = entry.onnx_path
+    verdict.sample_feeds = entry.samples
     name, notes = choose_backend(verdict, opts, has_torch=True)
     hf_source = source if kind == HF_REPO_DIR else tokenizer_from
     timings: dict[str, float] = {}
