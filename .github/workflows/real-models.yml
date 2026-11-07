@@ -1,0 +1,38 @@
+name: Real models
+
+# Checks real public models and publishes the table. The job does not commit. Read the artifact
+# and copy docs/compatibility.md and the JSON file if the result is good.
+
+on:
+  schedule:
+    - cron: "0 5 * * 3"  # Wednesdays 05:00 UTC
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-real-models-${{ github.run_id }}
+          restore-keys: hf-real-models-
+      - run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -e ".[hf,gnn,fast]"
+      - run: python scripts/check_real_models.py
+      - if: always()
+        run: git diff docs/compatibility.md > real-models.diff
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-models
+          path: |
+            bench/results/v1.0.0/real_models.json
+            docs/compatibility.md
+            real-models.diff
