@@ -277,7 +277,7 @@ def test_check_ignores_the_cache_directory(cache, monkeypatch):
         cli_app,
         ["check", "tests.models.clean_mlp:make_model", "--export-cache-dir", str(cache)],
     )
-    assert rejected.exit_code == 2
+    assert rejected.exit_code == 4
 
 
 def test_cache_false_skips_the_disk_tier_too(cache):
@@ -383,3 +383,60 @@ def test_an_index_without_a_format_version_is_rebuilt(cache, tmp_path, caplog):
     with caplog.at_level(logging.WARNING, logger="downshift.export_cache"):
         assert export_cache.ExportCache(cache)._load_index() == {}
     assert len([r for r in caplog.records if "format version" in r.getMessage()]) == 1
+
+
+def _stale(path: Path, age_seconds: float) -> None:
+    import os
+    import time
+
+    path.mkdir()
+    (path / "model.onnx").write_bytes(b"x")
+    old = time.time() - age_seconds
+    os.utime(path, (old, old))
+
+
+def test_a_new_cache_removes_old_leftovers_of_killed_writers(cache):
+    old_tmp, old_old = cache / "k.tmp-1-aa", cache / "k.old-1-bb"
+    new_tmp, entry = cache / "k.tmp-2-cc", cache / "k"
+    _stale(old_tmp, 7200)
+    _stale(old_old, 7200)
+    _stale(new_tmp, 10)
+    _stale(entry, 7200)
+
+    export_cache.ExportCache(cache)
+
+    assert not old_tmp.exists()
+    assert not old_old.exists()
+    assert new_tmp.exists()
+    assert entry.exists()
+
+
+def test_a_missing_cache_directory_does_not_break_the_clean_up(cache, monkeypatch):
+    export_cache.ExportCache(cache)
+
+    def boom(self):
+        raise OSError("gone")
+
+    monkeypatch.setattr(Path, "iterdir", boom)
+    export_cache.ExportCache(cache)
+
+
+def test_an_input_named_file_or_allow_pickle_survives_the_disk_tier(cache):
+    import numpy as np
+
+    from downshift.core.memo import entry_from_verdict
+
+    inputs = clean_mlp.make_inputs()
+    verdict = downshift.check(mlp(), inputs, samples=1)
+    entry = entry_from_verdict(verdict)
+    assert entry is not None
+    feeds = {"file": np.ones(2, dtype=np.float32), "allow_pickle": np.zeros(2, dtype=np.int64)}
+    entry.feeds = feeds
+    disk = export_cache.ExportCache(cache)
+
+    disk.put("key", entry)
+    got = disk.get("key")
+
+    assert got is not None and got.feeds is not None
+    assert sorted(got.feeds) == ["allow_pickle", "file"]
+    np.testing.assert_array_equal(got.feeds["file"], feeds["file"])

@@ -1,6 +1,7 @@
 """core/verdict.py: prepare_model, and intake() of a .onnx file with and without a reference."""
 
 import pytest
+import torch
 
 import downshift
 from downshift.core import verify as verify_mod
@@ -96,3 +97,12 @@ def test_prepare_model_raises_when_nothing_can_guess_inputs():
     model = scatter_include_self_false.make_model()
     with pytest.raises(ValueError, match="Cannot find example inputs"):
         prepare_model(model, None, "generic")
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA GPU")
+def test_a_model_on_a_cuda_device_is_verified():
+    model = torch.nn.Linear(8, 4).to("cuda").eval()
+
+    verdict = downshift.check(model, (torch.randn(2, 8, device="cuda"),), samples=2, cache=False)
+
+    assert verdict.status == "CLEAN", verdict.reason

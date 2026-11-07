@@ -407,12 +407,40 @@ def test_resize_dim0_stays_near_the_example_rather_than_pure_noise():
     assert torch.all((resized - tiled).abs() < 5.0)
 
 
-def test_compare_sample_never_picks_a_nan_error_as_the_worst():
+def test_a_nan_mismatch_is_the_worst_element_and_stays_out_of_the_error_numbers():
     expected = [torch.tensor([float("nan")]), torch.tensor([1.0])]
     got = [np.array([0.0]), np.array([3.0])]
 
-    _, _, failed, _, worst = _compare_sample(expected, got, 1e-4, 1e-3, 0)
+    sample_abs, sample_rel, failed, note, worst = _compare_sample(expected, got, 1e-4, 1e-3, 0)
 
     assert failed is True
+    assert sample_abs == 2.0
+    assert np.isfinite(sample_rel)
     assert worst is not None
-    assert worst[0] == 1  # output 1, the real error, and not the NaN of output 0
+    assert worst[:4] == (0, (0,), pytest.approx(float("nan"), nan_ok=True), 0.0)
+    assert note is not None and "output_0 has 1 non-finite mismatches" in note
+    assert "0 NaN from onnxruntime, 1 NaN from torch" in note
+
+
+def test_an_all_nan_output_reports_the_nan_and_no_error_of_zero():
+    expected = [torch.tensor([1.0, 2.0, 3.0])]
+    got = [np.array([float("nan")] * 3)]
+
+    sample_abs, _, failed, note, worst = _compare_sample(expected, got, 1e-4, 1e-3, 4)
+
+    assert failed is True
+    assert sample_abs == 0.0
+    assert worst is not None and worst[1] == (0,)
+    assert note == (
+        "sample 4: output_0 has 3 non-finite mismatches (3 NaN from onnxruntime, 0 NaN from torch)"
+    )
+
+
+def test_a_nan_in_both_outputs_still_fails_the_sample():
+    expected = [torch.tensor([float("nan"), 1.0])]
+    got = [np.array([float("nan"), 1.0])]
+
+    _, _, failed, note, worst = _compare_sample(expected, got, 1e-4, 1e-3, 0)
+
+    assert failed is True  # the pass or fail rule did not change: NaN is never close
+    assert note is not None and worst is not None

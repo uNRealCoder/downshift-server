@@ -5,6 +5,7 @@ have shapes that the exporter did not see. This finds a graph that froze a shape
 """
 
 import logging
+import math
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
@@ -159,7 +160,7 @@ def first_line(exc: Exception) -> str:
 
 def tensor_to_numpy(tensor: torch.Tensor) -> np.ndarray:
     """bf16 and fp16 have no faithful numpy dtype: widen floats to float32 first."""
-    tensor = tensor.detach()
+    tensor = tensor.detach().cpu()
     return (tensor.float() if tensor.is_floating_point() else tensor).numpy()
 
 
@@ -200,7 +201,7 @@ def _compare_sample(
     sample_abs = sample_rel = 0.0
     failed = False
     worst: WorstCandidate | None = None
-    worst_abs = -1.0  # a NaN error never compares greater, so it is never the worst
+    worst_abs = -1.0
     for idx, (expected, got) in enumerate(zip(torch_outs, ort_outs, strict=True)):
         expected_np = tensor_to_numpy(expected)
         got_np = np.asarray(got)
@@ -214,17 +215,39 @@ def _compare_sample(
 
         expected64 = expected_np.astype(np.float64)
         got64 = got_np.astype(np.float64)
+        close = np.isclose(got64, expected64, rtol=rtol, atol=atol, equal_nan=False)
+        # A NaN or inf error stays out of the error numbers. It has its own note and `worst`.
         abs_err = np.abs(expected64 - got64)
+        rel_err = abs_err / (np.abs(expected64) + 1e-8)
+        finite = np.isfinite(abs_err)
+        abs_err = np.where(finite, abs_err, 0.0)
         output_abs = float(abs_err.max(initial=0.0))
         sample_abs = max(sample_abs, output_abs)
-        rel_err = abs_err / (np.abs(expected64) + 1e-8)
-        sample_rel = max(sample_rel, float(rel_err.max(initial=0.0)))
-        if abs_err.size and output_abs > worst_abs:
+        sample_rel = max(sample_rel, float(np.where(finite, rel_err, 0.0).max(initial=0.0)))
+        nonfinite = ~finite & ~close
+        if nonfinite.any():
+            flat = int(np.argmax(nonfinite))
+            index = tuple(int(x) for x in np.unravel_index(flat, nonfinite.shape))
+            got_nan, torch_nan = int(np.isnan(got64).sum()), int(np.isnan(expected64).sum())
+            note = (
+                f"sample {sample_index}: output_{idx} has {int(nonfinite.sum())} non-finite "
+                f"mismatches ({got_nan} NaN from onnxruntime, {torch_nan} NaN from torch)"
+            )
+            if worst_abs < math.inf:
+                worst_abs = math.inf  # the first non-finite mismatch is the worst element
+                worst = (
+                    idx,
+                    index,
+                    float(expected64.flat[flat]),
+                    float(got64.flat[flat]),
+                    worst_abs,
+                )
+        elif abs_err.size and output_abs > worst_abs:
             flat = int(np.argmax(abs_err))
             index = tuple(int(x) for x in np.unravel_index(flat, abs_err.shape))
-            worst_abs = float(abs_err.flat[flat])
+            worst_abs = output_abs
             worst = (idx, index, float(expected64.flat[flat]), float(got64.flat[flat]), worst_abs)
-        if not np.isclose(got64, expected64, rtol=rtol, atol=atol, equal_nan=False).all():
+        if not close.all():
             failed = True
     return sample_abs, sample_rel, failed, note, worst
 
@@ -309,7 +332,10 @@ def verify(
 
             try:
                 # A bf16 input has no numpy dtype either. ORT would reject that graph anyway.
-                feeds = {name: t.numpy() for name, t in zip(input_names, sample, strict=True)}
+                feeds = {
+                    name: t.detach().cpu().numpy()
+                    for name, t in zip(input_names, sample, strict=True)
+                }
                 ort_outs = session.run(None, feeds)
             except Exception as exc:  # noqa: BLE001 - a verdict, not a crash
                 tensor_shapes = [tuple(t.shape) for t in sample if isinstance(t, torch.Tensor)]

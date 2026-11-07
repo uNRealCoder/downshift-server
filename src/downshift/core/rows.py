@@ -131,7 +131,7 @@ def torch_runner(model: torch.nn.Module) -> Runner:
 def session_runner(session, input_names: tuple[str, ...]) -> Runner:
     def run(feeds: tuple) -> list[np.ndarray]:
         outs: list[np.ndarray] = session.run(
-            None, {n: t.numpy() for n, t in zip(input_names, feeds, strict=True)}
+            None, {n: t.detach().cpu().numpy() for n, t in zip(input_names, feeds, strict=True)}
         )
         return outs
 

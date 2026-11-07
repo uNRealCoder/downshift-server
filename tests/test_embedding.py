@@ -425,7 +425,7 @@ def test_check_takes_the_pooling_flags(repo):
 def test_check_rejects_an_unknown_pooling(repo):
     result = _cli("check", repo, "--pooling", "median")
 
-    assert result.exit_code == 2  # the own usage error of typer
+    assert result.exit_code == 4  # a usage error of typer
     assert "median" in result.output
 
 

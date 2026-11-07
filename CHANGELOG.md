@@ -47,6 +47,12 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- `downshift.export()` and `downshift export` now write nothing when the verdict is FAILED. Before, they wrote the `.onnx` file and the manifest if ONNX Runtime could not run the graph.
+- `check()` and `app_for()` now work with a model on a CUDA device. Before, the verdict was FAILED with the message that ONNX Runtime cannot run the graph.
+- The export cache now removes the `.tmp-*` and `.old-*` directories of a killed writer when they are more than 1 hour old.
+- The export cache now keeps an example input that is named `file` or `allow_pickle`. Before, saving it raised an error.
+- The opset in the verdict now comes from the default domain of the graph. Before, it came from the first domain.
+- A NaN or inf in an output no longer gives "max abs err 0.00e+00" with no worst element. The error numbers use the finite values only. The report counts the non-finite mismatches and names the first as the worst element. The pass or fail rule did not change.
 - A usage error of a command (an unknown flag, a missing argument, a bad value such as `--workers 0`) now exits with `4`. Before, it exited with `2`, which is the DEGRADED code.
 - A bad `DOWNSHIFT_*` value (for example `DOWNSHIFT_PORT=abc`) now gives a one-line error that names the variable, and exit code `4`. Before, it gave a traceback, also for `--help`.
 - `--metrics` with `--workers N` (N above 1) is now a usage error (exit code `4`). A scrape reaches one worker only. Run one worker for each container and scale with replicas.

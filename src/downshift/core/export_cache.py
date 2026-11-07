@@ -14,11 +14,13 @@ A write builds the entry in a temporary directory and renames it into place. A r
 graph against the manifest hashes. A bad entry is a miss, with one warning.
 """
 
+import contextlib
 import json
 import logging
 import os
 import shutil
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
@@ -40,6 +42,14 @@ VERDICT = "verdict.json"
 FEEDS = "feeds.npz"
 SERVING = "serving.json"
 INDEX = "index.json"
+
+# numpy.savez takes `file` and `allow_pickle` as its own keywords: a prefix keeps an input of
+# that name apart.
+_FEED_PREFIX = "in."
+
+# A writer that a signal killed leaves a temporary or an old directory. The cache removes it
+# when it is older than this.
+_STALE_SECONDS = 3600
 
 
 def check_dir(path: str | Path) -> Path:
@@ -93,6 +103,15 @@ class ExportCache:
     def __init__(self, root: str | Path) -> None:
         self.root = check_dir(root)
         self._index: dict[str, str] | None = None
+        self._remove_stale()
+
+    def _remove_stale(self) -> None:
+        """Delete the `.tmp-*` and `.old-*` directories that are older than an hour."""
+        cutoff = time.time() - _STALE_SECONDS
+        with contextlib.suppress(OSError):
+            for path in self.root.iterdir():
+                if (".tmp-" in path.name or ".old-" in path.name) and path.stat().st_mtime < cutoff:
+                    shutil.rmtree(path, ignore_errors=True)
 
     def _load_index(self) -> dict[str, str]:
         if self._index is None:
@@ -165,7 +184,7 @@ class ExportCache:
         feeds = None
         if (entry_dir / FEEDS).exists():
             with np.load(entry_dir / FEEDS, allow_pickle=False) as archive:
-                feeds = {name: archive[name] for name in archive.files}
+                feeds = {name.removeprefix(_FEED_PREFIX): archive[name] for name in archive.files}
         return ExportEntry(
             verdict=verdict,
             input_names=list(serving["input_names"]),
@@ -202,7 +221,7 @@ class ExportCache:
             )
             feeds = entry.feeds
             if feeds and all(array.dtype.kind != "O" for array in feeds.values()):
-                np.savez(tmp / FEEDS, **feeds)  # type: ignore[arg-type]  # the numpy stub misreads **kwds
+                np.savez(tmp / FEEDS, **{_FEED_PREFIX + n: a for n, a in feeds.items()})  # type: ignore[arg-type]  # the numpy stub misreads **kwds
             self._install(tmp, self.root / key)
         except BaseException:
             shutil.rmtree(tmp, ignore_errors=True)

@@ -135,7 +135,7 @@ def export(
         _memo_key=key,
         **run,  # type: ignore[arg-type]
     )
-    if verdict.onnx_program is None:
+    if verdict.status == "FAILED" or verdict.onnx_program is None:
         return verdict
     if disk is not None and key is not None:
         entry = memo.entry_from_verdict(verdict)
@@ -160,6 +160,8 @@ def _export_from_entry(entry: ExportEntry, output: Path, source_path: Path | Non
     from downshift.core.verdict import ExportVerdict
 
     verdict = ExportVerdict.from_dict(entry.verdict)
+    if verdict.status == "FAILED":
+        return verdict
     output.parent.mkdir(parents=True, exist_ok=True)
     if entry.onnx_bytes:
         output.write_bytes(entry.onnx_bytes)

@@ -168,3 +168,15 @@ def test_axes_survive_the_dict_round_trip() -> None:
     rebuilt = verdict_mod.ExportVerdict.from_dict(verdict.to_dict())
 
     assert rebuilt.axes == verdict.axes
+
+
+def test_export_of_a_failed_verdict_writes_nothing(tmp_path) -> None:
+    out = tmp_path / "bf16.onnx"
+
+    verdict = downshift.export(
+        bf16_weights.make_model(), out, bf16_weights.make_inputs(), samples=2, cache=False
+    )
+
+    assert verdict.status == "FAILED"
+    assert verdict.onnx_path is None
+    assert list(tmp_path.iterdir()) == []

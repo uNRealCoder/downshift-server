@@ -145,7 +145,9 @@ def capture(
         onnx_bytes=onnx_bytes,
         onnx_path=onnx_path,
         tmpdir=tmpdir,
-        opset=proto.opset_import[0].version if proto.opset_import else None,
+        opset=next(
+            (imp.version for imp in proto.opset_import if imp.domain in ("", "ai.onnx")), None
+        ),
         op_types=op_type_histogram(proto.graph.node),
         stderr=captured.getvalue(),
     )

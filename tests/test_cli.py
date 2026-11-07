@@ -396,7 +396,9 @@ def test_serve_no_access_log_disables_it(monkeypatch):
 @pytest.mark.parametrize("value", ["hex", "safetensors"])
 def test_serve_rejects_unknown_output_encoding(value):
     result = run("serve", CLEAN, "--output-encoding", value)
-    assert result.exit_code == main.EXIT_USAGE, result.output  # typer usage error: not one of the choices
+    assert result.exit_code == main.EXIT_USAGE, (
+        result.output
+    )  # typer usage error: not one of the choices
 
 
 def test_serve_load_failure_on_the_loader_thread_exits_with_the_usual_code(monkeypatch):

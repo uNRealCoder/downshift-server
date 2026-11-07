@@ -138,12 +138,14 @@ def resize_axis(tensor: torch.Tensor, axis: int, size: int) -> torch.Tensor:
         reps = -(-size // moved.shape[0])
         tiled = moved.repeat(reps, *([1] * (moved.ndim - 1)))[:size]
         resized = tiled + 0.1 * moved.std(unbiased=False) * torch.randn(
-            tiled.shape, dtype=moved.dtype
+            tiled.shape, dtype=moved.dtype, device=moved.device
         )
     else:
         lo = int(moved.min().item())
         hi = max(int(moved.max().item()) + 1, lo + 1)
-        resized = torch.randint(lo, hi, (size, *moved.shape[1:]), dtype=moved.dtype)
+        resized = torch.randint(
+            lo, hi, (size, *moved.shape[1:]), dtype=moved.dtype, device=moved.device
+        )
     return resized.movedim(0, axis)
 
 
