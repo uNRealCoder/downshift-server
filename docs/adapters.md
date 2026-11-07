@@ -57,7 +57,7 @@ class Prepared:
 - `dynamic_shapes` is also parallel to both. It has one entry for each input. The entry is `None` (fully static) or a `{axis_index: torch.export.Dim(...)}` dict. `downshift.core.shapes` has the helpers that the built-in adapters use to build these entries:
   - `apply_dynamic_override` applies the `--dynamic` CLI override.
   - `dim_bounds` and `alternative_sizes` sample inside the bounds.
-- `vary_fn`, if it is not `None`, is called as `vary_fn(i)` for `i` in `range(k)` during verification. It must return a tuple with the same shape as `inputs`. `vary_fn(0)` must return exactly the baseline `inputs`. Sample 0 is never varied. It checks that the model works at the traced shape.
+- `vary_fn`, if it is not `None`, is called as `vary_fn(i)` for `i` in `range(samples)` during verification. It must return a tuple with the same shape as `inputs`. `vary_fn(0)` must return exactly the baseline `inputs`. Sample 0 is never varied. It checks that the model works at the traced shape.
 - If `vary_fn` is `None`, downshift uses the default of `make_shared_axis0_vary_fn`. Axis 0 of every dynamic input moves together. The samples stay close to the example. For floats, the sampler tiles rows and adds small noise. For integers, it takes values from the observed range. It does not generate unrelated noise.
 - `dynamic_dims` is a derived property and not a field. It is `{input_name: sorted(axes)}` for each input that has a non-empty `dynamic_shapes` entry. This is the value in `ExportVerdict.dynamic_dims`.
 
@@ -116,7 +116,7 @@ In both cases, downshift checks the loaded object with `isinstance(obj, Adapter)
 ```python
 with torch.random.fork_rng(devices=[]):
     torch.manual_seed(seed)
-    for i in range(k):
+    for i in range(samples):
         sample = vary_fn(i)
         ...
 ```

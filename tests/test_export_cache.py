@@ -69,15 +69,15 @@ def no_weights(monkeypatch):
 def test_the_default_writes_nothing(tmp_path, repo):
     before = sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*"))
 
-    app_for(repo, k=1, warmup=0)
-    app_for(mlp(), clean_mlp.make_inputs(), k=1, warmup=0)
+    app_for(repo, samples=1, warmup=0)
+    app_for(mlp(), clean_mlp.make_inputs(), samples=1, warmup=0)
 
     assert sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*")) == before
 
 
 @pytest.mark.needs_torch_26
 def test_a_restart_reuses_the_export_and_never_loads_weights(cache, repo, no_weights):
-    first = app_for(repo, k=2, warmup=1, export_cache_dir=str(cache))
+    first = app_for(repo, samples=2, warmup=1, export_cache_dir=str(cache))
     assert {"export", "verify"} <= set(boot(first))
     expected = TestClient(first).post("/predict", json={"text": ["hello world"]}).json()
     (entry,) = entries(cache)
@@ -91,7 +91,7 @@ def test_a_restart_reuses_the_export_and_never_loads_weights(cache, repo, no_wei
 
     MEMO.clear()
     no_weights()
-    second = app_for(repo, k=2, warmup=1, export_cache_dir=str(cache))
+    second = app_for(repo, samples=2, warmup=1, export_cache_dir=str(cache))
 
     assert "export" not in boot(second) and "verify" not in boot(second)
     client = TestClient(second)
@@ -105,12 +105,12 @@ def test_the_boot_banner_says_where_the_export_came_from(cache, repo, no_weights
     from downshift.cli import render
     from downshift.serve.reuse import prepare_serving_reusing
 
-    options = ServeOptions(k=1, warmup=0, export_cache_dir=str(cache))
+    options = ServeOptions(samples=1, warmup=0, export_cache_dir=str(cache))
 
     def load():
         raise AssertionError("loaded on a hit")
 
-    app_for(repo, k=1, warmup=0, export_cache_dir=str(cache))
+    app_for(repo, samples=1, warmup=0, export_cache_dir=str(cache))
     no_weights()
     memory = prepare_serving_reusing(load, options, repo=repo)
     MEMO.clear()
@@ -123,13 +123,13 @@ def test_the_boot_banner_says_where_the_export_came_from(cache, repo, no_weights
 
 @pytest.mark.needs_torch_26
 def test_a_corrupted_graph_is_exported_again_and_overwritten(cache, repo, caplog):
-    app_for(repo, k=1, warmup=0, export_cache_dir=str(cache))
+    app_for(repo, samples=1, warmup=0, export_cache_dir=str(cache))
     (entry,) = entries(cache)
     (entry / "model.onnx").write_bytes(b"not an onnx file")
     MEMO.clear()
 
     with caplog.at_level(logging.WARNING, logger="downshift.export_cache"):
-        again = app_for(repo, k=1, warmup=0, export_cache_dir=str(cache))
+        again = app_for(repo, samples=1, warmup=0, export_cache_dir=str(cache))
 
     assert {"export", "verify"} <= set(boot(again))
     assert len([r for r in caplog.records if "unusable" in r.getMessage()]) == 1
@@ -137,17 +137,19 @@ def test_a_corrupted_graph_is_exported_again_and_overwritten(cache, repo, caplog
     assert (entry / "model.onnx").read_bytes() != b"not an onnx file"
 
     MEMO.clear()
-    healed = app_for(repo, k=1, warmup=0, export_cache_dir=str(cache))
+    healed = app_for(repo, samples=1, warmup=0, export_cache_dir=str(cache))
     assert "export" not in boot(healed)
 
 
 def test_a_damaged_data_file_or_manifest_is_a_miss(cache):
-    app_for(mlp(), clean_mlp.make_inputs(), k=1, warmup=0, export_cache_dir=str(cache))
+    app_for(mlp(), clean_mlp.make_inputs(), samples=1, warmup=0, export_cache_dir=str(cache))
     (entry,) = entries(cache)
     (entry / "serving.json").write_text("{")
     MEMO.clear()
 
-    again = app_for(mlp(), clean_mlp.make_inputs(), k=1, warmup=0, export_cache_dir=str(cache))
+    again = app_for(
+        mlp(), clean_mlp.make_inputs(), samples=1, warmup=0, export_cache_dir=str(cache)
+    )
 
     assert {"export", "verify"} <= set(boot(again))
 
@@ -158,10 +160,10 @@ def test_a_leftover_temp_directory_is_ignored(cache, repo, no_weights):
     leftover.mkdir()
     (leftover / "model.onnx").write_bytes(b"half written")
 
-    app_for(repo, k=1, warmup=0, export_cache_dir=str(cache))
+    app_for(repo, samples=1, warmup=0, export_cache_dir=str(cache))
     MEMO.clear()
     no_weights()
-    again = app_for(repo, k=1, warmup=0, export_cache_dir=str(cache))
+    again = app_for(repo, samples=1, warmup=0, export_cache_dir=str(cache))
 
     assert "export" not in boot(again)
     assert len(entries(cache)) == 1
@@ -175,7 +177,7 @@ def test_a_failed_write_cleans_up_its_temp_directory(cache, monkeypatch):
         raise RuntimeError("crash before the rename")
 
     monkeypatch.setattr(export_cache.ExportCache, "_install", staticmethod(crash))
-    entry = entry_from_verdict(downshift.check(mlp(), clean_mlp.make_inputs(), k=1))
+    entry = entry_from_verdict(downshift.check(mlp(), clean_mlp.make_inputs(), samples=1))
     assert entry is not None
 
     with pytest.raises(RuntimeError):
@@ -188,7 +190,7 @@ def test_a_failed_write_cleans_up_its_temp_directory(cache, monkeypatch):
 def test_an_external_data_graph_is_on_disk_but_not_in_memory(cache, monkeypatch):
     monkeypatch.setattr(capture, "EXTERNAL_DATA_THRESHOLD", 0)
     inputs = clean_mlp.make_inputs()
-    first = app_for(mlp(), inputs, k=1, warmup=1, export_cache_dir=str(cache))
+    first = app_for(mlp(), inputs, samples=1, warmup=1, export_cache_dir=str(cache))
     expected = TestClient(first).post("/predict", json={"inputs": {"x": inputs[0].tolist()}}).json()
 
     assert len(MEMO) == 0
@@ -196,7 +198,7 @@ def test_an_external_data_graph_is_on_disk_but_not_in_memory(cache, monkeypatch)
     assert (entry / "model.onnx").exists()
     assert any(p.name.endswith(".data") for p in entry.iterdir())
 
-    second = app_for(mlp(), inputs, k=1, warmup=1, export_cache_dir=str(cache))
+    second = app_for(mlp(), inputs, samples=1, warmup=1, export_cache_dir=str(cache))
 
     assert "export" not in boot(second)
     got = TestClient(second).post("/predict", json={"inputs": {"x": inputs[0].tolist()}}).json()
@@ -208,10 +210,12 @@ def test_export_to_a_directory_after_an_external_disk_hit(cache, tmp_path, monke
 
     monkeypatch.setattr(capture, "EXTERNAL_DATA_THRESHOLD", 0)
     inputs = clean_mlp.make_inputs()
-    downshift.export(mlp(), tmp_path / "a.onnx", inputs, k=1, export_cache_dir=str(cache))
+    downshift.export(mlp(), tmp_path / "a.onnx", inputs, samples=1, export_cache_dir=str(cache))
     MEMO.clear()
 
-    verdict = downshift.export(mlp(), tmp_path / "b.onnx", inputs, k=1, export_cache_dir=str(cache))
+    verdict = downshift.export(
+        mlp(), tmp_path / "b.onnx", inputs, samples=1, export_cache_dir=str(cache)
+    )
 
     assert verdict.status == "CLEAN"
     assert (tmp_path / "b.onnx.data").exists()
@@ -232,15 +236,15 @@ def test_a_content_digest_is_computed_once_per_file_across_boots(
         hashed.append(Path(path).name)
         return real(path)
 
-    app_for(repo, k=1, warmup=0, export_cache_dir=str(cache))
+    app_for(repo, samples=1, warmup=0, export_cache_dir=str(cache))
     monkeypatch.setattr(export_cache, "sha256_file", counting)
     (cache / "index.json").unlink()
     MEMO.clear()
     no_weights()
 
-    app_for(repo, k=1, warmup=0, export_cache_dir=str(cache))
+    app_for(repo, samples=1, warmup=0, export_cache_dir=str(cache))
     MEMO.clear()
-    app_for(repo, k=1, warmup=0, export_cache_dir=str(cache))
+    app_for(repo, samples=1, warmup=0, export_cache_dir=str(cache))
 
     assert hashed.count("model.safetensors") == 1
 
@@ -277,7 +281,14 @@ def test_check_ignores_the_cache_directory(cache, monkeypatch):
 
 
 def test_cache_false_skips_the_disk_tier_too(cache):
-    app_for(mlp(), clean_mlp.make_inputs(), k=1, warmup=0, export_cache_dir=str(cache), cache=False)
+    app_for(
+        mlp(),
+        clean_mlp.make_inputs(),
+        samples=1,
+        warmup=0,
+        export_cache_dir=str(cache),
+        cache=False,
+    )
 
     assert list(cache.iterdir()) == []
 
@@ -322,7 +333,7 @@ def test_a_worker_with_an_artifact_never_opens_the_cache(cache, monkeypatch, tmp
 @pytest.mark.needs_torch_26
 @pytest.mark.parametrize("version", [2, None])
 def test_an_entry_with_another_format_version_is_exported_again(cache, repo, caplog, version):
-    app_for(repo, k=1, warmup=0, export_cache_dir=str(cache))
+    app_for(repo, samples=1, warmup=0, export_cache_dir=str(cache))
     (entry,) = entries(cache)
     manifest_file = entry / "model.manifest.json"
     manifest = json.loads(manifest_file.read_text())
@@ -335,7 +346,7 @@ def test_an_entry_with_another_format_version_is_exported_again(cache, repo, cap
     MEMO.clear()
 
     with caplog.at_level(logging.WARNING, logger="downshift.export_cache"):
-        again = app_for(repo, k=1, warmup=0, export_cache_dir=str(cache))
+        again = app_for(repo, samples=1, warmup=0, export_cache_dir=str(cache))
 
     assert {"export", "verify"} <= set(boot(again))
     warnings = [r.getMessage() for r in caplog.records if "unusable" in r.getMessage()]

@@ -72,7 +72,7 @@ def export(
     model,
     output: str | Path,
     example_inputs: tuple | None = None,
-    k: int = DEFAULT_SAMPLES,
+    samples: int = DEFAULT_SAMPLES,
     adapter: Adapter | str | None = None,
     dynamic: dict[str, list[int]] | None = None,
     fp16: bool = False,
@@ -99,7 +99,7 @@ def export(
     from downshift.core.verdict import check
 
     run = dict(
-        k=k,
+        samples=samples,
         adapter=adapter,
         dynamic=dynamic,
         fp16=fp16,

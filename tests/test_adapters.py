@@ -223,7 +223,7 @@ def test_check_vary_is_used_for_verification_samples():
         calls.append(i)
         return base
 
-    verdict = downshift.check(clean_mlp.make_model(), base, vary=custom_vary, k=3)
+    verdict = downshift.check(clean_mlp.make_model(), base, vary=custom_vary, samples=3)
 
     assert verdict.status == "CLEAN", verdict.reason
     # The verification takes samples 0 to 2. The row check then asks for the rows 0 and 1 again.

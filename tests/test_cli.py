@@ -472,7 +472,7 @@ def test_serve_app_factory_rebuilds_the_app_from_env(monkeypatch):
     args = runtime.ServeArgs(
         load=LoadSpec(CLEAN),
         options=ServeOptions(
-            k=1,
+            samples=1,
             device="cpu",
             warmup=1,
             output_encoding=OutputEncoding.base64,
@@ -505,7 +505,7 @@ def test_a_worker_that_cannot_load_exits_with_uvicorns_startup_failure_code(monk
 
     args = runtime.ServeArgs(
         load=LoadSpec(CLEAN),
-        options=ServeOptions(k=1, device="cpu", warmup=1),
+        options=ServeOptions(samples=1, device="cpu", warmup=1),
         reference=None,
         middleware=None,
         log_level="warning",
@@ -621,7 +621,7 @@ def test_serve_app_factory_from_onnx_artifact_never_calls_capture(monkeypatch, t
     args = runtime.ServeArgs(
         load=LoadSpec(CLEAN),
         options=ServeOptions(
-            k=1, device="cpu", warmup=1, max_input_bytes=1024, max_body_bytes=2048
+            samples=1, device="cpu", warmup=1, max_input_bytes=1024, max_body_bytes=2048
         ),
         reference=None,
         middleware=None,

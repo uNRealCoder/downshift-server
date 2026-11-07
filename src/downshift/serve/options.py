@@ -37,7 +37,7 @@ class ServeOptions:
     force_onnx: bool = False  # serve a DEGRADED graph through ORT
     device: str = settings.DEVICE
     warmup: int = settings.WARMUP
-    k: int = settings.SAMPLES
+    samples: int = settings.SAMPLES
     adapter: str | None = None
     dynamic: dict[str, list[int]] | None = None
     # --axis-max: {axis name: largest size to serve}. DOWNSHIFT_AXIS_MAX, if you do not give it

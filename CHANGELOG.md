@@ -27,6 +27,7 @@ All notable changes to this project are documented here. Format follows
 ### Changed
 
 - Breaking change: the variable `DOWNSHIFT_SERVER_API_KEY` is now `DOWNSHIFT_API_KEY`. The old name still works for one minor release. If only the old name is set, downshift uses it and logs one warning. If both are set, `DOWNSHIFT_API_KEY` wins. To upgrade, rename the variable in your deployment.
+- Breaking change: the keyword argument `k` is now `samples` in `check()`, `export()`, `intake()`, `build_verdict()` and `ServeOptions`. There is no alias. If you pass `k=...` or `ServeOptions(k=...)`, change it to `samples=...`. The CLI option `-k` and `--samples` does not change.
 - The export cache of 0.5.x exports again one time. The version of downshift is part of its key, and 1.0.0 adds the row check to the verdict.
 - A bare `serve` or `app_for` on a model with independent rows now has the result cache on. To keep the old behavior, set `--result-cache-rows 0`.
 - `/predict` with the cache on does the encoding on a prep thread and not on an inference thread.

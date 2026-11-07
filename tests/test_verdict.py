@@ -87,7 +87,7 @@ def test_intake_serves_an_onnx_with_an_external_data_file(tmp_path, monkeypatch)
     assert verdict.onnx_path == path
     assert verdict.op_types["Gemm"] == 2
     entry = ExportEntry(verdict.to_dict(), list(verdict.input_names), {}, onnx_path=path)
-    opts = ServeOptions(k=1, device="cpu", warmup=1)
+    opts = ServeOptions(samples=1, device="cpu", warmup=1)
     state = state_from_entry(entry, None, opts, None, source=str(path), kind=ONNX_FILE)
     assert state.backend.name == "onnxruntime"
 

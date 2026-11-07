@@ -196,7 +196,7 @@ def common_parts(
     *,
     adapter: object,
     dynamic: dict[str, list[int]] | None,
-    k: int,
+    samples: int,
     seed: int,
     atol: float | None,
     rtol: float | None,
@@ -211,7 +211,7 @@ def common_parts(
     return {
         "adapter": _code_ref(adapter),
         "dynamic": dynamic,
-        "k": k,
+        "samples": samples,
         "seed": seed,
         "atol": atol,
         "rtol": rtol,
@@ -230,7 +230,7 @@ def run_options(opts: Any, adapter: object) -> dict:
     return {
         "adapter": adapter,
         "dynamic": opts.dynamic,
-        "k": opts.k,
+        "samples": opts.samples,
         "seed": opts.seed,
         "atol": opts.atol,
         "rtol": opts.rtol,

@@ -21,7 +21,7 @@ from tests.models import clean_mlp
 RUN = {
     "adapter": None,
     "dynamic": None,
-    "k": 2,
+    "samples": 2,
     "seed": 0,
     "atol": None,
     "rtol": None,
@@ -87,7 +87,7 @@ def test_the_key_changes_with_each_option():
     base = memo.model_key(model, inputs, **RUN)
 
     for change in (
-        {"k": 3},
+        {"samples": 3},
         {"seed": 1},
         {"atol": 1e-3},
         {"axis_max": {"dim0": 8}},
@@ -213,9 +213,9 @@ def test_the_memo_ignores_failed_and_external_data_verdicts():
 def test_a_third_model_evicts_the_oldest():
     models = [mlp(seed) for seed in range(3)]
     inputs = clean_mlp.make_inputs()
-    keys = [memo.model_key(m, inputs, **(RUN | {"k": 1})) for m in models]
+    keys = [memo.model_key(m, inputs, **(RUN | {"samples": 1})) for m in models]
     for m in models:
-        downshift.check(m, inputs, k=1)
+        downshift.check(m, inputs, samples=1)
 
     assert len(MEMO) == 2
     assert keys[0] not in MEMO
@@ -224,7 +224,7 @@ def test_a_third_model_evicts_the_oldest():
 
 def test_an_external_data_verdict_is_not_memoised(monkeypatch):
     monkeypatch.setattr(capture, "EXTERNAL_DATA_THRESHOLD", 0)
-    result = downshift.check(mlp(), clean_mlp.make_inputs(), k=1)
+    result = downshift.check(mlp(), clean_mlp.make_inputs(), samples=1)
 
     assert result.status == "CLEAN"
     assert result.onnx_path is not None
@@ -237,14 +237,14 @@ def test_an_external_data_verdict_is_not_memoised(monkeypatch):
 def test_check_stores_but_never_reads(monkeypatch, count_builds):
     model = mlp()
     inputs = clean_mlp.make_inputs()
-    downshift.check(model, inputs, k=1)
+    downshift.check(model, inputs, samples=1)
     assert len(MEMO) == 1
 
     def refuse(key):
         raise AssertionError("check() read the memo")
 
     monkeypatch.setattr(MEMO, "get", refuse)
-    downshift.check(model, inputs, k=1)
+    downshift.check(model, inputs, samples=1)
 
     assert len(count_builds) == 2
 
@@ -254,10 +254,10 @@ def test_export_reuses_a_check_in_the_same_process(tmp_path, count_builds):
 
     model = mlp()
     inputs = clean_mlp.make_inputs()
-    checked = downshift.check(model, inputs, k=2)
+    checked = downshift.check(model, inputs, samples=2)
 
     out = tmp_path / "out" / "m.onnx"
-    exported = downshift.export(model, out, inputs, k=2)
+    exported = downshift.export(model, out, inputs, samples=2)
 
     assert len(count_builds) == 1
     assert exported.status == checked.status == "CLEAN"
@@ -270,8 +270,8 @@ def test_export_reuses_a_check_in_the_same_process(tmp_path, count_builds):
 def test_export_stores_for_a_later_export(tmp_path, count_builds):
     model = mlp()
     inputs = clean_mlp.make_inputs()
-    downshift.export(model, tmp_path / "a.onnx", inputs, k=1)
-    downshift.export(model, tmp_path / "b.onnx", inputs, k=1)
+    downshift.export(model, tmp_path / "a.onnx", inputs, samples=1)
+    downshift.export(model, tmp_path / "b.onnx", inputs, samples=1)
 
     assert len(count_builds) == 1
     assert (tmp_path / "a.onnx").read_bytes() == (tmp_path / "b.onnx").read_bytes()
@@ -280,9 +280,9 @@ def test_export_stores_for_a_later_export(tmp_path, count_builds):
 def test_app_for_reuses_a_check(count_builds):
     model = mlp()
     inputs = clean_mlp.make_inputs()
-    downshift.check(model, inputs, k=1)
+    downshift.check(model, inputs, samples=1)
 
-    app = app_for(model, inputs, k=1, warmup=1)
+    app = app_for(model, inputs, samples=1, warmup=1)
 
     assert len(count_builds) == 1
     assert "export" not in boot(app) and "verify" not in boot(app)
@@ -294,14 +294,14 @@ def test_cache_false_bypasses_both_ways(tmp_path, count_builds):
     model = mlp()
     inputs = clean_mlp.make_inputs()
 
-    downshift.check(model, inputs, k=1, cache=False)
+    downshift.check(model, inputs, samples=1, cache=False)
     assert len(MEMO) == 0
 
-    downshift.check(model, inputs, k=1)
-    downshift.export(model, tmp_path / "m.onnx", inputs, k=1, cache=False)
+    downshift.check(model, inputs, samples=1)
+    downshift.export(model, tmp_path / "m.onnx", inputs, samples=1, cache=False)
     assert len(count_builds) == 3  # export did not use the stored entry
 
-    app = app_for(model, inputs, k=1, warmup=1, cache=False)
+    app = app_for(model, inputs, samples=1, warmup=1, cache=False)
     assert {"export", "verify"} <= set(boot(app))
 
 
@@ -313,7 +313,7 @@ def test_a_second_app_for_of_a_repo_skips_export_and_never_loads_weights(tmp_pat
     from tests.models.hf_repo import write_encoder_repo
 
     repo = write_encoder_repo(tmp_path / "repo")
-    first = app_for(repo, k=2, warmup=1)
+    first = app_for(repo, samples=2, warmup=1)
     assert {"export", "verify"} <= set(boot(first))
     expected = TestClient(first).post("/predict", json={"text": ["hello world"]}).json()
 
@@ -321,7 +321,7 @@ def test_a_second_app_for_of_a_repo_skips_export_and_never_loads_weights(tmp_pat
         raise AssertionError("from_pretrained was called on a memo hit")
 
     monkeypatch.setattr(AutoModel, "from_pretrained", refuse)
-    second_app = app_for(repo, k=2, warmup=1)
+    second_app = app_for(repo, samples=2, warmup=1)
 
     timings = boot(second_app)
     assert "export" not in timings and "verify" not in timings
@@ -336,12 +336,12 @@ def test_editing_a_repo_file_misses(tmp_path, monkeypatch):
     from tests.models.hf_repo import write_encoder_repo
 
     repo = write_encoder_repo(tmp_path / "repo")
-    app_for(repo, k=1, warmup=0)
+    app_for(repo, samples=1, warmup=0)
     weights = Path(repo) / "model.safetensors"
     stat = weights.stat()
     os.utime(weights, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
 
-    assert {"export", "verify"} <= set(boot(app_for(repo, k=1, warmup=0)))
+    assert {"export", "verify"} <= set(boot(app_for(repo, samples=1, warmup=0)))
 
 
 def test_the_banner_boot_row_says_reused(tmp_path):

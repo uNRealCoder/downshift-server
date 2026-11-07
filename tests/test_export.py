@@ -47,7 +47,7 @@ def test_fixture_verdict(module, expected_status: str) -> None:
     model = module.make_model()
     inputs = module.make_inputs()
 
-    verdict = downshift.check(model, inputs, k=8)
+    verdict = downshift.check(model, inputs, samples=8)
 
     assert verdict.status == expected_status, verdict.reason
 
@@ -57,7 +57,7 @@ def test_clean_mlp_verdict_fields() -> None:
     model = clean_mlp.make_model()
     inputs = clean_mlp.make_inputs()
 
-    verdict = downshift.check(model, inputs, k=8)
+    verdict = downshift.check(model, inputs, samples=8)
 
     assert verdict.capture_strategy == "strict=False"
     assert verdict.opset is not None
@@ -71,7 +71,7 @@ def test_clean_mlp_verdict_fields() -> None:
 def test_check_switches_a_training_mode_model_to_eval_with_a_warning() -> None:
     model = clean_mlp.make_model().train()
 
-    verdict = downshift.check(model, clean_mlp.make_inputs(), k=2)
+    verdict = downshift.check(model, clean_mlp.make_inputs(), samples=2)
 
     assert any("training mode" in w for w in verdict.warnings)
     assert model.training is False
@@ -83,7 +83,7 @@ def test_bf16_weights_fixture_fails_via_onnx_runtime_not_a_crash() -> None:
     model = bf16_weights.make_model()
     inputs = bf16_weights.make_inputs()
 
-    verdict = downshift.check(model, inputs, k=2)
+    verdict = downshift.check(model, inputs, samples=2)
 
     assert verdict.status == "FAILED"
     assert verdict.recommended_backend == "torch"
@@ -97,7 +97,7 @@ def test_check_with_fp16_does_not_mutate_the_callers_model() -> None:
     model = clean_mlp.make_model()
     original_dtype = next(model.parameters()).dtype
 
-    verdict = downshift.check(model, clean_mlp.make_inputs(), k=2, fp16=True)
+    verdict = downshift.check(model, clean_mlp.make_inputs(), samples=2, fp16=True)
 
     assert next(model.parameters()).dtype == original_dtype
     assert verdict.prepared is not None
@@ -132,7 +132,7 @@ def test_scatter_fixture_numerics_actually_diverge() -> None:
     model = scatter_include_self_false.make_model()
     inputs = scatter_include_self_false.make_inputs()
 
-    verdict = downshift.check(model, inputs, k=8)
+    verdict = downshift.check(model, inputs, samples=8)
 
     assert verdict.status == "DEGRADED"
     assert verdict.numerics is not None
@@ -153,7 +153,7 @@ def test_scatter_fixture_numerics_actually_diverge() -> None:
 def test_verdict_round_trips_through_dict(module, status: str) -> None:
     """from_dict(v.to_dict()) must reproduce to_dict() exactly. A `serve --workers N` worker
     gets its verdict in this way. It does not do the capture and the verification again."""
-    verdict = downshift.check(module.make_model(), module.make_inputs(), k=4)
+    verdict = downshift.check(module.make_model(), module.make_inputs(), samples=4)
     assert verdict.status == status, verdict.reason
 
     rebuilt = verdict_mod.ExportVerdict.from_dict(verdict.to_dict())
@@ -162,7 +162,7 @@ def test_verdict_round_trips_through_dict(module, status: str) -> None:
 
 
 def test_axes_survive_the_dict_round_trip() -> None:
-    verdict = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(), k=4)
+    verdict = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(), samples=4)
     assert verdict.axes
 
     rebuilt = verdict_mod.ExportVerdict.from_dict(verdict.to_dict())

@@ -82,7 +82,7 @@ def _run_fixture(name: str) -> Row:
         return Row(name, hazard, (DASH, f"skipped (missing {missing})", DASH, DASH, DASH, DASH))
     try:
         inputs = module.make_inputs() if hasattr(module, "make_inputs") else None
-        verdict = downshift.check(module.make_model(), inputs, k=K)
+        verdict = downshift.check(module.make_model(), inputs, samples=K)
     except Exception as exc:  # noqa: BLE001 - a fixture that is not a hazard (for example a
         # factory that raises by design for CLI tests) is a skip and not a crash of the script.
         return Row(name, hazard, (DASH, f"skipped ({type(exc).__name__})", DASH, DASH, DASH, DASH))
@@ -116,7 +116,7 @@ def render(rows: list[Row]) -> str:
         "# Compatibility matrix",
         "",
         f"Generated {datetime.now(UTC):%Y-%m-%d} by `scripts/gen_matrix.py` with {versions}.",
-        f"Downshift checked each model with `downshift.check(..., k={K})`.",
+        f"Downshift checked each model with `downshift.check(..., samples={K})`.",
         "",
         LEGEND,
         "",

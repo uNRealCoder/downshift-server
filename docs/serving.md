@@ -22,7 +22,7 @@ class ServeOptions:
     force_onnx: bool = False
     device: str = "auto"
     warmup: int = 3
-    k: int = 8
+    samples: int = 8
     adapter: str | None = None
     dynamic: dict[str, list[int]] | None = None
     axis_max: dict[str, int] | None = None

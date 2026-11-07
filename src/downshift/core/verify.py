@@ -1,6 +1,6 @@
 """Numerical verification. An export is not a success until this passes.
 
-K samples run through torch and through the ONNX graph. The dynamic axes vary, so some samples
+The samples run through torch and through the ONNX graph. The dynamic axes vary, so some samples
 have shapes that the exporter did not see. This finds a graph that froze a shape or a branch.
 """
 
@@ -235,7 +235,7 @@ def verify(
     base_inputs: tuple,
     dynamic_shapes: tuple | None = None,
     vary_fn: VaryFn | None = None,
-    k: int = DEFAULT_SAMPLES,
+    samples: int = DEFAULT_SAMPLES,
     atol: float | None = None,
     rtol: float | None = None,
     seed: int = 0,
@@ -247,7 +247,7 @@ def verify(
 
     tolerance_dtype, default_atol, default_rtol = default_tolerances(model)
     report = NumericsReport(
-        samples_tested=k,
+        samples_tested=samples,
         max_abs_err=0.0,
         max_rel_err=0.0,
         failures=0,
@@ -266,14 +266,14 @@ def verify(
     # A forked RNG leaves the random state of the caller unchanged.
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(seed)
-        for i in range(k):
+        for i in range(samples):
             sample = vary_fn(i)
             shapes = _shapes(sample)
             report.sample_shapes.append(shapes)
             report_logger.info(
                 "verify: sample %d/%d, %s",
                 i + 1,
-                k,
+                samples,
                 ", ".join(
                     f"{name} {list(shape)}"
                     for name, shape in zip(input_names, shapes, strict=False)

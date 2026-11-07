@@ -107,7 +107,7 @@ To mount the same app in your own FastAPI service, use `downshift.serve.app_for(
 
 ## The gate
 
-A successful `torch.onnx.export` does not prove that the graph computes the same function as the model. Before downshift serves anything, it exports the model in memory. It then runs `k` samples (default 8) through PyTorch and through ONNX Runtime, and it varies the dynamic axes, so some samples have shapes that the exporter did not see. The result is one of four verdicts, and the verdict selects the backend:
+A successful `torch.onnx.export` does not prove that the graph computes the same function as the model. Before downshift serves anything, it exports the model in memory. It then runs 8 samples by default through PyTorch and through ONNX Runtime, and it varies the dynamic axes, so some samples have shapes that the exporter did not see. The result is one of four verdicts, and the verdict selects the backend:
 
 | Verdict | Meaning | Served by |
 |---|---|---|

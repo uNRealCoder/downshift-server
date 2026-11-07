@@ -459,9 +459,9 @@ def test_check_leaves_global_rng_alone():
     torch.manual_seed(1234)
     before = torch.get_rng_state()
 
-    downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(), k=2)
+    downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(), samples=2)
     first = clean_mlp.make_model()
-    downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(), k=2)
+    downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(), samples=2)
     second = clean_mlp.make_model()
 
     assert not torch.equal(first.net[0].weight, second.net[0].weight)
@@ -473,7 +473,7 @@ def test_verify_logs_one_progress_line_per_sample_with_every_input_shape(caplog)
     from downshift.logs import REPORT_LOGGER
 
     with caplog.at_level(logging.INFO, logger=REPORT_LOGGER):
-        verdict = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(), k=3)
+        verdict = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(), samples=3)
 
     lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("verify:")]
     assert verdict.numerics is not None

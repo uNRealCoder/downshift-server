@@ -47,7 +47,7 @@ def test_axis_fact_round_trips_through_dict() -> None:
 
 
 def test_clean_mlp_has_one_batch_like_axis() -> None:
-    verdict = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(), k=8)
+    verdict = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(), samples=8)
 
     (fact,) = verdict.axes
     assert (fact.input, fact.axis, fact.name) == ("x", 0, "dim0")
@@ -67,7 +67,7 @@ def test_clean_mlp_without_verify_has_unsampled_facts() -> None:
 
 @pytest.mark.needs_torch_26
 def test_tiny_bert_has_batch_and_seq_facts() -> None:
-    verdict = downshift.check(tiny_bert.make_model(), tiny_bert.make_inputs(), k=8)
+    verdict = downshift.check(tiny_bert.make_model(), tiny_bert.make_inputs(), samples=8)
 
     by_name = {fact.name: fact for fact in verdict.axes}
     assert {"batch", "seq"} <= set(by_name)
@@ -78,7 +78,7 @@ def test_tiny_bert_has_batch_and_seq_facts() -> None:
 
 @pytest.mark.needs_torch_26
 def test_gcn_has_independent_node_and_edge_facts() -> None:
-    verdict = downshift.check(gnn_gcn.make_model(), gnn_gcn.make_inputs(), k=8)
+    verdict = downshift.check(gnn_gcn.make_model(), gnn_gcn.make_inputs(), samples=8)
 
     by_name = {fact.name: fact for fact in verdict.axes}
     assert {"num_nodes", "num_edges"} <= set(by_name)

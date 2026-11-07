@@ -217,7 +217,7 @@ def test_the_worker_label_is_the_pid_only_for_a_workers_child(plain_state, monke
 
     args = runtime.ServeArgs(
         load=LoadSpec("tests.models.clean_mlp:make_model"),
-        options=ServeOptions(k=1, device="cpu", warmup=1, metrics=True),
+        options=ServeOptions(samples=1, device="cpu", warmup=1, metrics=True),
         reference=None,
         middleware=None,
         log_level="warning",

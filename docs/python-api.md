@@ -27,7 +27,7 @@ For this reason, `downshift --help` and `--version` do not import torch. The CLI
 def check(
     model: torch.nn.Module,
     example_inputs: tuple | None = None,
-    k: int = 8,
+    samples: int = 8,
     adapter: Adapter | str | None = None,
     dynamic: dict[str, list[int]] | None = None,
     fp16: bool = False,
@@ -44,7 +44,7 @@ def check(
 `check` exports `model` to ONNX in memory and verifies it against PyTorch. It writes nothing to disk. `export()` is `check()` plus the writing of the artifact.
 
 - `example_inputs`: a tuple of forward arguments. If it is `None`, the adapter that downshift resolves makes a guess (see `prepare_model`).
-- `k`: the number of verification samples.
+- `samples`: the number of verification samples.
 - `adapter`: an `Adapter` instance, an adapter name (`"generic"`, `"pyg"`, `"hf"`), a `path/to/adapter.py[:attr]` spec, or `None` to detect the adapter.
 - `dynamic`: `{input_name: [axis, ...]}`. It overrides the dynamic axes. The default is axis 0 of every input.
 - `fp16`: casts a deep copy of `model` to `float16` before the export. The model of the caller and the tensors in `example_inputs` do not change. Downshift sets the model to `eval()` in place if it was in training mode. When `fp16=True`, downshift does this on the copy. The model of the caller then stays in its own mode.
@@ -72,7 +72,7 @@ def export(
     model,
     output: str | Path,
     example_inputs: tuple | None = None,
-    k: int = 8,
+    samples: int = 8,
     adapter: Adapter | str | None = None,
     dynamic: dict[str, list[int]] | None = None,
     fp16: bool = False,
@@ -104,7 +104,7 @@ def intake(
     reference: torch.nn.Module | None = None,
     example_inputs: tuple | None = None,
     adapter: Adapter | str | None = None,
-    k: int = 8,
+    samples: int = 8,
     dynamic: dict[str, list[int]] | None = None,
     atol: float | None = None,
     rtol: float | None = None,
@@ -128,7 +128,7 @@ The command `downshift check some.onnx --reference some_model.py:build` runs thi
 ```python
 def build_verdict(
     prepared: Prepared,
-    k: int = 8,
+    samples: int = 8,
     verify_numerics: bool = True,
     atol: float | None = None,
     rtol: float | None = None,
@@ -325,7 +325,7 @@ class NumericsReport:
 
 | Field | Type | Meaning |
 |---|---|---|
-| `samples_tested` | `int` | `k`, the number of samples that ran. |
+| `samples_tested` | `int` | `samples`, the number of samples that ran. |
 | `max_abs_err` | `float` | The largest absolute error across all output elements and samples. |
 | `max_rel_err` | `float` | The largest relative error, with the same scope. |
 | `failures` | `int` | The number of samples that failed the comparison in the style of `numpy.allclose`. `NumericsReport.passed` is `failures == 0`. |

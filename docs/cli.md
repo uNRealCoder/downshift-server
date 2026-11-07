@@ -218,7 +218,7 @@ Downshift reads these variables one time, when `downshift` is imported. To chang
 | `DOWNSHIFT_CACHE_HEADER` | `X-Downshift-Cache` | The name of the result-cache header of `/predict` (`hit`, `partial` or `miss`). Use letters, digits and `-` only. An empty value means the default. There is no flag. |
 | `DOWNSHIFT_TOL_{FLOAT32,FLOAT64,FLOAT16,BFLOAT16}_{ATOL,RTOL}` | refer to "Tolerances" | The default tolerances. |
 
-A bad value (for example `DOWNSHIFT_PORT=abc`) stops the process at start with a message that names the variable. The library functions `check()`, `export()` and `intake()` use `8` as the default of `k`. They do not read `DOWNSHIFT_SAMPLES`.
+A bad value (for example `DOWNSHIFT_PORT=abc`) stops the process at start with a message that names the variable. The library functions `check()`, `export()` and `intake()` use `8` as the default of `samples`. They do not read `DOWNSHIFT_SAMPLES`.
 
 ## Exit codes
 

@@ -77,7 +77,7 @@ def test_bert_at_max_position_embeddings_serves():
 @pytest.mark.needs_torch_26
 def test_axis_max_seq_pins_a_sample_and_lowers_the_served_bound():
     verdict = downshift.check(
-        tiny_bert.make_model(), tiny_bert.make_inputs(), axis_max={"seq": 24}, k=4
+        tiny_bert.make_model(), tiny_bert.make_inputs(), axis_max={"seq": 24}, samples=4
     )
 
     assert verdict.status == "CLEAN", verdict.reason

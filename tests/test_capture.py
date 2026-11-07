@@ -86,7 +86,7 @@ def test_external_data_verdict_is_clean_and_keeps_its_directory_alive():
 
     prepared = prepare_model(clean_mlp.make_model(), clean_mlp.make_inputs())
 
-    verdict = build_verdict(prepared, k=2, _external_data_threshold=0)
+    verdict = build_verdict(prepared, samples=2, _external_data_threshold=0)
 
     assert verdict.status == "CLEAN", verdict.reason
     assert verdict.onnx_bytes == b""

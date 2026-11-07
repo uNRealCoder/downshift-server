@@ -174,7 +174,7 @@ def _verdict_for(
             reference.model if reference else None,
             reference.example_inputs if reference else None,
             opts.adapter or loaded.adapter_hint,
-            k=opts.k,
+            samples=opts.samples,
             dynamic=opts.dynamic,
             atol=opts.atol,
             rtol=opts.rtol,
@@ -198,7 +198,12 @@ def _verdict_for(
             eager_output_axes(prepared),
         )
     verdict = build_verdict(
-        prepared, k=opts.k, atol=opts.atol, rtol=opts.rtol, seed=opts.seed, timings=timings
+        prepared,
+        samples=opts.samples,
+        atol=opts.atol,
+        rtol=opts.rtol,
+        seed=opts.seed,
+        timings=timings,
     )
     if verdict.status == Status.FAILED and not verdict.output_axes:
         # The export never reached verification: classify on the eager model instead.

@@ -125,8 +125,8 @@ def test_the_verdict_carries_the_row_facts_through_a_round_trip():
     import downshift
     from downshift.core.verdict import ExportVerdict
 
-    clean = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(2), k=3)
-    mixed = downshift.check(cross_row.make_model(), cross_row.make_inputs(), k=3)
+    clean = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(2), samples=3)
+    mixed = downshift.check(cross_row.make_model(), cross_row.make_inputs(), samples=3)
 
     assert (clean.row_independent, clean.to_dict()["row_reason"]) == (True, None)
     assert mixed.row_independent is False
@@ -149,7 +149,7 @@ def test_a_verdict_from_0_5_reads_as_not_independent():
     import downshift
     from downshift.core.verdict import ExportVerdict
 
-    data = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(2), k=3).to_dict()
+    data = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(2), samples=3).to_dict()
     del data["row_independent"], data["row_reason"]
 
     old = ExportVerdict.from_dict(data)
@@ -160,7 +160,7 @@ def test_a_verdict_from_0_5_reads_as_not_independent():
 def test_the_row_reason_hides_the_paths_of_a_redacted_verdict():
     import downshift
 
-    verdict = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(2), k=3)
+    verdict = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(2), samples=3)
     verdict.row_independent = None
     verdict.row_reason = "not checked: cannot read /secret/dir/model.onnx"
 

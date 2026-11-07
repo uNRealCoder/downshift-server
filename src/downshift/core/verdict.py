@@ -268,7 +268,7 @@ def _verify_into(
     passed: str,
     failed: str,
     unrunnable: str,
-    k: int,
+    samples: int,
     atol: float | None,
     rtol: float | None,
     seed: int,
@@ -288,7 +288,7 @@ def _verify_into(
             prepared.inputs,
             prepared.dynamic_shapes,
             vary_fn=prepared.vary_fn,
-            k=k,
+            samples=samples,
             atol=atol,
             rtol=rtol,
             seed=seed,
@@ -319,7 +319,7 @@ def _verify_into(
 
 def build_verdict(
     prepared: Prepared,
-    k: int = DEFAULT_SAMPLES,
+    samples: int = DEFAULT_SAMPLES,
     verify_numerics: bool = True,
     atol: float | None = None,
     rtol: float | None = None,
@@ -391,7 +391,7 @@ def build_verdict(
         f"{via}; numerics ok",
         f"{via} but numerics diverge",
         f"{via} but ONNX Runtime cannot run the graph",
-        k,
+        samples,
         atol,
         rtol,
         seed,
@@ -410,7 +410,7 @@ def build_verdict(
 def check(
     model: torch.nn.Module,
     example_inputs: tuple | None = None,
-    k: int = DEFAULT_SAMPLES,
+    samples: int = DEFAULT_SAMPLES,
     adapter: Adapter | str | None = None,
     dynamic: dict[str, list[int]] | None = None,
     fp16: bool = False,
@@ -440,7 +440,7 @@ def check(
             example_inputs,
             adapter=adapter,
             dynamic=dynamic,
-            k=k,
+            samples=samples,
             seed=seed,
             atol=atol,
             rtol=rtol,
@@ -457,7 +457,7 @@ def check(
             )
     prepared = prepare_model(model, example_inputs, adapter, dynamic, vary=vary, axis_max=axis_max)
     verdict = build_verdict(
-        prepared, k=k, verify_numerics=verify_numerics, atol=atol, rtol=rtol, seed=seed
+        prepared, samples=samples, verify_numerics=verify_numerics, atol=atol, rtol=rtol, seed=seed
     )
     if key is not None:
         memo.store_verdict(key, verdict)
@@ -469,7 +469,7 @@ def intake(
     reference: torch.nn.Module | None = None,
     example_inputs: tuple | None = None,
     adapter: Adapter | str | None = None,
-    k: int = DEFAULT_SAMPLES,
+    samples: int = DEFAULT_SAMPLES,
     dynamic: dict[str, list[int]] | None = None,
     atol: float | None = None,
     rtol: float | None = None,
@@ -509,7 +509,7 @@ def intake(
         "pre-built ONNX matches reference",
         "pre-built ONNX diverges from reference",
         "pre-built ONNX cannot run in ONNX Runtime",
-        k,
+        samples,
         atol,
         rtol,
         seed,
