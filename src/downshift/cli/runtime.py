@@ -100,12 +100,13 @@ class ArtifactHandoff:
     def entry(self) -> ExportEntry:
         import numpy as np
 
+        from downshift.core.export_cache import FEED_PREFIX
         from downshift.core.memo import ExportEntry
 
         feeds = None
         if self.feeds_path:
-            with np.load(self.feeds_path) as archive:
-                feeds = {name: archive[name] for name in archive.files}
+            with np.load(self.feeds_path, allow_pickle=False) as archive:
+                feeds = {name.removeprefix(FEED_PREFIX): archive[name] for name in archive.files}
         return ExportEntry(
             verdict=self.verdict,
             input_names=self.input_names,
@@ -239,6 +240,7 @@ def _write_onnx_artifact(state: ServingState) -> tuple[Path, Path | None, Path |
 
     import numpy as np
 
+    from downshift.core.export_cache import FEED_PREFIX
     from downshift.core.feeds import example_feeds
 
     verdict = state.verdict
@@ -260,7 +262,7 @@ def _write_onnx_artifact(state: ServingState) -> tuple[Path, Path | None, Path |
         assert state.example_inputs is not None
         feeds_path = temp_dir / "feeds.npz"
         feeds = example_feeds(state.input_names, state.example_inputs)
-        np.savez(feeds_path, **feeds)  # type: ignore[arg-type]  # the numpy stub misreads **kwds
+        np.savez(feeds_path, **{FEED_PREFIX + n: a for n, a in feeds.items()})  # type: ignore[arg-type]  # the numpy stub misreads **kwds
     return onnx_path, feeds_path, temp_dir
 
 

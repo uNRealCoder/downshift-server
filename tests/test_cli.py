@@ -592,6 +592,32 @@ def test_serve_workers_hands_an_external_data_export_to_the_workers(monkeypatch)
     assert seen["api"].state.serving.backend.name == "onnxruntime"
 
 
+def test_worker_handoff_keeps_inputs_named_like_numpy_savez_keywords():
+    """numpy.savez has its own keywords `file` and `allow_pickle`. An input with such a name must
+    reach the worker."""
+    import shutil
+    from types import SimpleNamespace
+
+    names = ["file", "allow_pickle"]
+    arrays = (torch.ones(2, 3), torch.zeros(2, 1))
+    verdict = SimpleNamespace(_tmpdir=None, onnx_path=None, onnx_bytes=b"graph")
+    state = SimpleNamespace(verdict=verdict, example_inputs=arrays, input_names=names)
+
+    onnx_path, feeds_path, temp_dir = runtime._write_onnx_artifact(state)
+    try:
+        handoff = ArtifactHandoff(
+            verdict={}, input_names=names, kind="onnx-file", feeds_path=str(feeds_path)
+        )
+        feeds = handoff.entry().feeds
+    finally:
+        shutil.rmtree(temp_dir)
+
+    assert feeds is not None
+    assert sorted(feeds) == sorted(names)
+    assert feeds["file"].shape == (2, 3)
+    assert feeds["allow_pickle"].shape == (2, 1)
+
+
 def test_serve_workers_degraded_ships_a_torch_artifact_and_warns(monkeypatch):
     seen: dict = {}
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: seen.update(app=app, **kw))

@@ -45,7 +45,7 @@ INDEX = "index.json"
 
 # numpy.savez takes `file` and `allow_pickle` as its own keywords: a prefix keeps an input of
 # that name apart.
-_FEED_PREFIX = "in."
+FEED_PREFIX = "in."
 
 # A writer that a signal killed leaves a temporary or an old directory. The cache removes it
 # when it is older than this.
@@ -184,7 +184,7 @@ class ExportCache:
         feeds = None
         if (entry_dir / FEEDS).exists():
             with np.load(entry_dir / FEEDS, allow_pickle=False) as archive:
-                feeds = {name.removeprefix(_FEED_PREFIX): archive[name] for name in archive.files}
+                feeds = {name.removeprefix(FEED_PREFIX): archive[name] for name in archive.files}
         return ExportEntry(
             verdict=verdict,
             input_names=list(serving["input_names"]),
@@ -221,7 +221,7 @@ class ExportCache:
             )
             feeds = entry.feeds
             if feeds and all(array.dtype.kind != "O" for array in feeds.values()):
-                np.savez(tmp / FEEDS, **{_FEED_PREFIX + n: a for n, a in feeds.items()})  # type: ignore[arg-type]  # the numpy stub misreads **kwds
+                np.savez(tmp / FEEDS, **{FEED_PREFIX + n: a for n, a in feeds.items()})  # type: ignore[arg-type]  # the numpy stub misreads **kwds
             self._install(tmp, self.root / key)
         except BaseException:
             shutil.rmtree(tmp, ignore_errors=True)
