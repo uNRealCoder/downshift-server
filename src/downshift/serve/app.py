@@ -35,6 +35,7 @@ from downshift.serve.errors import (
     http_error_handler,
     validation_error_handler,
 )
+from downshift.serve.metrics import CONTENT_TYPE, Metrics, render
 from downshift.serve.options import ExecutionChoice
 from downshift.serve.predict import (
     BINARY_REQUEST_TYPES,
@@ -267,10 +268,17 @@ class RequestIdMiddleware:
     `access_log`, it writes one line for each request: WARNING from status 400, DEBUG for the
     probes, INFO otherwise, with the stage timings of a predict."""
 
-    def __init__(self, app: ASGIApp, access_log: bool = True, header: str = "X-Request-Id") -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        access_log: bool = True,
+        header: str = "X-Request-Id",
+        metrics: Metrics | None = None,
+    ) -> None:
         self.app = app
         self.access_log = access_log
         self.header = header.lower()
+        self.metrics = metrics
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -287,7 +295,10 @@ class RequestIdMiddleware:
             nonlocal status
             if message["type"] == "http.response.start":
                 status = message["status"]
-                MutableHeaders(scope=message).append(self.header, request_id)
+                headers = MutableHeaders(scope=message)
+                headers.append(self.header, request_id)
+                if self.metrics is not None:
+                    self.metrics.record_cache_result(headers.get(settings.CACHE_HEADER))
             await send(message)
 
         token = request_id_var.set(request_id)
@@ -300,10 +311,24 @@ class RequestIdMiddleware:
             raise
         finally:
             try:
-                if self.access_log and status is not None:
-                    self._log(scope, status, (time.perf_counter() - start) * 1000, state)
+                if status is not None:
+                    elapsed = time.perf_counter() - start
+                    if self.metrics is not None:
+                        self._count(scope, status, elapsed, state)
+                    if self.access_log:
+                        self._log(scope, status, elapsed * 1000, state)
             finally:
                 request_id_var.reset(token)
+
+    def _count(self, scope: Scope, status: int, seconds: float, state: dict[str, Any]) -> None:
+        assert self.metrics is not None
+        # FastAPI puts the matched route in the scope. No route is "other": a request path
+        # is never a label.
+        route = scope.get("route")
+        self.metrics.record_request(route.path if route is not None else "other", status, seconds)
+        timings = state.get("timings_ms")
+        if timings:
+            self.metrics.record_stages(timings)
 
     @staticmethod
     def _log(scope: Scope, status: int, duration_ms: float, state: dict[str, Any]) -> None:
@@ -416,12 +441,16 @@ def build_app(
     middleware: Sequence[str] = (),
     api_key: str | None = API_KEY,
     access_log: bool = True,
+    metrics: bool = False,
+    worker: str = "0",
 ) -> FastAPI:
     """The app over `state`, or over the result of `loader`. With a loader, the app binds at
     once: /health is 200, and /ready and the model routes are 503 until the loader finishes.
 
     `api_key` defaults to DOWNSHIFT_SERVER_API_KEY. None or "" turns it off (with a warning).
     `access_log=False` drops the request lines of `downshift.access`.
+    `metrics=True` counts the requests and adds GET /metrics. `worker` is the value of the
+    `worker` label of each series.
     """
     if (state is None) == (loader is None):
         raise ValueError("build_app needs exactly one of state or loader")
@@ -445,9 +474,17 @@ def build_app(
     load_middleware(app, middleware)
     app.add_middleware(ApiKeyMiddleware, api_key=api_key)
     request_id_header = settings.REQUEST_ID_HEADER
-    app.add_middleware(RequestIdMiddleware, access_log=access_log, header=request_id_header)
+    counters = Metrics(worker=worker) if metrics else None
+    app.add_middleware(
+        RequestIdMiddleware, access_log=access_log, header=request_id_header, metrics=counters
+    )
 
-    app.add_exception_handler(StarletteHTTPException, http_error_handler)  # type: ignore[arg-type]
+    async def _http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+        if counters is not None:
+            counters.record_rejected(getattr(exc, "code", ""))
+        return await http_error_handler(request, exc)
+
+    app.add_exception_handler(StarletteHTTPException, _http_error)  # type: ignore[arg-type]
     app.add_exception_handler(RequestValidationError, validation_error_handler)  # type: ignore[arg-type]
 
     @app.exception_handler(Exception)
@@ -537,6 +574,13 @@ def build_app(
         from downshift.serve.describe import describe
 
         return describe(current, f"{str(request.base_url).rstrip('/')}/predict")
+
+    if counters is not None:
+
+        @app.get("/metrics", include_in_schema=False)
+        async def metrics_text(request: Request) -> Response:
+            text = render(counters, request.app.state.serving)
+            return Response(text, media_type=CONTENT_TYPE)
 
     for path, endpoint in (("/predict", predict), ("/predict/graph", predict_graph)):
         app.router.add_api_route(

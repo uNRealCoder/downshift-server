@@ -406,6 +406,8 @@ def print_banner(
     )
     rows.add("Capacity", _capacity_text(state))
     rows.add("Execution", _execution_text(state))
+    if state.options.metrics:
+        rows.add("Metrics", "GET /metrics  (--metrics)")
     if state.options.execution == ExecutionChoice.inline:
         rows.note(
             f"{_WARN} --execution inline only helps very fast models (under ~1 ms per "

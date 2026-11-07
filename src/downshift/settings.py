@@ -207,6 +207,10 @@ CACHE_HEADER = _env_header("DOWNSHIFT_CACHE_HEADER", "X-Downshift-Cache")
 # that another client sent the same row. The access log has the timings in both cases.
 SERVER_TIMING = _env_bool("DOWNSHIFT_SERVER_TIMING", False)
 
+# Count the requests and serve them as Prometheus text on GET /metrics. It is off by default.
+# Each worker counts for itself.
+METRICS = _env_bool("DOWNSHIFT_METRICS", False)
+
 # HTTPS. If SSL_CERTFILE is set, `serve` uses TLS. The key can be in the cert file, or in its
 # own file. The password of an encrypted key is an environment variable only, so that it does
 # not show in the process list.

@@ -300,6 +300,14 @@ ServerTimingOpt = Annotated[
         "in the cache. The access log has the timings in both cases",
     ),
 ]
+MetricsOpt = Annotated[
+    bool,
+    typer.Option(
+        "--metrics/--no-metrics",
+        help="Count the requests and serve them as Prometheus text on GET /metrics. Each "
+        "worker counts for itself. The API key rule of the other routes applies",
+    ),
+]
 AccessLogOpt = Annotated[
     bool,
     typer.Option(

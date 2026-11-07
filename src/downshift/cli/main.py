@@ -39,6 +39,7 @@ from downshift.cli.options import (
     MaxConcurrencyOpt,
     MaxInputBytesOpt,
     MaxQueueOpt,
+    MetricsOpt,
     ModelArg,
     ModelClassOpt,
     NormalizeOpt,
@@ -371,6 +372,7 @@ def serve_cmd(
     request_timeout: RequestTimeoutOpt = settings.REQUEST_TIMEOUT,
     result_cache_rows: ResultCacheRowsOpt = settings.RESULT_CACHE_ROWS,
     server_timing: ServerTimingOpt = settings.SERVER_TIMING,
+    metrics: MetricsOpt = settings.METRICS,
     workers: WorkersOpt = settings.WORKERS,
     export_cache_dir: ExportCacheDirOpt = settings.EXPORT_CACHE_DIR,
     ssl_certfile: SslCertfileOpt = settings.SSL_CERTFILE,
@@ -446,6 +448,7 @@ def serve_cmd(
             request_timeout=request_timeout,
             result_cache_rows=result_cache_rows,
             server_timing=server_timing,
+            metrics=metrics,
             atol=atol,
             rtol=rtol,
             seed=seed,
@@ -501,7 +504,10 @@ def serve_cmd(
             return state
 
         api = build_app(
-            loader=loader, middleware=tuple(args.middleware or ()), access_log=access_log
+            loader=loader,
+            middleware=tuple(args.middleware or ()),
+            access_log=access_log,
+            metrics=metrics,
         )
         render.print_booting(model, host, port, https=https)
         server = uvicorn.Server(uvicorn.Config(api, **uvicorn_kwargs))
