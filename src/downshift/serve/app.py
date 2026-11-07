@@ -181,7 +181,8 @@ async def _predict(
         encode=encode,
         with_tokens=is_embeddings,
     )
-    request.state.cache = response.headers.get(settings.CACHE_HEADER)
+    if request.app.state.metrics is not None:  # only the request counters read it
+        request.state.cache = response.headers.get(settings.CACHE_HEADER)
     return response
 
 
@@ -541,6 +542,7 @@ def build_app(
     app.add_middleware(ApiKeyMiddleware, api_key=api_key)
     request_id_header = settings.REQUEST_ID_HEADER
     counters = Metrics() if metrics else None
+    app.state.metrics = counters
     app.add_middleware(
         RequestIdMiddleware, access_log=access_log, header=request_id_header, metrics=counters
     )

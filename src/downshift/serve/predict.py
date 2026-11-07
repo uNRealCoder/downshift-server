@@ -118,17 +118,22 @@ def resolve_prompt(state: ServingState, prompt_name: str | None, has_text: bool)
 
 
 def _text_feeds(
-    state: ServingState, text: list[str], declared: dict[str, str | None], prompt: str = ""
-) -> tuple[dict[str, np.ndarray], list[int]]:
-    """Tokenize `text` (each row after `prompt`) into the graph inputs. Also returns the token
-    count of each row, from the tokenizer output before it is cut to the model inputs."""
+    state: ServingState,
+    text: list[str],
+    declared: dict[str, str | None],
+    prompt: str = "",
+    count_tokens: bool = True,
+) -> tuple[dict[str, np.ndarray], list[int] | None]:
+    """Tokenize `text` (each row after `prompt`) into the graph inputs. With `count_tokens`,
+    also returns the token count of each row, from the tokenizer output before it is cut to the
+    model inputs."""
     assert state.text is not None  # run_predict refuses a text request without it
     encoded = state.text.encode([prompt + row for row in text] if prompt else text)
     missing = [n for n in state.input_names if n not in encoded]
     if missing:
         raise ValueError(f"the tokenizer does not produce the model's inputs {missing}")
     feeds = {n: to_numpy(n, encoded[n], declared.get(n)) for n in state.input_names}
-    return feeds, _row_tokens(encoded)
+    return feeds, _row_tokens(encoded) if count_tokens else None
 
 
 def _vocab_violation(state: ServingState, feeds: dict[str, np.ndarray]) -> str | None:
@@ -310,11 +315,15 @@ def _input_error(exc: Exception) -> ApiError:
 
 
 def _prepare_feeds(
-    state: ServingState, request: _Request, skip_batch_axis: bool = False
+    state: ServingState,
+    request: _Request,
+    skip_batch_axis: bool = False,
+    count_tokens: bool = False,
 ) -> tuple[dict[str, np.ndarray], float, GraphLayout | None]:
     """The graph inputs of a validated request (decode, convert, tokenize, join graphs), after
-    the checks that need them. Returns (feeds, milliseconds, graph layout or None). Raises a
-    400 for each client error."""
+    the checks that need them. Returns (feeds, milliseconds, graph layout or None). A text
+    request gets `request.tokens` only with `count_tokens`. Raises a 400 for each client
+    error."""
     tensors = request.tensors
     start = time.perf_counter()
     layout: GraphLayout | None = None
@@ -327,7 +336,7 @@ def _prepare_feeds(
             )
         elif request.text is not None:
             feeds, request.tokens = _text_feeds(
-                state, request.text, state.declared_dtypes, request.prompt
+                state, request.text, state.declared_dtypes, request.prompt, count_tokens
             )
         else:
             feeds = _tensor_feeds(state, request)
@@ -672,7 +681,7 @@ def _cache_prepare(
                 feeds = arrays
             else:
                 subset = _subset(request, arrays, found.missing)
-                feeds, _, _ = _prepare_feeds(state, subset, skip_batch_axis=True)
+                feeds, _, _ = _prepare_feeds(state, subset, skip_batch_axis=True, count_tokens=True)
                 tokens = subset.tokens
     except BaseException:
         cache.fail(claimed)
@@ -792,7 +801,7 @@ async def _run_cached(
                 pool,
                 "prep_wait",
                 timings_ms,
-                lambda: _prepare_feeds(state, subset, skip_batch_axis=True)[0],
+                lambda: _prepare_feeds(state, subset, skip_batch_axis=True, count_tokens=True)[0],
             )
             done = await compute(feeds, retry, subset.tokens)
             if done is not None:
@@ -875,7 +884,7 @@ async def run_predict(
         request = parsed or (
             parse() if parse is not None else _parse(state, body, graph, binary, timings_ms)
         )
-        feeds, prep_ms, layout = _prepare_feeds(state, request)
+        feeds, prep_ms, layout = _prepare_feeds(state, request, count_tokens=with_tokens)
         timings_ms["prep"] = round(prep_ms, 2)
         return request, feeds, layout
 

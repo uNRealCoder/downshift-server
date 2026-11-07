@@ -481,3 +481,4 @@ def test_token_counts_come_from_the_tokenizer_not_from_the_padded_model_inputs()
 
     assert list(feeds) == ["input_ids"]
     assert tokens == [3, 2]
+    assert predict._text_feeds(state, ["a", "b"], {}, count_tokens=False)[1] is None
