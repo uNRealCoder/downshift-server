@@ -83,6 +83,15 @@ Downshift needs Python 3.12 to 3.14. If the `downshift` command is not on `PATH`
 
 Integer lists become `int64`, and all other lists become `float32`. For large tensors, send base64 or a safetensors body. A Hugging Face repo with a tokenizer also takes `{"text": [...]}`. A graph model takes `x` and `edge_index` on `POST /predict/graph`. Refer to [`docs/http-api.md`](docs/http-api.md).
 
+A text embedding model also has the OpenAI embeddings route. Change only `base_url` and `api_key` in the `openai` package. Refer to [`docs/openai.md`](docs/openai.md).
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-used")
+vectors = client.embeddings.create(model="bge-small", input=["hello"]).data[0].embedding
+```
+
 | Route | Purpose |
 |---|---|
 | `GET /` | The version, the model, `ready`, and all routes. Start here if you know only the base URL. |
@@ -92,6 +101,7 @@ Integer lists become `int64`, and all other lists become `float32`. For large te
 | `GET /metadata` | The verdict, the backend, the limits and the boot timings. |
 | `POST /predict` | Named tensors, or `text`. JSON or safetensors. |
 | `POST /predict/graph` | One graph, or a batch of graphs. |
+| `POST /v1/embeddings` | The OpenAI embeddings route, for a text embedding model. Also `GET /v1/models`. |
 
 To mount the same app in your own FastAPI service, use `downshift.serve.app_for(model, example_inputs)`. Refer to [`docs/python-api.md`](docs/python-api.md#app_for). To deploy, read [`docs/production.md`](docs/production.md).
 
@@ -185,6 +195,7 @@ To add a model family, write an adapter. Refer to [`docs/adapters.md`](docs/adap
 
 - [`docs/cli.md`](docs/cli.md): every command, flag, environment variable and exit code.
 - [`docs/http-api.md`](docs/http-api.md): every route, body, status code and wire format.
+- [`docs/openai.md`](docs/openai.md): the `/v1/embeddings` route for OpenAI clients.
 - [`docs/production.md`](docs/production.md): authentication, HTTPS, probes, workers, caches, sizing, GPUs and Kubernetes.
 - [`docs/python-api.md`](docs/python-api.md): `check`, `export`, `intake`, `app_for` and the verdict.
 - [`docs/serving.md`](docs/serving.md) and [`docs/adapters.md`](docs/adapters.md): the internals, for contributors.

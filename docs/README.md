@@ -8,6 +8,7 @@ For a first walkthrough, read the repo [`README.md`](../README.md). The pages be
 |---|---|
 | [`cli.md`](cli.md) | Use `downshift check`, `export` and `serve`: every flag, environment variable, log level and exit code. |
 | [`http-api.md`](http-api.md) | Call a server: every route, body, status code, header and wire format (JSON, base64, safetensors, text, graphs). |
+| [`openai.md`](openai.md) | Use the OpenAI embeddings routes (`/v1/embeddings`) with an OpenAI client: the fields, `--served-model-name`, `--matryoshka` and the errors. |
 | [`production.md`](production.md) | Deploy a server: authentication, HTTPS, probes, workers, threads, the result cache, sizing, Kubernetes and GPUs. |
 | [`python-api.md`](python-api.md) | Use downshift as a library: `check`, `export`, `intake`, `app_for` and the verdict types. |
 | [`serving.md`](serving.md) | Change the serving layer: `ServeOptions`, `ServingState`, the boot builders, the request path and the backends. |

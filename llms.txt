@@ -56,6 +56,7 @@ Known problems and their fixes:
 - [HTTP API](docs/http-api.md): all routes, bodies, status codes and wire formats.
 - [CLI](docs/cli.md): all commands, flags, environment variables and exit codes.
 - [Python API](docs/python-api.md): `check()`, `export()`, `app_for()` and `build_app()`.
+- [OpenAI routes](docs/openai.md): `/v1/embeddings` for a text embedding model, with the `openai` package.
 - [Production](docs/production.md): HTTPS, the API key, probes, sizing and Kubernetes.
 - [Adapters](docs/adapters.md): add a model family.
 - OpenAPI: `GET /openapi.json` on a running server.

@@ -14,6 +14,8 @@ This page describes every route that `build_app` registers: the request and resp
 | `POST` | `/predict` | Named tensor inputs or `text`, for any model. JSON or safetensors body. |
 | `POST` | `/predict/graph` | One graph (`x`, `edge_index` and optional `edge_attr`) or a batch of graphs. JSON or safetensors body. |
 
+A server for a text embedding model also has `GET /v1/models`, `GET /v1/models/{id}`, `POST /v1/embeddings` and `GET /version`. They are for OpenAI clients. Their errors have the OpenAI shape. Refer to [`openai.md`](openai.md).
+
 Each served model comes from this machine. The `source` block of `/schema` says which form it is. Downshift fetches nothing to answer a request. The OpenAPI document of a running server is at `GET /openapi.json`.
 
 ## HTTPS
@@ -504,7 +506,7 @@ To get a safetensors response, send `Accept: application/vnd.safetensors`, or se
 | `X-Request-Id` | Request (optional), response (always) | To use a different name, set `DOWNSHIFT_REQUEST_ID_HEADER` (for example `X-Correlation-Id`). Downshift returns it if the client sent it. Otherwise it makes an ID of 16 hexadecimal characters (`RequestIdMiddleware`). The `request_id` field of a `500` body has the same value. Each server log line that is written while the request is served (including the request line of `downshift.access`) has it too. |
 | `Authorization` | Request | `Bearer <key>`. It is required on every route except `/health` and `/ready` when `DOWNSHIFT_SERVER_API_KEY` is set. |
 | `WWW-Authenticate` | Response (`401` only) | `Bearer`. |
-| `Server-Timing` | Response (`/predict` and `/predict/graph`, `200` only, only with `--server-timing`) | Off by default. The stages are listed below. Each one has `;dur=<ms>`. The access log line has the same split as `timings_ms`. |
+| `Server-Timing` | Response (`/predict`, `/predict/graph` and `/v1/embeddings`, `200` only, only with `--server-timing`) | Off by default. The stages are listed below. Each one has `;dur=<ms>`. The access log line has the same split as `timings_ms`. |
 | `X-Downshift-Cache` | Response (`/predict`, only if the result cache is on) | To use a different name, set `DOWNSHIFT_CACHE_HEADER`. `hit`: the server computed no row for this request. `partial`: it computed some rows. `miss`: it computed all rows. |
 | `Cache-Control` | Request (`/predict`) | `no-cache`: the server does not read the result cache for this request. The server still stores the rows that it computes. The response says `miss`. |
 | `Retry-After` | Response (`503` only) | `2` for "not ready yet" (`/metadata` and the predict routes). `1` for "at capacity". The `503` for "queued past `--request-timeout`" does not have it. |
