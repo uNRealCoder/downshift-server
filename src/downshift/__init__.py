@@ -1,11 +1,8 @@
-"""downshift: serve a PyTorch model over HTTP. Downshift verifies the ONNX export against
-PyTorch first.
+"""downshift: serve a PyTorch model over HTTP, after it verifies the ONNX export against
+PyTorch.
 
-The import is lazy (PEP 562). An import of `downshift` (and so of `downshift.cli.main`, which
-imports this module first) does not import torch, onnx or onnxruntime. Each name in `__all__`
-resolves when you first use it. `__getattr__` takes it from the `downshift.core`,
-`downshift.adapters` or `downshift.serve` module that defines it. Downshift caches it on this
-module, so later access does not call `__getattr__`.
+The names in `__all__` import lazily (PEP 562), so `import downshift` (and the CLI) does not
+import torch, onnx or onnxruntime.
 """
 
 from __future__ import annotations
@@ -19,13 +16,16 @@ from downshift.settings import DEFAULT_SAMPLES, EXPORT_CACHE_DIR
 if TYPE_CHECKING:
     from downshift.adapters.base import Adapter, Prepared, VaryFn
     from downshift.core.memo import ExportEntry
-    from downshift.core.prevalidated import intake
-    from downshift.core.verdict import ExportVerdict, build_verdict, check, prepare_model
+    from downshift.core.verdict import (
+        ExportVerdict,
+        build_verdict,
+        check,
+        intake,
+        prepare_model,
+    )
     from downshift.core.verify import NumericsReport, OnnxRuntimeError
 
-# This list is written out and not derived from _LAZY. A literal list lets ruff see the
-# TYPE_CHECKING imports above as exported (F401). `from downshift import *` and the doc tools
-# also read it. If you add a name to _LAZY, add it here too.
+# A literal list, so ruff sees the TYPE_CHECKING imports as exported. Keep it in step with _LAZY.
 __all__ = [
     "Adapter",
     "ExportVerdict",
@@ -51,7 +51,7 @@ _LAZY = {
     "prepare_model": ("downshift.core.verdict", "prepare_model"),
     "NumericsReport": ("downshift.core.verify", "NumericsReport"),
     "OnnxRuntimeError": ("downshift.core.verify", "OnnxRuntimeError"),
-    "intake": ("downshift.core.prevalidated", "intake"),
+    "intake": ("downshift.core.verdict", "intake"),
     "app_for": ("downshift.serve", "app_for"),
 }
 
@@ -86,38 +86,33 @@ def export(
     cache: bool = True,
     export_cache_dir: str | Path | None = EXPORT_CACHE_DIR,
 ) -> ExportVerdict:
-    """check() plus the writing of the .onnx file and its manifest. `output` is the .onnx path.
-
-    A FAILED verdict writes nothing. A DEGRADED verdict writes the artifact, because the
-    manifest records how far the numbers differ.
+    """check(), then write the .onnx file (`output`) and its manifest. A FAILED verdict writes
+    nothing. A DEGRADED one writes both: the manifest records how far the numbers differ.
 
     Unlike check(), export() reuses an earlier CLEAN or DEGRADED export of the same model and
-    options. It takes the export from the memo of this process (core/memo.py), and from
-    `export_cache_dir` if you give it (default: DOWNSHIFT_EXPORT_CACHE_DIR. If it is unset,
-    nothing is written to disk). `cache=False` skips both, for reads and for writes.
+    options, from the in-process memo and from `export_cache_dir` (default:
+    DOWNSHIFT_EXPORT_CACHE_DIR; unset means no disk). `cache=False` skips both.
     """
     from downshift.core import memo
     from downshift.core.export_cache import ExportCache, lookup, store
     from downshift.core.manifest import write_manifest
     from downshift.core.verdict import check
 
+    run = dict(
+        k=k,
+        adapter=adapter,
+        dynamic=dynamic,
+        fp16=fp16,
+        atol=atol,
+        rtol=rtol,
+        seed=seed,
+        vary=vary,
+        axis_max=axis_max,
+    )
     disk = ExportCache(export_cache_dir) if cache and export_cache_dir else None
     key = None
     if cache and verify_numerics:
-        key = memo.guarded(
-            memo.model_key,
-            model,
-            example_inputs,
-            adapter=adapter,
-            dynamic=dynamic,
-            k=k,
-            seed=seed,
-            atol=atol,
-            rtol=rtol,
-            vary=vary,
-            axis_max=axis_max,
-            fp16=fp16,
-        )
+        key = memo.guarded(memo.model_key, model, example_inputs, **run)
     output = Path(output)
     entry, _ = lookup(key, disk, key)
     if entry is not None:
@@ -126,34 +121,22 @@ def export(
     verdict = check(
         model,
         example_inputs,
-        k=k,
-        adapter=adapter,
-        dynamic=dynamic,
-        fp16=fp16,
         verify_numerics=verify_numerics,
-        atol=atol,
-        rtol=rtol,
-        seed=seed,
-        vary=vary,
-        axis_max=axis_max,
         cache=cache,
         _memo_key=key,
+        **run,  # type: ignore[arg-type]
     )
     if verdict.onnx_program is None:
         return verdict
-    if disk is not None and key is not None and verdict.status in memo.STORED_STATUSES:
+    if disk is not None and key is not None:
         entry = memo.entry_from_verdict(verdict)
         if entry is not None:
             store(entry, None, disk, key)  # check() already put it in the memo
     output.parent.mkdir(parents=True, exist_ok=True)
     if verdict.onnx_bytes:
-        # The graph that capture() already serialized. A reused export writes the same bytes.
         output.write_bytes(verdict.onnx_bytes)
     else:
-        # An export with external data (onnx_path is its temporary copy) is saved through the
-        # program again. This names the data file after `output` (<name>.onnx.data) and records
-        # that location in the .onnx file. Downshift never renames the temporary pair, and it
-        # never loads it back into memory.
+        # External data: save through the program, so the data file is named after `output`.
         verdict.onnx_program.save(str(output), external_data=True)  # type: ignore[attr-defined]
     verdict.onnx_path = output
     write_manifest(output, verdict, source_path, __version__)
@@ -161,8 +144,7 @@ def export(
 
 
 def _export_from_entry(entry: ExportEntry, output: Path, source_path: Path | None) -> ExportVerdict:
-    """export() for a reused export. Downshift writes the cached graph to `output`, with a
-    manifest. It does not export again."""
+    """export() from a reused export: write the cached graph and a manifest."""
     import shutil
 
     from downshift.core.manifest import external_data_files, write_manifest
@@ -173,8 +155,7 @@ def _export_from_entry(entry: ExportEntry, output: Path, source_path: Path | Non
     if entry.onnx_bytes:
         output.write_bytes(entry.onnx_bytes)
     else:
-        # Downshift names the data file after `output`, as a new export with external data does.
-        # The locations in the .onnx file follow. Downshift only copies the (large) data.
+        # Name the data file after `output`, as a new export does. Only the data is copied.
         import onnx
         from onnx.external_data_helper import ExternalDataInfo, uses_external_data
 

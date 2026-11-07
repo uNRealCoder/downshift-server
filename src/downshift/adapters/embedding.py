@@ -1,19 +1,9 @@
-"""Sentence embeddings from an encoder-only repo: the recipe, and the graph that applies it.
+"""Sentence embeddings: read the sentence-transformers recipe of a repo (modules.json,
+1_Pooling/config.json, sentence_bert_config.json), and apply it inside the exported graph
+(PoolingHead), so verification compares the finished embedding.
 
-`config.json` has no information about pooling. A sentence-transformers repo keeps its recipe
-in sibling files:
-
-- `modules.json` (Transformer, then Pooling, then an optional Normalize).
-- `1_Pooling/config.json` (the kind of pooling).
-- `sentence_bert_config.json` (the sequence length that the model used for training. It is
-  often shorter than its position embeddings).
-
-This module reads these files. PoolingHead applies the result inside the exported graph.
-Verification therefore compares the finished embedding, and ONNX Runtime also runs the pooling.
-
-Downshift refuses a recipe that asks for something that this module does not apply (a Dense
-module, or several poolings that are concatenated). It does not approximate. A model that is
-served with the wrong pooling still returns vectors that look correct. They are only worse.
+A recipe that this module cannot apply exactly (a Dense module, several poolings) is refused.
+Wrong pooling gives vectors that look fine but are worse.
 """
 
 import json
@@ -27,10 +17,9 @@ from torch import nn
 
 from downshift.adapters.pooling import PoolingChoice
 
-# hf_repo.load_pretrained sets it on the loaded model. The hf adapter reads it in prepare().
+# Set on the loaded model by hf_repo.load_pretrained, read by the hf adapter: the recipe, and
+# the tokenizer's padding side (so verification pads as serving does).
 EMBEDDING_ATTR = "downshift_embedding"
-# The padding side of the tokenizer ("left" or "right"). Downshift sets it next to
-# EMBEDDING_ATTR. The verification sampler pads in the same way as the tokenizer at serve time.
 PADDING_SIDE_ATTR = "downshift_padding_side"
 
 _POOLING_FLAGS = {
@@ -45,8 +34,7 @@ _MASKED_OUT = -1e9  # the value that sentence-transformers puts in padding befor
 
 
 class RecipeError(ValueError):
-    """Downshift cannot serve the embedding recipe. The repo declares a recipe that downshift
-    does not apply, or --pooling and --normalize contradict the kind of the repo."""
+    """The recipe cannot be applied, or --pooling and --normalize do not fit the repo."""
 
 
 @dataclass(frozen=True)
@@ -62,8 +50,7 @@ class EmbeddingRecipe:
         return f"{self.pooling} pooling" + (", L2-normalised" if self.normalize else "")
 
     def info(self, dimension: int | None) -> dict[str, Any]:
-        """The recipe as `embedding` of /schema and the safetensors metadata `downshift.embedding`
-        report it (without the prompts), for an output of `dimension` values for each row."""
+        """The recipe as /schema and the safetensors metadata report it (without prompts)."""
         return {
             "pooling": self.pooling,
             "normalized": self.normalize,
@@ -120,10 +107,7 @@ def _pooling_mode(directory: Path) -> str:
 
 
 def read_recipe(path: Path) -> EmbeddingRecipe | None:
-    """The recipe that a sentence-transformers repo declares. None if it has no modules.json.
-
-    It raises RecipeError for a recipe that this module cannot apply faithfully.
-    """
+    """The recipe that the repo declares, or None without modules.json."""
     modules = _read_json(path / "modules.json")
     if modules is None:
         return None
@@ -168,13 +152,8 @@ def read_recipe(path: Path) -> EmbeddingRecipe | None:
 def resolve_recipe(
     path: str | Path, pooling: str | None, normalize: bool | None, *, has_head: bool
 ) -> EmbeddingRecipe | None:
-    """What to serve: the recipe of the repo itself, changed by --pooling and --normalize if you
-    give them.
-
-    `pooling` "none" means the output of the encoder at token level. It ignores what the repo
-    declares. A repo with a classification head has no embedding to pool. A recipe there can
-    only be an explicit mistake.
-    """
+    """The repo's recipe, changed by --pooling and --normalize. "none" serves token vectors.
+    A repo with a classification head has nothing to pool, so the flags are an error there."""
     if pooling == PoolingChoice.none:
         if normalize is not None:
             raise RecipeError(
@@ -242,6 +221,6 @@ class PoolingHead(nn.Module):
         self.normalize = recipe.normalize
 
     def forward(self, hidden: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        # float32 on the wire, for all dtypes of the checkpoint. It does nothing for float32 models
+        # float32 on the wire, whatever the checkpoint dtype.
         pooled = pool(hidden, mask, self.mode).float()
         return F.normalize(pooled, p=2.0, dim=1) if self.normalize else pooled

@@ -1,11 +1,5 @@
-"""The PyG adapter. It flattens torch_geometric.data.Data into (x, edge_index[, edge_attr]).
-
-The node count N and the edge count E are independent dynamic dimensions. If you tie them to
-one Dim, the GNN export works on the example graph and raises INVALID_ARGUMENT on the next
-graph. This is the typical fault.
-
-Downshift imports it only when a PyG Data input appears. torch_geometric therefore stays
-optional.
+"""The PyG adapter: Data becomes (x, edge_index[, edge_attr]), with independent node and edge
+counts. (One shared Dim works on the example graph and fails on the next.)
 """
 
 import torch
@@ -15,7 +9,13 @@ from torch_geometric.nn import MessagePassing
 
 from downshift.adapters._flatten import build_shim_class
 from downshift.adapters.base import Family, Prepared, VaryFn
-from downshift.core.shapes import alternative_sizes, dim_bounds, lower_axis_max, pick_size
+from downshift.core.shapes import (
+    DEFAULT_DIM_MAX,
+    alternative_sizes,
+    dim_bounds,
+    lower_axis_max,
+    pick_size,
+)
 
 BASE_FIELD_NAMES = ("x", "edge_index")  # edge_attr is added if the input Data has it
 _GUESS_NODES = 8
@@ -68,8 +68,8 @@ class PyGAdapter:
         inputs = tuple(getattr(data, n) for n in names)
         shim = build_shim_class(names)(model, lambda fields: Data(**fields), names)
 
-        n_dim = torch.export.Dim("num_nodes", min=1, max=1 << 16)
-        e_dim = torch.export.Dim("num_edges", min=1, max=1 << 16)
+        n_dim = torch.export.Dim("num_nodes", min=1, max=DEFAULT_DIM_MAX)
+        e_dim = torch.export.Dim("num_edges", min=1, max=DEFAULT_DIM_MAX)
         axis_by_field = {"x": {0: n_dim}, "edge_index": {1: e_dim}, "edge_attr": {0: e_dim}}
         dynamic_shapes = lower_axis_max(tuple(axis_by_field[n] for n in names), axis_max)
 
@@ -89,13 +89,8 @@ def make_vary_fn(
     dynamic_shapes: tuple | None = None,
     axis_max: dict[str, int] | None = None,
 ) -> VaryFn:
-    """Generate (x, edge_index[, edge_attr]) again, with N and E varied independently.
-
-    Downshift draws edge_index again for the node count of the sample. It does not use the
-    value range of the original tensor. A graph that is smaller then never references nodes
-    that it does not have. With --axis-max, sample 1 is exactly at the pinned `num_nodes` and
-    `num_edges` (the other one keeps the size of the example).
-    """
+    """Samples with independent node and edge counts. edge_index is drawn for each sample's
+    node count. With --axis-max, sample 1 is at the pinned num_nodes and num_edges."""
     x_idx = field_names.index("x")
     ei_idx = field_names.index("edge_index")
     ea_idx = field_names.index("edge_attr") if "edge_attr" in field_names else None

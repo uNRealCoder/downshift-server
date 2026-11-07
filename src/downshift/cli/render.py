@@ -1,11 +1,6 @@
-"""Everything that the CLI reports, as plain text through `logging`. The commands give objects
-to this module. It builds the text and logs it. Reports, warnings and errors therefore share the
-one sink that `downshift.logs.setup_logging` installs (plain text on stdout, no colours).
-
-A report (verdict, banner or artifacts) is one INFO record on `downshift.report`. It is a
-block of lines in the form `Label   value`. It is one record and not one record for each row.
-A log collector therefore keeps a report together. That logger is forced to INFO, so reports
-print at all values of `--log-level`.
+"""Everything the CLI reports, as plain text through `logging`. Each report (verdict, banner,
+artifacts) is one multi-line INFO record on `downshift.report`, so a log collector keeps it
+together.
 """
 
 from __future__ import annotations
@@ -185,8 +180,16 @@ def _capacity_text(state: ServingState) -> str:
     )
 
 
+def _cache_text(state: ServingState) -> str:
+    if state.result_cache is not None:
+        return f"{state.result_cache.max_rows} rows per worker  (--result-cache-rows)"
+    if state.cache_off_reason is not None:
+        return f"off ({state.cache_off_reason.removeprefix('not checked: ')})"
+    return "off  (--result-cache-rows 0)"
+
+
 def _execution_text(state: ServingState) -> str:
-    if state.execution == ExecutionChoice.inline:
+    if state.options.execution == ExecutionChoice.inline:
         return "inline for small JSON bodies  (--execution inline)"
     return "threadpool  (--execution)"
 
@@ -215,11 +218,7 @@ def _shape_text(verdict: ExportVerdict) -> str:
 
 
 def _add_numerics_rows(rows: _Rows, verdict: ExportVerdict) -> None:
-    """Tolerance, Worst and Samples: the three rows that explain the numbers of a verdict.
-
-    The report of `check` and the banner of `serve` show them in the same way. Downshift
-    therefore builds them one time here. Nobody must keep two places in step by hand.
-    """
+    """Tolerance, Worst and Samples: shared by the `check` report and the `serve` banner."""
     tolerance = _tolerance_text(verdict)
     if tolerance is not None:
         rows.add("Tolerance", tolerance)
@@ -232,6 +231,13 @@ def _add_numerics_rows(rows: _Rows, verdict: ExportVerdict) -> None:
         rows.add("Samples", samples)
 
 
+def _rows_text(verdict: ExportVerdict) -> str:
+    if verdict.row_independent:
+        return "independent"
+    kind = "dependent" if verdict.row_independent is False else "not checked"
+    return f"{kind} ({str(verdict.rows_note).removeprefix('not checked: ')})"
+
+
 def print_verdict(verdict: ExportVerdict, model_name: str) -> None:
     rows = _Rows()
     rows.add("Model", model_name)
@@ -239,6 +245,8 @@ def print_verdict(verdict: ExportVerdict, model_name: str) -> None:
     rows.add("Export", _status_text(verdict))
     rows.add("Numerics", _numerics_text(verdict))
     _add_numerics_rows(rows, verdict)
+    if verdict.numerics is not None:
+        rows.add("Rows", _rows_text(verdict))
     rows.add("Shape-general", _shape_text(verdict))
     rows.add("Dynamic dims", _axes_text(verdict))
     if verdict.unsupported_ops:
@@ -359,6 +367,9 @@ def print_banner(
             rows.add("Override", "--force-onnx to serve the ONNX graph anyway")
 
     _add_numerics_rows(rows, verdict)
+    if verdict.numerics is not None:
+        rows.add("Rows", _rows_text(verdict))
+    rows.add("Cache", _cache_text(state))
     warmup_text = _warmup_text(state)
     if warmup_text is not None:
         rows.add("Warmup", warmup_text)
@@ -395,7 +406,7 @@ def print_banner(
     )
     rows.add("Capacity", _capacity_text(state))
     rows.add("Execution", _execution_text(state))
-    if state.execution == ExecutionChoice.inline:
+    if state.options.execution == ExecutionChoice.inline:
         rows.note(
             f"{_WARN} --execution inline only helps very fast models (under ~1 ms per "
             "inference); a slow model stalls the event loop, including /health and /ready"
@@ -419,11 +430,8 @@ def print_config(
     middleware: Sequence[str] = (),
     api_key_set: bool,
 ) -> None:
-    """Every setting that the server runs with, as one `name = value` line for each setting. It
-    logs at INFO (only `--log-level info` or lower shows it), directly before `ready`. The
-    whole of ServeOptions goes out as it is. A new option therefore shows here without a
-    change to this function. It shows names only. The model is its file name. The API key is
-    `set` or `unset` and never its value."""
+    """Every setting of the server, one `name = value` line each, at INFO before `ready`. All
+    of ServeOptions appears. The API key shows only as `set` or `unset`."""
     values = {
         "model": display_source(state.source, state.source_kind),
         "host": host,

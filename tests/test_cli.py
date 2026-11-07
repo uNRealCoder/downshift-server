@@ -14,8 +14,10 @@ from typer.testing import CliRunner
 import downshift
 from downshift.cli import main, runtime
 from downshift.cli.main import app
+from downshift.cli.runtime import ArtifactHandoff, ServeArgs
+from downshift.core.axes import DimBound, axis_bounds_from_json, axis_bounds_to_json
 from downshift.loading import LoadSpec
-from downshift.serve.options import ServeOptions
+from downshift.serve.options import BackendChoice, ServeOptions
 from downshift.serve.schemas import OutputEncoding
 from tests.conftest import TLS_KEY_PASSWORD
 from tests.models import clean_mlp
@@ -436,7 +438,7 @@ def test_serve_workers_uses_an_import_string_factory(monkeypatch):
     assert captured["workers"] == 2
     assert captured["factory"] is True
 
-    args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
+    args = runtime.ServeArgs.from_json(os.environ[runtime._SERVE_ARGS_ENV])
     assert args.load.model == CLEAN
 
 
@@ -445,7 +447,7 @@ def test_serve_workers_splits_threads_across_the_cpu_count(monkeypatch):
     _, captured = _serve_captured(monkeypatch, "--workers", "4")
     assert captured["workers"] == 4
 
-    args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
+    args = runtime.ServeArgs.from_json(os.environ[runtime._SERVE_ARGS_ENV])
     assert args.options.intra_op_threads == 4
 
 
@@ -453,7 +455,7 @@ def test_serve_workers_explicit_intra_op_threads_wins(monkeypatch):
     monkeypatch.setattr(main.settings, "usable_cpus", lambda: 16)
     _serve_captured(monkeypatch, "--workers", "4", "--intra-op-threads", "7")
 
-    args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
+    args = runtime.ServeArgs.from_json(os.environ[runtime._SERVE_ARGS_ENV])
     assert args.options.intra_op_threads == 7
 
 
@@ -467,7 +469,7 @@ def _rebuilt_app():
 
 def test_serve_app_factory_rebuilds_the_app_from_env(monkeypatch):
     pytest.importorskip("downshift.serve.app")
-    args = main.ServeArgs(
+    args = runtime.ServeArgs(
         load=LoadSpec(CLEAN),
         options=ServeOptions(
             k=1,
@@ -482,7 +484,7 @@ def test_serve_app_factory_rebuilds_the_app_from_env(monkeypatch):
         middleware=None,
         log_level="warning",
     )
-    monkeypatch.setenv(main._SERVE_ARGS_ENV, args.to_json())
+    monkeypatch.setenv(runtime._SERVE_ARGS_ENV, args.to_json())
 
     api = _rebuilt_app()
     assert api.state.serving.verdict.status == "CLEAN"
@@ -501,14 +503,14 @@ def test_a_worker_that_cannot_load_exits_with_uvicorns_startup_failure_code(monk
 
     from downshift.cli import runtime
 
-    args = main.ServeArgs(
+    args = runtime.ServeArgs(
         load=LoadSpec(CLEAN),
         options=ServeOptions(k=1, device="cpu", warmup=1),
         reference=None,
         middleware=None,
         log_level="warning",
     )
-    monkeypatch.setenv(main._SERVE_ARGS_ENV, args.to_json())
+    monkeypatch.setenv(runtime._SERVE_ARGS_ENV, args.to_json())
 
     def fail(_args):
         raise MemoryError("not enough RAM for another copy")
@@ -531,7 +533,7 @@ def test_serve_workers_writes_and_ships_the_onnx_artifact(monkeypatch):
     def fake_run(app, **kw):
         seen["app"] = app
         seen.update(kw)
-        args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
+        args = runtime.ServeArgs.from_json(os.environ[runtime._SERVE_ARGS_ENV])
         seen["args"] = args
         assert args.artifact.onnx_path is not None
         seen["onnx_bytes"] = Path(args.artifact.onnx_path).read_bytes()
@@ -574,7 +576,7 @@ def test_serve_workers_hands_an_external_data_export_to_the_workers(monkeypatch)
     seen: dict = {}
 
     def fake_run(app, **kw):
-        args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
+        args = runtime.ServeArgs.from_json(os.environ[runtime._SERVE_ARGS_ENV])
         onnx_path = Path(args.artifact.onnx_path)
         seen["files"] = sorted(p.name for p in onnx_path.parent.iterdir() if p.suffix != ".npz")
         seen["api"] = _rebuilt_app()
@@ -595,7 +597,7 @@ def test_serve_workers_degraded_ships_a_torch_artifact_and_warns(monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert "each worker independently reloads and re-warms" in result.output
-    args = main.ServeArgs.from_json(os.environ[main._SERVE_ARGS_ENV])
+    args = runtime.ServeArgs.from_json(os.environ[runtime._SERVE_ARGS_ENV])
     assert args.artifact.verdict is not None
     assert args.artifact.verdict["status"] == "DEGRADED"
     assert args.artifact.onnx_path is None
@@ -616,7 +618,7 @@ def test_serve_app_factory_from_onnx_artifact_never_calls_capture(monkeypatch, t
 
     monkeypatch.setattr(verdict_mod, "capture", boom)
 
-    args = main.ServeArgs(
+    args = runtime.ServeArgs(
         load=LoadSpec(CLEAN),
         options=ServeOptions(
             k=1, device="cpu", warmup=1, max_input_bytes=1024, max_body_bytes=2048
@@ -624,14 +626,14 @@ def test_serve_app_factory_from_onnx_artifact_never_calls_capture(monkeypatch, t
         reference=None,
         middleware=None,
         log_level="warning",
-        artifact=main.ArtifactHandoff(
+        artifact=runtime.ArtifactHandoff(
             verdict=verdict.to_dict(),
             input_names=list(verdict.input_names),
             onnx_path=str(onnx_path),
             kind="import-spec",
         ),
     )
-    monkeypatch.setenv(main._SERVE_ARGS_ENV, args.to_json())
+    monkeypatch.setenv(runtime._SERVE_ARGS_ENV, args.to_json())
 
     api = _rebuilt_app()
 
@@ -660,8 +662,8 @@ def test_check_axis_max_lowers_the_served_bound():
 
 @pytest.mark.parametrize(
     "value",
-    ["seq=4", "dim0=999999", "dim0", "dim0=abc", "dim0=0"],
-    ids=["unknown-name", "above-ceiling", "no-value", "non-int", "zero"],
+    ["seq=4", "dim0", "dim0=abc", "dim0=0"],
+    ids=["unknown-name", "no-value", "non-int", "zero"],
 )
 def test_check_bad_axis_max_is_usage_error(value):
     result = run("check", CLEAN, "--axis-max", value, "--json")
@@ -718,3 +720,82 @@ def test_serve_execution_round_trips_through_serve_args():
     )
     restored = ServeArgs.from_json(args.to_json()).options.execution
     assert restored is ExecutionChoice.inline
+
+
+def test_serve_passes_result_cache_rows_and_it_survives_workers(monkeypatch):
+    _, captured = _serve_captured(monkeypatch, "--result-cache-rows", "12")
+    assert captured["app"].state.serving.options.result_cache_rows == 12
+    assert captured["app"].state.serving.result_cache.max_rows == 12
+
+    _serve_captured(monkeypatch, "--result-cache-rows", "12", "--workers", "2")
+    args = runtime.ServeArgs.from_json(os.environ[runtime._SERVE_ARGS_ENV])
+    assert args.options.result_cache_rows == 12
+
+
+def test_serve_server_timing_flag_reaches_the_options_and_the_workers(monkeypatch):
+    _, captured = _serve_captured(monkeypatch)
+    assert captured["app"].state.serving.options.server_timing is False
+
+    _, captured = _serve_captured(monkeypatch, "--server-timing")
+    assert captured["app"].state.serving.options.server_timing is True
+
+    _serve_captured(monkeypatch, "--server-timing", "--workers", "2")
+    args = runtime.ServeArgs.from_json(os.environ[runtime._SERVE_ARGS_ENV])
+    assert args.options.server_timing is True
+
+
+BOUNDS = {
+    "input_ids": {0: DimBound("batch", 1, 4096), 1: DimBound("seq", 1, 510)},
+    "attention_mask": {0: DimBound("batch", 1, 4096), 1: DimBound("seq", 1, 510)},
+}
+
+
+def _serve_args(**overrides) -> ServeArgs:
+    fields = {
+        "load": LoadSpec("some/model", pooling="mean", normalize=True),
+        "options": ServeOptions(
+            backend=BackendChoice.torch,
+            output_encoding=OutputEncoding.base64,
+            max_body_bytes=1234,
+            request_timeout=2.5,
+            dynamic={"x": [0, 1]},
+        ),
+        "reference": "ref.pt",
+        "middleware": ["pkg.mod:Mw"],
+        "log_level": "info",
+        "artifact": ArtifactHandoff(
+            verdict={"status": "CLEAN"},
+            input_names=["input_ids", "attention_mask"],
+            onnx_path="model.onnx",
+            feeds_path="feeds.npz",
+            axis_bounds=axis_bounds_to_json(BOUNDS),
+            kind="onnx-file",
+        ),
+        "access_log": False,
+        "tokenizer_from": "path/to/repo/dir",
+    }
+    fields.update(overrides)
+    return ServeArgs(**fields)
+
+
+def test_serve_args_round_trip_keeps_access_log_and_axis_bounds():
+    args = _serve_args()
+
+    restored = ServeArgs.from_json(args.to_json())
+
+    assert restored == args
+    assert restored.access_log is False
+    assert restored.options.backend is BackendChoice.torch
+    assert restored.options.output_encoding is OutputEncoding.base64
+    assert restored.artifact is not None
+    assert axis_bounds_from_json(restored.artifact.axis_bounds) == BOUNDS
+
+
+def test_serve_args_round_trip_without_an_artifact_defaults_access_log_on():
+    args = _serve_args(artifact=None, access_log=True)
+
+    restored = ServeArgs.from_json(args.to_json())
+
+    assert restored == args
+    assert restored.artifact is None
+    assert restored.access_log is True

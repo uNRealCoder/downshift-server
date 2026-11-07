@@ -1,4 +1,4 @@
-"""The in-process export memo (0.5.0 C1): what its key contains, who reads and writes it, and
+"""The in-process export memo: what its key contains, who reads and writes it, and
 that a second boot of the same model skips the export and the verification. (For a Hugging Face
 repo directory, it never loads the weights.)"""
 

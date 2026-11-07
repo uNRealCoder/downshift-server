@@ -176,7 +176,6 @@ def _post(client, path, tensors, meta=None, content_type=ST, headers=None):
 def _outputs(resp) -> dict[str, np.ndarray]:
     assert resp.status_code == 200, resp.text
     assert resp.headers["content-type"] == ST
-    assert "Server-Timing" in resp.headers
     return st_load(resp.content)
 
 
@@ -261,10 +260,11 @@ def test_body_limit_and_max_input_bytes(mlp_state):
 
 
 def test_binary_never_goes_inline(mlp_state):
-    client = TestClient(build_app(_with(mlp_state, execution=ExecutionChoice.inline)))
-    resp = _post(client, "/predict", {"x": np.zeros((1, 16), np.float32)})
+    state = _with(mlp_state, execution=ExecutionChoice.inline, server_timing=True)
+    resp = _post(TestClient(build_app(state)), "/predict", {"x": np.zeros((1, 16), np.float32)})
     assert resp.status_code == 200
-    assert "Server-Timing" in resp.headers
+    # On the event loop, the prep wait would be 0.00.
+    assert "prep_wait;dur=0.00" not in resp.headers["Server-Timing"]
 
 
 def test_graph_route_binary(gcn_client):

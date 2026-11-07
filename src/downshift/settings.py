@@ -1,14 +1,11 @@
-"""Defaults for the CLI and for library serving (ServeOptions and app_for()). The DOWNSHIFT_*
-environment variables override them.
-
-Each value here is only a fallback. A CLI flag or a function keyword argument has priority over
-the environment. The environment has priority over the default below. Downshift reads the
-variables one time, at import. To change a variable, restart the process (or the CLI call)
-that reads it.
+"""The defaults for the CLI and library serving, and the DOWNSHIFT_* variables that override
+them. A flag or keyword argument wins over the environment, which wins over the default. The
+variables are read once, at import.
 """
 
 import math
 import os
+import re
 from collections.abc import Callable, Iterable
 
 # The decoded size that one base64 tensor input can reach. The server passes its own limit.
@@ -25,8 +22,8 @@ _CGROUP_CPU_MAX = "/sys/fs/cgroup/cpu.max"
 
 
 def usable_cpus() -> int:
-    """The CPUs that this process can use. The order is: a cgroup v2 quota (the --cpus of a
-    container), then the scheduler affinity mask, then the logical count of the machine."""
+    """The CPUs this process can use: the cgroup v2 quota, else the affinity mask, else the
+    machine's count."""
     try:
         with open(_CGROUP_CPU_MAX) as f:
             quota, period = f.read().split()[:2]
@@ -38,10 +35,6 @@ def usable_cpus() -> int:
     if process_cpu_count is not None:
         return process_cpu_count() or 1
     return os.cpu_count() or 1
-
-
-def _env_str(name: str, default: str) -> str:
-    return os.environ.get(name, default)
 
 
 def _env_cast[T](name: str, default: T, cast: Callable[[str], T], type_name: str) -> T:
@@ -62,6 +55,20 @@ def _env_float(name: str, default: float) -> float:
     return _env_cast(name, default, float, "float")
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    """1, true, yes or on; 0, false, no or off (any case)."""
+
+    def cast(raw: str) -> bool:
+        value = raw.strip().lower()
+        if value in ("1", "true", "yes", "on"):
+            return True
+        if value in ("0", "false", "no", "off"):
+            return False
+        raise ValueError(raw)
+
+    return _env_cast(name, default, cast, "boolean (1 or 0)")
+
+
 def _env_choice(name: str, default: str, choices: tuple[str, ...], type_name: str) -> str:
     """One of `choices`, so a typo in the environment fails at startup with its own name."""
 
@@ -73,9 +80,25 @@ def _env_choice(name: str, default: str, choices: tuple[str, ...], type_name: st
     return _env_cast(name, default, cast, f"{type_name} (one of {', '.join(choices)})")
 
 
+# The characters of an HTTP header name (the RFC 9110 token).
+_HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
+
+
+def _env_header(name: str, default: str) -> str:
+    """A header name from the environment. Unset or empty means the default."""
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    if not _HEADER_NAME.fullmatch(raw):
+        raise ValueError(
+            f"{name}={raw!r} is not a valid HTTP header name. Use letters, digits and '-' "
+            "only, for example X-Correlation-Id"
+        )
+    return raw
+
+
 def parse_axis_max(items: Iterable[str]) -> dict[str, int]:
-    """Turn "seq=4096,num_nodes=500" (or one NAME=N for each item, as --axis-max repeats) into
-    {name: N}. Any other input raises ValueError, so the CLI reports a usage error."""
+    """ "seq=4096,num_nodes=500" (or one NAME=N per item) -> {name: N}, else ValueError."""
     result: dict[str, int] = {}
     for item in items:
         for entry in filter(None, (e.strip() for e in item.split(","))):
@@ -88,13 +111,9 @@ def parse_axis_max(items: Iterable[str]) -> dict[str, int]:
     return result
 
 
-def _env_axis_max(name: str, default: dict[str, int]) -> dict[str, int]:
-    return _env_cast(name, default, lambda raw: parse_axis_max([raw]), "list of NAME=N")
-
-
-HOST = _env_str("DOWNSHIFT_HOST", "127.0.0.1")
+HOST = os.environ.get("DOWNSHIFT_HOST", "127.0.0.1")
 PORT = _env_int("DOWNSHIFT_PORT", 8000)
-DEVICE = _env_str("DOWNSHIFT_DEVICE", "auto")
+DEVICE = os.environ.get("DOWNSHIFT_DEVICE", "auto")
 BACKEND = _env_choice("DOWNSHIFT_BACKEND", "auto", ("auto", "onnxruntime", "torch"), "backend")
 WARMUP = _env_int("DOWNSHIFT_WARMUP", 3)
 SAMPLES = _env_int("DOWNSHIFT_SAMPLES", DEFAULT_SAMPLES)
@@ -133,7 +152,9 @@ EXECUTION = _env_choice(
 # The largest size to serve for each named axis ("seq=4096,num_nodes=500"). The names are the
 # names that the boot banner and /schema list. If it is empty, each axis keeps the bound that
 # the adapter exported.
-AXIS_MAX = _env_axis_max("DOWNSHIFT_AXIS_MAX", {})
+AXIS_MAX: dict[str, int] = _env_cast(
+    "DOWNSHIFT_AXIS_MAX", {}, lambda raw: parse_axis_max([raw]), "list of NAME=N"
+)
 
 # A directory where downshift saves verified exports and reuses them at the next boot (`serve`
 # and `export`). If it is unset, downshift never writes to disk. The in-process memo is then the
@@ -149,18 +170,42 @@ PREP_THREADS = _env_int("DOWNSHIFT_PREP_THREADS", min(4, usable_cpus()))
 DEFAULT_MAX_QUEUE = 64
 MAX_QUEUE = _env_int("DOWNSHIFT_MAX_QUEUE", DEFAULT_MAX_QUEUE)
 
+# The number of rows that the result cache keeps in each worker process. A row that arrives a
+# second time then skips the model. The cache counts rows and not bytes. Set a number that fits
+# the size of one output row. 0 turns the cache off. If the variable is unset, downshift uses
+# DEFAULT_RESULT_CACHE_ROWS for a model with independent rows and no cache for other models.
+DEFAULT_RESULT_CACHE_ROWS = 100
+RESULT_CACHE_ROWS: int | None = (
+    _env_int("DOWNSHIFT_RESULT_CACHE_ROWS", DEFAULT_RESULT_CACHE_ROWS)
+    if "DOWNSHIFT_RESULT_CACHE_ROWS" in os.environ
+    else None
+)
+
 # The number of seconds that an admitted predict can wait without a start. After this time, it
 # gets a 503 and no inference. 0 means no limit.
 DEFAULT_REQUEST_TIMEOUT = 30.0
 REQUEST_TIMEOUT = _env_float("DOWNSHIFT_REQUEST_TIMEOUT", DEFAULT_REQUEST_TIMEOUT)
 
-# A value of more than 1 starts that number of uvicorn worker processes. Each one loads,
-# exports and warms up the model on its own. Memory and startup time increase with this number.
+# A value of more than 1 starts that number of uvicorn worker processes. The parent exports and
+# verifies one time. Each worker loads that result and warms up. Memory and startup time
+# increase with this number.
 WORKERS = _env_int("DOWNSHIFT_WORKERS", 1)
 
 # If it is set, every route except /health and /ready needs "Authorization: Bearer <this value>".
 # None (unset) means no authentication, with a startup warning that says so.
 API_KEY = os.environ.get("DOWNSHIFT_SERVER_API_KEY")
+
+# The header that carries the request ID: the server reads it from a request and sets it on
+# each response.
+REQUEST_ID_HEADER = _env_header("DOWNSHIFT_REQUEST_ID_HEADER", "X-Request-Id")
+
+# The header of a /predict response that says hit, partial or miss for the result cache.
+CACHE_HEADER = _env_header("DOWNSHIFT_CACHE_HEADER", "X-Downshift-Cache")
+
+# Add the Server-Timing header (the milliseconds of each stage) to each predict response. It is
+# off by default: the timings tell a client how the server works, and a fast cache hit tells it
+# that another client sent the same row. The access log has the timings in both cases.
+SERVER_TIMING = _env_bool("DOWNSHIFT_SERVER_TIMING", False)
 
 # HTTPS. If SSL_CERTFILE is set, `serve` uses TLS. The key can be in the cert file, or in its
 # own file. The password of an encrypted key is an environment variable only, so that it does

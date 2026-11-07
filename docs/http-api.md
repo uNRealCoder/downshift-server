@@ -14,18 +14,11 @@ This page describes every route that `build_app` registers: the request and resp
 | `POST` | `/predict` | Named tensor inputs or `text`, for any model. JSON or safetensors body. |
 | `POST` | `/predict/graph` | One graph (`x`, `edge_index` and optional `edge_attr`) or a batch of graphs. JSON or safetensors body. |
 
-Each served model comes from this machine. It is one of these:
-
-- A downloaded `.onnx` file.
-- A downloaded PyTorch checkpoint.
-- A downloaded Hugging Face repo directory. Downshift identifies it by the `config.json` in it.
-- A module that the server process can import.
-
-The `source` block of `/schema` shows which one applies to each server. Downshift fetches nothing to answer a request.
+Each served model comes from this machine. The `source` block of `/schema` says which form it is. Downshift fetches nothing to answer a request. The OpenAPI document of a running server is at `GET /openapi.json`.
 
 ## HTTPS
 
-If `serve` starts with `--ssl-certfile`, all routes use HTTPS on the same port. The routes, the bodies and the status codes do not change. A plain HTTP request to that port gets no HTTP response. Refer to [HTTPS in production.md](../production.md#https).
+If `serve` starts with `--ssl-certfile`, all routes use HTTPS on the same port. The routes, the bodies and the status codes do not change. A plain HTTP request to that port gets no HTTP response. Refer to [HTTPS in production.md](production.md#https).
 
 ## Authentication
 
@@ -52,7 +45,7 @@ curl -s localhost:8000/schema -H "Authorization: Bearer $DOWNSHIFT_SERVER_API_KE
 This route always returns `200`, also while the model loads. It tells a client where to start. The response model is `IndexResponse`:
 
 ```json
-{"service": "downshift", "version": "0.5.1", "ready": true, "model": "clean_mlp",
+{"service": "downshift", "version": "0.6.0", "ready": true, "model": "clean_mlp",
  "routes": {"index": "GET /", "health": "GET /health", "ready": "GET /ready",
             "metadata": "GET /metadata", "schema": "GET /schema",
             "predict": "POST /predict", "predict_graph": "POST /predict/graph",
@@ -82,10 +75,10 @@ curl -s localhost:8000/health
 
 This route returns `200` with `{"ready": true}` after the model is loaded, exported, verified and warmed up. Before that, it returns `503`. There are two different `503` shapes. Neither has a `Retry-After` header:
 
-- No `ServingState` exists yet. The background loader started because `serve` got no `state=` argument, and it has not made one. The body is `{"ready": false, "phase": "export"}`. `phase` is the step that the loader is in now. It is one of `load`, `export`, `verify`, `session` and `warmup`. These are the values of the `Phase` enum in `core/phase.py`. They are also the keys of `boot` in `/metadata` and the names in the `Boot` row of the banner. `phase` is `null` for an app that you built with `state=`, because such an app has no loading window. The `200` body has no `phase`.
-- A `ServingState` exists, but its `ready` flag is `False`. The body is `{"ready": false}`. In practice, `prepare_serving()` sets `ready` to `True` as its last step. This happens inside `warmup()`, also with `--warmup 0`. This second shape cannot occur in the current boot paths for one worker or for `--workers N`. A `ServingState` object always appears after the warmup.
+- While the model loads, the body is `{"ready": false, "phase": "export"}`. `phase` is the step of the loader: `load`, `export`, `verify`, `session` or `warmup`. These are also the keys of `boot` in `/metadata` and the names in the `Boot` row of the banner.
+- A `ServingState` that is not warmed up gives `{"ready": false}`. The current boot paths never serve such a state.
 
-The response model is `ReadyResponse` (`{"ready": bool, "phase": str | None}`). The route writes its bodies by hand. A ready server answers `{"ready": true}` with no `phase` key.
+A ready server answers `{"ready": true}`. `/ready` does not change back to `503` until a restart.
 
 ```bash
 curl -s -i localhost:8000/ready
@@ -99,12 +92,14 @@ While no `ServingState` exists, this route returns `503` with `{"detail": "model
 class MetadataResponse(BaseModel):
     model: str
     family: str
-    verdict: dict
-    backend: dict
+    verdict: VerdictInfo  # ExportVerdict.to_dict(), without onnx_path
+    axes: list[AxisInfo] = []
+    backend: BackendInfo  # name, device, inputs, outputs
     input_names: list[str]
     notes: list[str] = []
     version: str
     limits: Limits  # max_body_bytes, max_input_bytes, max_concurrency, max_queue, request_timeout
+    cache: CacheInfo | None = None  # max_rows, entries, hits, misses. None if the cache is off
     execution: str  # "threadpool" or "inline"
     boot: dict[str, float] = {}
     warmup: dict | None = None
@@ -114,7 +109,8 @@ class MetadataResponse(BaseModel):
 |---|---|
 | `model` | The source that `serve` or `app_for` received. It is always a form that is already on this machine: a `.onnx` file, a checkpoint, a downloaded Hugging Face repo directory, or an import spec. A file or directory has only its last path component (`/srv/models/bert` gives `bert`). The server never sends its directory layout. An import spec is reported as given. |
 | `family` | `verdict.model_family`. |
-| `verdict` | `ExportVerdict.to_dict()` without `onnx_path`, which is a location on the disk of the server. Refer to [`python-api.md`](python-api.md#exportverdict). Paths in `reason`, `warnings` and `notes` are also cut to their file name. |
+| `verdict` | `ExportVerdict.to_dict()` without `onnx_path`, which is a location on the disk of the server. Refer to [`python-api.md`](python-api.md#exportverdict). Paths in `reason`, `warnings` and `notes` are also cut to their file name. `row_independent` (`true`, `false` or `null`) says if each row gives the same output with other rows. `row_reason` says why it is not `true`. |
+| `axes` | One entry for each dynamic axis: `input`, `axis`, `name` (the name that `--axis-max` takes), `served_min`, `served_max`, and the `sampled_min` and `sampled_max` that verification ran (`null` if it did not run). |
 | `backend` | `BackendMeta.to_dict()`: `{"name", "device", "inputs": [...], "outputs": [...]}`. Each input and output is an `IOSpec` (`name`, `dtype`, `shape`). |
 | `input_names` | The flat input names, in the order of the forward arguments. |
 | `notes` | Notes for the banner, for example warnings about `--force-onnx`. |
@@ -123,6 +119,7 @@ class MetadataResponse(BaseModel):
 | `execution` | The value of `--execution`: `"threadpool"` or `"inline"`. |
 | `boot` | The wall-clock seconds of each phase (`load`, `export`, `verify`, `session` and `warmup`, for the phases that ran). The `Boot` row of the CLI banner prints the same dict. |
 | `warmup` | `{"count", "mean_ms", "synthesized"}` from `WarmupStats`. It is `null` if the warmup did not run. |
+| `cache` | The result cache of this worker process: `{"max_rows", "entries", "hits", "misses"}`. `hits` and `misses` count rows. It is `null` if the cache is off. With `--workers N`, each worker has its own numbers. |
 
 ```bash
 curl -s localhost:8000/metadata | python -m json.tool
@@ -143,10 +140,14 @@ While no `ServingState` exists, the route returns `503` with `{"detail": "model 
 | `device` | The ONNX Runtime execution provider, or the torch device. |
 | `endpoint` | `"/predict"`. This is the route that receives these inputs. |
 | `graph_endpoint` | `"/predict/graph"` if the inputs of the model include `x` and `edge_index`. Otherwise `null`. |
+| `graph_batching` | For a PyG model: `{output_name: "node" \| "edge" \| "fixed" \| "unknown"}`. A `graphs` batch splits `node` and `edge` outputs for each graph. A model with a `fixed` or `unknown` output takes one graph for each request. `null` for other models. |
 | `inputs` | One `TensorSchema` for each input, in the order of the forward arguments. All are required. For a model that downshift exported, each one has the axis names of the adapter and `bounds` for each axis (see below). |
 | `outputs` | One `TensorSchema` for each output. It is empty for a torch backend that serves without example inputs. Nothing ran through the model yet, so nothing is known. A `notes` entry says this. |
+| `axes` | The same list as `axes` in `/metadata`. |
 | `example_request` | A complete and correct `/predict` body. It is `null` if the body would have more than 256 elements across all inputs. A `notes` entry then gives the shape to build. The values are filler: zeros, or ones for an attention mask. A zero attention mask is a correct request that returns NaN. Copy only the names, dtypes and shapes. |
 | `example_curl` | `example_request` as a `curl` command for the URL of this server. It is `null` if the example is `null`. |
+| `text_input` | Present if `/predict` takes `{"text": ...}`: the field name, `max_length` in tokens, and for a classifier the `labels` and the `activation`. Refer to "Text input" below. |
+| `embedding` | Present if the graph ends in a pooling step: `pooling`, `normalized`, `dimension`, `max_seq_length`, `from`, and the named `prompts` with the `default_prompt`. Refer to "Embedding models" below. |
 | `input_formats` | The three wire forms that a tensor value can have: nested list, typed object and base64. The rules are in "Wire formats" below. |
 | `output_encodings` | `["json", "base64"]`. |
 | `default_output_encoding` | The encoding that this server uses when a request has no `output_encoding`. |
@@ -334,7 +335,7 @@ Downshift never serves a model as something that it is not. These rules apply:
 - **Downshift refuses a recipe that it does not apply at load.** It does not approximate. Examples: a Dense module, and several poolings that are active together. The error says which one. `--pooling none` serves the token vectors of the encoder instead.
 - **Downshift does not pool a repo with no `modules.json`.** `output_0` stays `[batch, seq, hidden]`, and `/schema` has a note about this. To pool such a repo, use `--pooling mean|cls|max|mean_sqrt_len|lasttoken|weightedmean`. Add `--normalize` for L2 normalisation. The server does not guess a pooling.
 - `--pooling` and `--normalize` also override a recipe that the repo declares. They have no meaning for a repo with a classification head.
-- **The client adds prefixes.** Models such as E5 and BGE expect a query or passage prefix in the text. The prefix depends on what you embed, so the server sends the text that it receives.
+- **Prompts.** If the repo declares named prompts (`config_sentence_transformers.json`), send `"prompt_name": "query"` next to `text`. The server puts that prompt at the start of each row. Without `prompt_name`, it uses the `default_prompt` of the repo, if any. An unknown name gives a `400` that lists the names. `/schema` lists them under `embedding.prompts`. For a model that declares no prompts (for example E5 and BGE), add the prefix to the text yourself.
 - Downshift supports decoder-only embedders only if the repo has an embedding recipe (for example Qwen3-Embedding, with last-token pooling and left padding). It does not support models that need `trust_remote_code`.
 
 Status codes:
@@ -356,9 +357,9 @@ Status codes:
 | `500` | `{"detail": "inference failed on the server; see the server log", "request_id": "..."}` | An unhandled exception on the server. The real error is only in the server log. |
 | `503` | `{"detail": "model is not ready"}`, header `Retry-After: 2` | No `ServingState` exists yet. |
 | `503` | `{"detail": "server is at capacity (N running, M queued)"}`, header `Retry-After: 1` | `--max-concurrency + --max-queue` predicts are already admitted. |
-| `503` | `{"detail": "request waited X.Xs in queue, past the Y.Ys --request-timeout"}`, no `Retry-After` | The predict was admitted, but it waited longer than `--request-timeout` before the inference started. Downshift checks this after the body is prepared, and again when the inference starts. |
+| `503` | `{"detail": "request waited X.Xs in queue, past the Y.Ys --request-timeout"}`, no `Retry-After` | The predict was admitted, but it waited longer than `--request-timeout` before the inference started. Downshift checks this after the body is prepared, and again when the inference starts. A request that waits for a row of another request (the result cache) gets the same `503` at the same limit. The text is `request waited for a row past the Y.Ys --request-timeout`. |
 
-A `200` response has this header: `Server-Timing: parse;dur=<ms>, prep_wait;dur=<ms>, prep;dur=<ms>, infer_wait;dur=<ms>, infer;dur=<ms>, encode;dur=<ms>` (see "Headers"). Every response, on every route and with every status code, has `X-Request-Id`. If the client sent the header, downshift returns it. Otherwise, downshift makes an ID of 16 hexadecimal characters.
+If the server runs with `--server-timing`, a `200` response has this header: `Server-Timing: parse;dur=<ms>, prep_wait;dur=<ms>, prep;dur=<ms>, infer_wait;dur=<ms>, infer;dur=<ms>, encode;dur=<ms>` (see "Headers"). Every response, on every route and with every status code, has `X-Request-Id`. To use a different name, set `DOWNSHIFT_REQUEST_ID_HEADER`. If the client sent the header, downshift returns it. Otherwise, downshift makes an ID of 16 hexadecimal characters.
 
 ### `POST /predict/graph`
 
@@ -429,6 +430,36 @@ Every tensor field accepts either form. This applies to each value in `inputs` o
 
 The codec (`serve/codec.py`) is `pybase64` if the `[fast]` extra is installed. It is about 12x faster than the standard library in both directions. Otherwise, it is the `base64` module of Python. Both have the same `b64encode` and `b64decode` signatures, with the standard alphabet and padding.
 
+A client needs only the standard library and numpy:
+
+```python
+import base64, json, urllib.request
+import numpy as np
+
+
+def encode(a):
+    a = np.ascontiguousarray(a)
+    return {
+        "data": base64.b64encode(a.tobytes()).decode(),
+        "dtype": str(a.dtype),
+        "shape": list(a.shape),
+    }
+
+
+def decode(o):
+    return np.frombuffer(base64.b64decode(o["data"]), dtype=o["dtype"]).reshape(o["shape"])
+
+
+x = np.random.rand(32, 3, 64, 64).astype(np.float32)
+body = json.dumps({"inputs": {"x": encode(x)}, "output_encoding": "base64"}).encode()
+req = urllib.request.Request(
+    "http://localhost:8000/predict", body, {"content-type": "application/json"}
+)
+y = decode(json.load(urllib.request.urlopen(req))["outputs"]["output_0"])
+```
+
+Base64 does not help below about 100 KiB of tensor data. Above that, the gain increases with the size. In the 0.4.0 benchmark (`bench/REPORT_v0.4.0.md`), a `(32, 3, 16, 16)` float32 batch gave 6.65x the throughput as base64. At batch 1 on a narrow input, base64 was slower (0.72x).
+
 `output_encoding` is a field in both request bodies. It is not a URL parameter. It controls only the encoding of the response. It does not depend on the format of the request.
 
 - `"json"` writes nested lists. This is the default. `DOWNSHIFT_OUTPUT_ENCODING` or `--output-encoding` sets the default for the whole server, when the field is not in the request.
@@ -453,16 +484,29 @@ The codec (`serve/codec.py`) is `pybase64` if the `[fast]` extra is installed. I
 
 Any violation gives a `400` that names the problem.
 
+```python
+from safetensors.numpy import load, save
+
+req = urllib.request.Request(
+    "http://localhost:8000/predict",
+    save({"x": x}),
+    {"content-type": "application/vnd.safetensors", "accept": "application/vnd.safetensors"},
+)
+y = load(urllib.request.urlopen(req).read())["output_0"]
+```
+
 To get a safetensors response, send `Accept: application/vnd.safetensors`, or set `output_encoding: "safetensors"` in the JSON or in the `__metadata__` of the request. Each output is a tensor under its own name. `__metadata__` has `downshift.predictions` (the predictions of a classifier, as a JSON string) and `downshift.embedding` (the embedding recipe). The outputs of a graph batch have the names `graphs.<i>.<output>`. The number of graphs is in `downshift.graphs`.
 
 ## Headers
 
 | Header | Direction | Meaning |
 |---|---|---|
-| `X-Request-Id` | Request (optional), response (always) | Downshift returns it if the client sent it. Otherwise it makes an ID of 16 hexadecimal characters (`RequestIdMiddleware`). The `request_id` field of a `500` body has the same value. Each server log line that is written while the request is served (including the request line of `downshift.access`) has it too. |
+| `X-Request-Id` | Request (optional), response (always) | To use a different name, set `DOWNSHIFT_REQUEST_ID_HEADER` (for example `X-Correlation-Id`). Downshift returns it if the client sent it. Otherwise it makes an ID of 16 hexadecimal characters (`RequestIdMiddleware`). The `request_id` field of a `500` body has the same value. Each server log line that is written while the request is served (including the request line of `downshift.access`) has it too. |
 | `Authorization` | Request | `Bearer <key>`. It is required on every route except `/health` and `/ready` when `DOWNSHIFT_SERVER_API_KEY` is set. |
 | `WWW-Authenticate` | Response (`401` only) | `Bearer`. |
-| `Server-Timing` | Response (`/predict` and `/predict/graph`, `200` only) | The stages are listed below. Each one has `;dur=<ms>`. The access log line has the same split as `timings_ms`. |
+| `Server-Timing` | Response (`/predict` and `/predict/graph`, `200` only, only with `--server-timing`) | Off by default. The stages are listed below. Each one has `;dur=<ms>`. The access log line has the same split as `timings_ms`. |
+| `X-Downshift-Cache` | Response (`/predict`, only if the result cache is on) | To use a different name, set `DOWNSHIFT_CACHE_HEADER`. `hit`: the server computed no row for this request. `partial`: it computed some rows. `miss`: it computed all rows. |
+| `Cache-Control` | Request (`/predict`) | `no-cache`: the server does not read the result cache for this request. The server still stores the rows that it computes. The response says `miss`. |
 | `Retry-After` | Response (`503` only) | `2` for "not ready yet" (`/metadata` and the predict routes). `1` for "at capacity". The `503` for "queued past `--request-timeout`" does not have it. |
 | `Content-Length` | Request (optional) | If it is present, downshift checks it against `--max-body-bytes` before it reads the body. Downshift reads a chunked body without it and checks it while it arrives. |
 
@@ -474,6 +518,11 @@ The `Server-Timing` stages:
 - `infer_wait`: the wait for an inference slot.
 - `infer`: the call to the backend.
 - `encode`: the response body.
+- `cache`: the key and the lookup of the result cache. It is only in the header of a server with the cache on. Its `desc` is `<rows that hit>/<rows of the request>`.
+
+With the cache on, the `encode` stage runs on a prep thread and not on an inference thread. A request that has a hit for each row has no `infer_wait` and no `infer`.
+
+A hit is bit for bit the answer of the request that stored the row. The same row can differ in the last bits if a later miss computes it in another batch. The difference is inside the tolerance of the verdict.
 
 ## Error body shape
 

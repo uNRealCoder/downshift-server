@@ -45,5 +45,5 @@ While you work, run only the test files that apply to the change. Run the full s
 - Keep the code simple. Prefer a plain function or a small dataclass to a new class hierarchy, registry or wrapper.
 - Give each usage error a next step. A `ValueError` from a command is exit code `4`. Its message must say what to change.
 - Write docs, comments, CLI help and error messages in ASD-STE100 Simplified Technical English. Use short sentences and one meaning for each word. Write steps as commands. Put conditions first.
-- Add a new `serve` option in these places: `settings.py`, `cli/options.py`, `serve_cmd`, `docs/code-docs/cli.md` and `docs/production.md`. Refer to "Add a `serve` option" in `docs/code-docs/cli.md`.
+- Add a new `serve` option in these places: `settings.py`, `cli/options.py`, `serve_cmd`, `serve/options.py`, `docs/cli.md` and `docs/production.md`. Refer to "Add a `serve` option" in `docs/cli.md`.
 - Record each change that a user can see in `CHANGELOG.md`.

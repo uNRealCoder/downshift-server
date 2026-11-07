@@ -1,9 +1,12 @@
-"""intake(): a .onnx file that someone else made, with and without a reference model."""
+"""core/verdict.py: prepare_model, and intake() of a .onnx file with and without a reference."""
+
+import pytest
 
 import downshift
 from downshift.core import verify as verify_mod
-from downshift.core.prevalidated import intake
-from tests.models import clean_mlp
+from downshift.core.verdict import intake, prepare_model
+from downshift.sources import ONNX_FILE
+from tests.models import clean_mlp, scatter_include_self_false
 
 
 def test_intake_without_reference_is_unverified(exported_mlp):
@@ -41,7 +44,7 @@ def test_intake_with_reference_fails_via_onnx_runtime_not_a_crash(exported_mlp, 
     def boom(onnx_model):
         raise RuntimeError("NOT_IMPLEMENTED : Could not find an implementation for Gemm(13)")
 
-    monkeypatch.setattr(verify_mod, "_to_session", boom)
+    monkeypatch.setattr(verify_mod, "new_session", boom)
 
     verdict = intake(path, reference=model, example_inputs=clean_mlp.make_inputs())
 
@@ -68,7 +71,8 @@ def test_intake_with_different_reference_is_degraded(exported_mlp):
 
 def test_intake_serves_an_onnx_with_an_external_data_file(tmp_path, monkeypatch):
     from downshift.core import capture as capture_mod
-    from downshift.serve.engine import serving_state_from_artifact
+    from downshift.core.memo import ExportEntry
+    from downshift.serve.engine import state_from_entry
     from downshift.serve.options import ServeOptions
 
     monkeypatch.setattr(capture_mod, "EXTERNAL_DATA_THRESHOLD", 0)
@@ -82,7 +86,13 @@ def test_intake_serves_an_onnx_with_an_external_data_file(tmp_path, monkeypatch)
     assert verdict.status == "UNVERIFIED"
     assert verdict.onnx_path == path
     assert verdict.op_types["Gemm"] == 2
-    state = serving_state_from_artifact(
-        str(path), verdict, ServeOptions(k=1, device="cpu", warmup=1), verdict.input_names, []
-    )
+    entry = ExportEntry(verdict.to_dict(), list(verdict.input_names), {}, onnx_path=path)
+    opts = ServeOptions(k=1, device="cpu", warmup=1)
+    state = state_from_entry(entry, None, opts, None, source=str(path), kind=ONNX_FILE)
     assert state.backend.name == "onnxruntime"
+
+
+def test_prepare_model_raises_when_nothing_can_guess_inputs():
+    model = scatter_include_self_false.make_model()
+    with pytest.raises(ValueError, match="Cannot find example inputs"):
+        prepare_model(model, None, "generic")

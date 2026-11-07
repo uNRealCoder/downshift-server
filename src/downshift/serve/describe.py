@@ -1,16 +1,6 @@
-"""What `GET /schema` answers: the exact input format that a client must send.
-
-`/metadata` reports how downshift *judged* the model. It shows the full export verdict, the boot
-timings and the warmup statistics. This is the view of the operator. This module answers the one
-question that a caller has before the first request: what goes in the body, with which dtypes
-and shapes, and a worked example that the caller can paste. All of it comes from the IO that
-the backend declares. It therefore describes the graph that is running, and not what the source
-model promised.
-
-The `source` block repeats, for each server, what `downshift` accepts: a model that is already
-downloaded to this machine (an ONNX file, a PyTorch checkpoint, or a Hugging Face repo
-directory that has a config.json), or a module that this process can import. Downshift fetches
-nothing. A client that reads this knows that the server uses only that one local artifact.
+"""`GET /schema`: what a client must POST, with an example body to paste. It is read from the
+IO that the running backend declares. (`/metadata` is the operator's view: the verdict, boot
+timings and warmup.)
 """
 
 import math
@@ -38,15 +28,11 @@ from downshift.serve.schemas import (
 )
 from downshift.sources import HF_REPO_DIR, SOURCE_KIND_HELP, UNKNOWN_SOURCE, display_source
 
-# An example in the body stays short enough to read and paste. Above this number of elements
-# across all inputs, downshift drops it. The `example_shape` of each input then gives the
-# information.
+# Above this many elements across all inputs, the example is dropped; example_shape remains.
 MAX_EXAMPLE_ELEMENTS = 256
 
-# torch.export gives the names "s0", "s77" and "u3" to the axes that it made dynamic itself.
-# ONNX Runtime then reports them as they are. They have no meaning outside the tracer. This
-# endpoint therefore says "dynamic" and keeps only the names that an adapter chose ("batch",
-# "seq").
+# Axis names that torch.export invents ("s0", "u3"). They show as "dynamic"; adapter names
+# ("batch", "seq") stay.
 _ANONYMOUS_AXIS = re.compile(r"^[su]\d+$")
 DYNAMIC_AXIS = "dynamic"
 
@@ -66,9 +52,7 @@ INPUT_FORMATS = {
 
 
 def _axis(dim: Any) -> int | str:
-    """One axis as the client must read it: the fixed size, a dynamic-axis name that has a
-    meaning, or the plain word "dynamic" for an axis without a name or an axis that the tracer
-    named."""
+    """A fixed size, a meaningful dynamic-axis name, or "dynamic"."""
     if isinstance(dim, int) and dim > 0:
         return dim
     if isinstance(dim, str) and dim and not _ANONYMOUS_AXIS.match(dim):
@@ -77,11 +61,7 @@ def _axis(dim: Any) -> int | str:
 
 
 def _fill_value(name: str, dtype: str | None) -> Any:
-    """The one value that fills an example tensor.
-
-    It is zero for everything except an attention mask. For a mask, zero means "attend to
-    nothing". It would return NaN from a request that is otherwise correct.
-    """
+    """Zero, except 1 for a mask: an all-zero attention mask gives NaN."""
     if name.endswith("_mask"):
         return 1
     if dtype == "bool":
@@ -102,14 +82,8 @@ def _nested(shape: list[int], value: Any) -> Any:
 def _tensor_schema(
     spec: IOSpec, *, required: bool | None, axis_info: dict[int, DimBound] | None = None
 ) -> TensorSchema:
-    """One input or output. The dtype name of the backend is normalized to the name that a
-    client puts in a typed or base64 body ("tensor(float)" -> "float32").
-
-    `axis_info` (U2), if you give it, has the axis names and the (min, max) bounds of the
-    adapter (state.axis_bounds). The ONNX graph has lost the names (the "s0" and "s1" of
-    torch.export). A bounded axis therefore reports the name of the adapter and its bound, and
-    not "dynamic".
-    """
+    """One input or output, with the dtype as a client writes it ("float32"). `axis_info`
+    (state.axis_bounds) gives the adapter's axis names and bounds, which the graph lost."""
     raw = spec.shape
     shape: list[int | str] | None = None
     bounds: list[AxisBound | None] | None = None
@@ -131,18 +105,13 @@ def _tensor_schema(
 
 
 def _example_inputs(inputs: list[TensorSchema]) -> dict[str, Any] | None:
-    """A complete and correct `inputs` body. None if it would be too large to read.
-
-    The values are filler. Copy only the names, dtypes and shapes.
-    """
-    sized: list[tuple[TensorSchema, list[int]]] = []
-    for i in inputs:
-        if i.example_shape is None:
-            return None
-        sized.append((i, i.example_shape))
-    if not sized or sum(math.prod(shape) for _, shape in sized) > MAX_EXAMPLE_ELEMENTS:
+    """A complete, valid `inputs` body of filler values, or None if it is too large."""
+    shapes = [i.example_shape for i in inputs]
+    if not inputs or any(s is None for s in shapes):
         return None
-    return {i.name: _nested(shape, _fill_value(i.name, i.dtype)) for i, shape in sized}
+    if sum(math.prod(s) for s in shapes if s is not None) > MAX_EXAMPLE_ELEMENTS:
+        return None
+    return {i.name: _nested(i.example_shape or [], _fill_value(i.name, i.dtype)) for i in inputs}
 
 
 def _curl(url: str, body: dict[str, Any]) -> str:
@@ -209,9 +178,7 @@ def _embedding(state: ServingState, outputs: list[TensorSchema]) -> EmbeddingInf
 
 
 def _graph_batching(state: ServingState, outputs: list[TensorSchema]) -> dict[str, str] | None:
-    """The axis-0 kind of each output for a PyG model (a `graphs` batch splits the output by it).
-    None if the verdict classified nothing (it is not a PyG export, or it is a prevalidated
-    .onnx file)."""
+    """The axis-0 kind of each output of a PyG model, or None if nothing was classified."""
     kinds = state.verdict.output_axes
     if not kinds:
         return None
@@ -235,13 +202,10 @@ def axes_info(state: ServingState) -> list[AxisInfo]:
 
 
 def describe(state: ServingState, predict_url: str) -> SchemaResponse:
-    """Build the /schema body. `predict_url` is the /predict URL of this server, taken from
-    the request. The caller can therefore run the example curl."""
+    """The /schema body. `predict_url` comes from the request, so the example curl runs."""
     meta = state.backend.metadata()
     declared = {spec.name: spec for spec in meta.inputs}
-    # It uses state.input_names and not the list of the backend. This is the order of the
-    # forward arguments that the predict routes check against. The torch backend can declare
-    # less.
+    # state.input_names is what /predict checks; the torch backend can declare less.
     inputs = [
         _tensor_schema(
             declared.get(name) or IOSpec(name, None, None),

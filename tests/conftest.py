@@ -157,7 +157,9 @@ def serve_fixture() -> Callable[..., ServingState]:
 
 @pytest.fixture(scope="session")
 def mlp_state(serve_fixture) -> ServingState:
-    return serve_fixture("clean_mlp")
+    # The tests that use it patch the backend or count the threads of a request. The result cache
+    # would answer a repeated row without the backend. tests/test_serve_cache.py serves with it.
+    return serve_fixture("clean_mlp", result_cache_rows=0)
 
 
 @pytest.fixture(scope="session")

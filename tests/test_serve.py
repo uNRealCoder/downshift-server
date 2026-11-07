@@ -74,6 +74,8 @@ def test_health_ready_metadata(mlp_client, mlp_state):
     assert meta["model"] == "tests.models.clean_mlp:make_model"
     assert meta["family"] == mlp_state.verdict.model_family
     assert meta["verdict"]["status"] == "CLEAN"
+    assert meta["verdict"]["row_independent"] is True
+    assert meta["verdict"]["row_reason"] is None
     assert meta["backend"]["name"] == "onnxruntime"
     assert meta["input_names"] == ["x"]
     assert isinstance(meta["notes"], list)
@@ -105,6 +107,8 @@ def test_app_for_verifies_a_pre_built_onnx_against_a_reference(exported_mlp):
     client = TestClient(app_for(str(path), clean_mlp.make_inputs(), reference=model, warmup=1))
     meta = client.get("/metadata").json()
     assert meta["verdict"]["status"] == "CLEAN", meta["verdict"]["reason"]
+    assert meta["verdict"]["row_independent"] is True
+    assert meta["verdict"]["row_reason"] is None
     assert meta["backend"]["name"] == "onnxruntime"
 
 
@@ -148,8 +152,15 @@ def test_health_gets_its_own_request_id_too(mlp_client):
     assert resp.headers["x-request-id"]
 
 
-def test_predict_reports_server_timing(mlp_client):
+def test_predict_has_no_server_timing_by_default(mlp_client):
     resp = mlp_client.post("/predict", json=MLP_INPUT)
+    assert resp.status_code == 200, resp.text
+    assert "server-timing" not in resp.headers
+
+
+def test_predict_reports_server_timing_when_it_is_on(mlp_state):
+    client = TestClient(build_app(_with_options(mlp_state, server_timing=True)))
+    resp = client.post("/predict", json=MLP_INPUT)
     assert resp.status_code == 200, resp.text
     timing = resp.headers["server-timing"]
     for stage in ("parse", "prep_wait", "prep", "infer_wait", "infer", "encode"):
@@ -517,7 +528,7 @@ def test_middleware_specs(mlp_state):
 
 
 def test_ready_and_predict_503_until_the_loader_lands(mlp_state):
-    """Plan 3.3 U3: bind first, load on a background thread, 503 until the verdict is ready,
+    """Bind first, load on a background thread, 503 until the verdict is ready,
     200 after that, and no restart between them."""
     release = threading.Event()
 
@@ -847,7 +858,7 @@ def _loop_probe(state, monkeypatch) -> dict[str, list[bool]]:
 
 
 def _inline_client(mlp_state, execution) -> TestClient:
-    return TestClient(build_app(_with_options(mlp_state, execution=execution)))
+    return TestClient(build_app(_with_options(mlp_state, execution=execution, server_timing=True)))
 
 
 def test_metadata_reports_the_execution_mode(mlp_client, mlp_state):

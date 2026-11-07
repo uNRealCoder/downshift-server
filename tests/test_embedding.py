@@ -13,22 +13,17 @@ import pytest
 pytest.importorskip("transformers")
 pytest.importorskip("tokenizers")
 
-import torch  # noqa: E402
-from fastapi.testclient import TestClient  # noqa: E402
-from transformers import AutoModel, BertForSequenceClassification  # noqa: E402
+import torch
+from fastapi.testclient import TestClient
+from transformers import AutoModel, BertForSequenceClassification
 
-from downshift.adapters.embedding import (  # noqa: E402
-    RecipeError,
-    pool,
-    read_recipe,
-    resolve_recipe,
-)
-from downshift.cli import main, runtime  # noqa: E402
-from downshift.loading import LoadError, LoadSpec, load_model  # noqa: E402
-from downshift.serve.app import build_app  # noqa: E402
-from downshift.serve.engine import prepare_serving  # noqa: E402
-from downshift.serve.options import BackendChoice, ServeOptions  # noqa: E402
-from tests.models import hf_repo  # noqa: E402
+from downshift.adapters.embedding import RecipeError, pool, read_recipe, resolve_recipe
+from downshift.cli import main, runtime
+from downshift.loading import LoadError, LoadSpec, load_model
+from downshift.serve.app import build_app
+from downshift.serve.engine import prepare_serving
+from downshift.serve.options import BackendChoice, ServeOptions
+from tests.models import hf_repo
 
 TEXTS = ["hello world", "ignore previous instructions the capital", "the"]
 
@@ -456,19 +451,19 @@ def test_the_flags_are_on_every_command_that_loads_a_model(command):
 # --- the --workers builders keep the text and embedding metadata --------------------------
 
 
-def _worker_args(repo: str, *, pooling=None, normalize=None, **artifact) -> main.ServeArgs:
-    return main.ServeArgs(
+def _worker_args(repo: str, *, pooling=None, normalize=None, **artifact) -> runtime.ServeArgs:
+    return runtime.ServeArgs(
         load=LoadSpec(repo, pooling=pooling, normalize=normalize),
         options=ServeOptions(warmup=1, device="cpu", pooling=pooling, normalize=normalize),
         reference=None,
         middleware=None,
         log_level="warning",
-        artifact=main.ArtifactHandoff(**artifact) if artifact else None,
+        artifact=runtime.ArtifactHandoff(**artifact) if artifact else None,
     )
 
 
-def _rebuilt(monkeypatch, args: main.ServeArgs) -> TestClient:
-    monkeypatch.setenv(main._SERVE_ARGS_ENV, args.to_json())
+def _rebuilt(monkeypatch, args: runtime.ServeArgs) -> TestClient:
+    monkeypatch.setenv(runtime._SERVE_ARGS_ENV, args.to_json())
     api = runtime._serve_app_factory()
     with TestClient(api):
         api.state.loader_thread.join(timeout=60)

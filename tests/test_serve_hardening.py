@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from torch import nn
 
+from downshift import settings
 from downshift.core.phase import Phase, report
 from downshift.loading import LoadSpec, load_model
 from downshift.serve.app import build_app
@@ -38,7 +39,7 @@ def _with_options(state: ServingState, **overrides) -> ServingState:
 
 @pytest.fixture(scope="module")
 def mlp_state() -> ServingState:
-    return _serve("tests.models.clean_mlp:make_model")
+    return _serve("tests.models.clean_mlp:make_model", result_cache_rows=0)
 
 
 @pytest.fixture(scope="module")
@@ -264,7 +265,7 @@ def test_a_bf16_model_schema_reports_float32_inputs(bf16_client):
 def _bf16_output_onnx_bytes() -> bytes:
     """A graph that the CPU EP of ORT can run (Cast, and not Gemm, which has no bf16 CPU kernel.
     See tests/models/bf16_weights.py) but whose declared output is bfloat16. This is the case
-    that the OrtValue and DLPack widening (B1) of OnnxRuntimeBackend.infer covers.
+    that the OrtValue and DLPack widening of OnnxRuntimeBackend.infer covers.
     OrtValue.numpy() has no bfloat16 or float16 numpy dtype to convert to."""
     import onnx
     from onnx import TensorProto, helper
@@ -592,9 +593,21 @@ def test_a_request_queued_for_inference_still_times_out(mlp_state, monkeypatch):
     assert len(calls) == 1
 
 
-def test_server_timing_and_the_access_log_carry_the_wait_stages(mlp_state):
+def test_server_timing_and_the_access_log_carry_the_wait_stages(mlp_state, monkeypatch):
+    monkeypatch.setattr(mlp_state.options, "server_timing", True)
     resp = TestClient(build_app(mlp_state, api_key=None)).post("/predict", json=MLP_INPUT)
 
     assert resp.status_code == 200
     names = [part.split(";")[0] for part in resp.headers["server-timing"].split(", ")]
     assert names == ["parse", "prep_wait", "prep", "infer_wait", "infer", "encode"]
+
+
+def test_a_500_sets_the_configured_request_id_header(torch_state, monkeypatch):
+    monkeypatch.setattr(settings, "REQUEST_ID_HEADER", "X-Correlation-Id")
+    monkeypatch.setattr(torch_state.backend, "module", _Failing("boom"))
+    client = TestClient(build_app(torch_state, api_key=None), raise_server_exceptions=False)
+
+    resp = client.post("/predict", json=MLP_INPUT, headers={"X-Correlation-Id": "trace-500"})
+
+    assert resp.status_code == 500
+    assert resp.json()["request_id"] == resp.headers["x-correlation-id"] == "trace-500"

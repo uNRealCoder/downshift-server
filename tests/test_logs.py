@@ -11,6 +11,7 @@ import warnings
 import pytest
 from fastapi.testclient import TestClient
 
+from downshift import settings
 from downshift.loading import LoadSpec, load_model
 from downshift.logs import request_id_var, setup_logging
 from downshift.serve.app import build_app
@@ -145,7 +146,8 @@ def _access_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]
 @pytest.fixture(scope="module")
 def mlp_state():
     return prepare_serving(
-        load_model(LoadSpec("tests.models.clean_mlp:make_model")), ServeOptions(warmup=1)
+        load_model(LoadSpec("tests.models.clean_mlp:make_model")),
+        ServeOptions(warmup=1, result_cache_rows=0),
     )
 
 
@@ -172,6 +174,20 @@ def test_predict_writes_one_request_line_with_timings(client, caplog):
         "infer",
         "encode",
     }
+
+
+def test_a_server_with_the_cache_on_logs_the_cache_timings(caplog):
+    state = prepare_serving(
+        load_model(LoadSpec("tests.models.clean_mlp:make_model")), ServeOptions(warmup=1)
+    )
+    client = TestClient(build_app(state, api_key=None))
+
+    with caplog.at_level(logging.INFO, logger="downshift.access"):
+        assert client.post("/predict", json=MLP_INPUT).status_code == 200
+
+    (record,) = _access_records(caplog)
+    assert {"cache", "cache_hits", "cache_rows", "encode_wait"} <= set(record.timings_ms)
+    assert (record.timings_ms["cache_hits"], record.timings_ms["cache_rows"]) == (0, 1)
 
 
 def test_health_is_debug_only(client, caplog):
@@ -220,3 +236,15 @@ def test_a_client_supplied_request_id_is_echoed_on_a_logged_request(client, capl
     assert resp.headers["x-request-id"] == "caller-7"
     (record,) = _access_records(caplog)
     assert record.status == 200
+
+
+def test_the_request_id_header_name_comes_from_the_settings(mlp_state, monkeypatch):
+    monkeypatch.setattr(settings, "REQUEST_ID_HEADER", "X-Correlation-Id")
+    client = TestClient(build_app(mlp_state, api_key=None))
+
+    supplied = client.get("/health", headers={"X-Correlation-Id": "trace-me"})
+    generated = client.get("/health", headers={"X-Request-Id": "ignored"})
+
+    assert supplied.headers["x-correlation-id"] == "trace-me"
+    assert "x-request-id" not in supplied.headers
+    assert generated.headers["x-correlation-id"] != "ignored"

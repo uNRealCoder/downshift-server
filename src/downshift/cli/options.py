@@ -76,8 +76,9 @@ AxisMaxOpt = Annotated[
         metavar="NAME=N",
         help="Serve at most N along the named axis. You can repeat this option. The banner and "
         "/schema list the names. Generic models use dim0 or <input>_<axis> (--dynamic). Hugging "
-        "Face models use batch and seq. PyG models use num_nodes and num_edges. Default: the "
-        "bound that the export chose",
+        "Face models use batch and seq. PyG models use num_nodes and num_edges. N can be "
+        "above the default bound, but not above a limit of the model (the position limit of a "
+        "Hugging Face model). Default: the bound that the export chose",
     ),
 ]
 ExportCacheDirOpt = Annotated[
@@ -137,8 +138,8 @@ WorkersOpt = Annotated[
     typer.Option(
         "--workers",
         min=1,
-        help="The number of uvicorn worker processes. Each one loads, exports and warms up "
-        "the model itself",
+        help="The number of uvicorn worker processes. The parent exports and verifies one "
+        "time. Each worker loads that result and warms up",
     ),
 ]
 OutputEncodingOpt = Annotated[
@@ -202,6 +203,17 @@ MaxQueueOpt = Annotated[
         min=0,
         help="The number of predicts that can wait beyond --max-concurrency. After that, a new "
         "predict gets a fast 503",
+    ),
+]
+ResultCacheRowsOpt = Annotated[
+    int | None,
+    typer.Option(
+        "--result-cache-rows",
+        min=0,
+        help="The number of rows that the result cache keeps in each worker. A row that comes "
+        "a second time then skips the model. The cache counts rows and not bytes: set a number "
+        "that fits the size of one output row. 0 = off. Default: 100 for a model with "
+        "independent rows, and off for any other model",
     ),
 ]
 RequestTimeoutOpt = Annotated[
@@ -277,6 +289,15 @@ LogLevelOpt = Annotated[
         help="Diagnostics go to stdout through Python logging. The boot banner and the "
         "check and export reports always print. info adds one line for each request and the "
         "lines of uvicorn. debug adds tracebacks",
+    ),
+]
+ServerTimingOpt = Annotated[
+    bool,
+    typer.Option(
+        "--server-timing/--no-server-timing",
+        help="Add the Server-Timing header (the milliseconds of each stage) to each predict "
+        "response. Default: off, so clients cannot see how the server works or which rows are "
+        "in the cache. The access log has the timings in both cases",
     ),
 ]
 AccessLogOpt = Annotated[

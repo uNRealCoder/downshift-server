@@ -10,6 +10,7 @@ build/
 
 # Virtual environments
 .venv/
+.venv-gpu/
 venv/
 ENV/
 env/
@@ -52,3 +53,6 @@ scripts/.validation/
 # checkpoints (GBs) and ad-hoc output are not. See bench/README.md.
 bench/models/
 bench/scratch/
+# The torch vs ONNX Runtime study: kept local, not published (2026-11-07).
+bench/torch_vs_ort.py
+bench/results/v0.6.0/torch_vs_ort*.json
