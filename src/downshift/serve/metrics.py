@@ -71,8 +71,8 @@ class Metrics:
                 milliseconds = sum(timings_ms.get(key, 0.0) for key in keys)
                 self.stage_seconds.setdefault((stage,), Histogram()).observe(milliseconds / 1000)
 
-    def record_rejected(self, code: str) -> None:
-        reason = _REJECT_REASONS.get(code)
+    def record_rejected(self, code: str | None) -> None:
+        reason = _REJECT_REASONS.get(code or "")
         if reason is not None:
             self.rejected[(reason,)] += 1
 

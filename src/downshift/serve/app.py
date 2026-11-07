@@ -30,7 +30,6 @@ from downshift.logs import request_id_var
 from downshift.serve.engine import ServingState
 from downshift.serve.errors import (
     ApiError,
-    api_error,
     error_response,
     http_error_handler,
     route_path,
@@ -92,7 +91,7 @@ def _body_too_large(request: Request, observed: int, limit: int) -> JSONResponse
 
 
 def _not_ready_error() -> ApiError:
-    return api_error(
+    return ApiError(
         503,
         "not_ready",
         "model is not ready",
@@ -103,7 +102,7 @@ def _not_ready_error() -> ApiError:
 def _capacity_error(state: ServingState) -> ApiError:
     running = min(state.in_flight, state.options.max_concurrency)
     queued = max(0, state.in_flight - state.options.max_concurrency)
-    return api_error(
+    return ApiError(
         503,
         "at_capacity",
         f"server is at capacity ({running} running, {queued} queued)",
@@ -131,7 +130,7 @@ async def _predict(
     request: Request,
     state: ServingState,
     graph: bool,
-    embeddings: bool,
+    is_embeddings: bool,
     admitted_at: float,
 ) -> Response:
     """An admitted predict: check the content type and --max-body-bytes (before reading, if
@@ -155,14 +154,9 @@ async def _predict(
 
     timings: dict[str, float] = {}
     request.state.timings_ms = timings
-    steps: dict[str, Any] = {}
-    if embeddings:
-        steps = {
-            "parse": partial(parse_embeddings, state, body, timings),
-            "encode": partial(embeddings_response, state, timings),
-            "with_tokens": True,
-        }
-    return await run_predict(
+    parse = partial(parse_embeddings, state, body, timings) if is_embeddings else None
+    encode = partial(embeddings_response, state, timings) if is_embeddings else None
+    response = await run_predict(
         state,
         body,
         graph=graph,
@@ -175,8 +169,12 @@ async def _predict(
         timings_ms=timings,
         accept_safetensors=SAFETENSORS_MEDIA_TYPE in request.headers.get("accept", "").lower(),
         use_cache="no-cache" not in request.headers.get("cache-control", "").lower(),
-        **steps,
+        parse=parse,
+        encode=encode,
+        with_tokens=is_embeddings,
     )
+    request.state.cache = response.headers.get(settings.CACHE_HEADER)
+    return response
 
 
 class PredictRoute(APIRoute):
@@ -188,7 +186,7 @@ class PredictRoute(APIRoute):
 
     def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
         graph = self.path == "/predict/graph"
-        embeddings = self.path == "/v1/embeddings"
+        is_embeddings = self.path == "/v1/embeddings"
 
         async def route_handler(request: Request) -> Response:
             state: ServingState | None = request.app.state.serving
@@ -199,11 +197,11 @@ class PredictRoute(APIRoute):
             timeout = state.options.request_timeout
             try:
                 return await asyncio.wait_for(
-                    _predict(request, state, graph, embeddings, time.monotonic()),
+                    _predict(request, state, graph, is_embeddings, time.monotonic()),
                     timeout if timeout > 0 else None,
                 )
             except TimeoutError:
-                raise api_error(
+                raise ApiError(
                     503,
                     "request_timeout",
                     f"request took more than the {timeout:.1f}s --request-timeout",
@@ -298,7 +296,7 @@ class RequestIdMiddleware:
             await self.app(scope, receive, send)
             return
 
-        start = time.perf_counter()
+        start = time.perf_counter() if self.access_log or self.metrics is not None else 0.0
         request_id = Headers(scope=scope).get(self.header) or uuid.uuid4().hex[:16]
         state = scope.setdefault("state", {})
         state["request_id"] = request_id
@@ -310,8 +308,6 @@ class RequestIdMiddleware:
                 status = message["status"]
                 headers = MutableHeaders(scope=message)
                 headers.append(self.header, request_id)
-                if self.metrics is not None:
-                    self.metrics.record_cache_result(headers.get(settings.CACHE_HEADER))
             await send(message)
 
         token = request_id_var.set(request_id)
@@ -339,6 +335,8 @@ class RequestIdMiddleware:
         # is never a label.
         route = scope.get("route")
         self.metrics.record_request(route.path if route is not None else "other", status, seconds)
+        self.metrics.record_rejected(state.get("error_code"))
+        self.metrics.record_cache_result(state.get("cache"))
         timings = state.get("timings_ms")
         if timings:
             self.metrics.record_stages(timings)
@@ -493,12 +491,7 @@ def build_app(
         RequestIdMiddleware, access_log=access_log, header=request_id_header, metrics=counters
     )
 
-    async def _http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
-        if counters is not None:
-            counters.record_rejected(getattr(exc, "code", ""))
-        return await http_error_handler(request, exc)
-
-    app.add_exception_handler(StarletteHTTPException, _http_error)  # type: ignore[arg-type]
+    app.add_exception_handler(StarletteHTTPException, http_error_handler)  # type: ignore[arg-type]
     app.add_exception_handler(RequestValidationError, validation_error_handler)  # type: ignore[arg-type]
 
     @app.exception_handler(Exception)
@@ -601,7 +594,7 @@ def build_app(
         model_id: str, current: ServingState = Depends(require_serving)
     ) -> dict[str, Any]:
         if model_id != served_name(current):
-            raise api_error(
+            raise ApiError(
                 404,
                 "model_not_found",
                 f"model {model_id!r:.64} is not served. Use {served_name(current)!r} "
@@ -616,16 +609,13 @@ def build_app(
             text = render(counters, request.app.state.serving)
             return Response(text, media_type=CONTENT_TYPE)
 
-    for path, endpoint in (("/predict", predict), ("/predict/graph", predict_graph)):
+    for path, endpoint, options in (
+        ("/predict", predict, _PREDICT_ROUTE),
+        ("/predict/graph", predict_graph, _PREDICT_ROUTE),
+        ("/v1/embeddings", embeddings, {"response_class": NumpyJSONResponse}),
+    ):
         app.router.add_api_route(
-            path, endpoint, methods=["POST"], route_class_override=PredictRoute, **_PREDICT_ROUTE
+            path, endpoint, methods=["POST"], route_class_override=PredictRoute, **options
         )
-    app.router.add_api_route(
-        "/v1/embeddings",
-        embeddings,
-        methods=["POST"],
-        route_class_override=PredictRoute,
-        response_class=NumpyJSONResponse,
-    )
 
     return app

@@ -44,27 +44,20 @@ _STATUS_CODES = {404: "not_found", 405: "method_not_allowed"}
 
 
 class ApiError(HTTPException):
-    code: str
-    param: str | None = None
-
-
-def api_error(
-    status: int,
-    code: str,
-    message: str,
-    headers: Mapping[str, str] | None = None,
-    param: str | None = None,
-) -> ApiError:
     """The exception for a route: the error handler turns it into the error body. `param` is
     the field at fault, for the OpenAI shape."""
-    exc = ApiError(status, message, headers=headers)
-    exc.code = code
-    exc.param = param
-    return exc
 
-
-def error_body(code: str, message: Any, **extra: Any) -> dict[str, Any]:
-    return {"detail": message, "code": code, **extra}
+    def __init__(
+        self,
+        status: int,
+        code: str,
+        message: str,
+        headers: Mapping[str, str] | None = None,
+        param: str | None = None,
+    ) -> None:
+        super().__init__(status, message, headers=headers)
+        self.code = code
+        self.param = param
 
 
 def route_path(scope: Scope) -> str:
@@ -85,11 +78,12 @@ def error_response(
     headers: Mapping[str, str] | None = None,
     *,
     param: str | None = None,
-    **extra: Any,
+    request_id: str | None = None,
 ) -> JSONResponse:
-    """The error response of a place that cannot raise (a middleware, or a handler). On a /v1
-    path it has the OpenAI shape; `param` (the field at fault) and `extra` are for the two
-    shapes, respectively."""
+    """The error response of a place that cannot raise (a middleware, or a handler). It records
+    the code in the request state, for the metrics. On a /v1 path it has the OpenAI shape;
+    `param` (the field at fault) is for that shape, and `request_id` is for the other."""
+    scope.setdefault("state", {})["error_code"] = code
     if is_openai_path(scope):
         kind = (
             "authentication_error"
@@ -102,13 +96,17 @@ def error_response(
             "error": {"message": message, "type": kind, "param": param, "code": code}
         }
     else:
-        body = error_body(code, message, **extra)
+        body = {"detail": message, "code": code}
+        if request_id is not None:
+            body["request_id"] = request_id
     return JSONResponse(body, status_code=status, headers=headers)
 
 
 async def http_error_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
-    code = getattr(exc, "code", None) or _STATUS_CODES.get(exc.status_code, "http_error")
-    param = getattr(exc, "param", None)
+    if isinstance(exc, ApiError):
+        code, param = exc.code, exc.param
+    else:
+        code, param = _STATUS_CODES.get(exc.status_code, "http_error"), None
     return error_response(
         request.scope, exc.status_code, code, exc.detail, exc.headers, param=param
     )

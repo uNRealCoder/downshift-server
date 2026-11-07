@@ -11,7 +11,7 @@ from fastapi import Response
 from downshift.serve.backends import FIRST_OUTPUT_NAME
 from downshift.serve.codec import b64encode
 from downshift.serve.engine import ServingState
-from downshift.serve.errors import api_error
+from downshift.serve.errors import ApiError
 from downshift.serve.predict import (
     GraphLayout,
     NumpyJSONResponse,
@@ -45,7 +45,7 @@ def model_card(state: ServingState) -> dict[str, Any]:
 def _check_dimensions(dimensions: int, width: int | None) -> None:
     if dimensions < 1 or (width is not None and dimensions > width):
         limit = "1 or more" if width is None else f"1 to {width}"
-        raise api_error(
+        raise ApiError(
             400,
             "invalid_input",
             f"'dimensions' is {dimensions}. Set 'dimensions' to a value from {limit}",
@@ -68,21 +68,21 @@ def parse_embeddings(state: ServingState, body: bytes, timings_ms: dict[str, flo
     # pooling "none" gives the vector of each token, so it is not an embedding model.
     recipe = state.embedding
     if state.text is None or recipe is None or recipe.pooling == "none":
-        raise api_error(
+        raise ApiError(
             400,
             "not_embedding_model",
             "this model is not a text embedding model. Send the request to POST /predict",
         )
     name = served_name(state)
     if req.model != name:
-        raise api_error(
+        raise ApiError(
             404,
             "model_not_found",
             f"model {req.model!r:.64} is not served. Set 'model' to {name!r} (GET /v1/models)",
         )
     if req.dimensions is not None:
         if not state.options.matryoshka:
-            raise api_error(
+            raise ApiError(
                 400,
                 "dimensions_not_supported",
                 "Start the server with --matryoshka if the model was trained for Matryoshka cuts.",
@@ -92,7 +92,7 @@ def parse_embeddings(state: ServingState, body: bytes, timings_ms: dict[str, flo
         _check_dimensions(req.dimensions, width)
     text = as_batch(req.input)
     if not text:
-        raise api_error(400, "invalid_input", "'input' is an empty list. Send at least one text")
+        raise ApiError(400, "invalid_input", "'input' is an empty list. Send at least one text")
     encoding = OutputEncoding.base64 if req.encoding_format == "base64" else OutputEncoding.json
     timings_ms["parse"] = round((time.perf_counter() - start) * 1000, 2)
     return _Request(

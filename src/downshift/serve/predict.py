@@ -24,7 +24,7 @@ from downshift.core.axes import DimBound
 from downshift.serve.backends import FIRST_OUTPUT_NAME, InferenceInputError
 from downshift.serve.codec import b64encode, decode_safetensors, encode_safetensors
 from downshift.serve.engine import ServingState
-from downshift.serve.errors import api_error
+from downshift.serve.errors import ApiError
 from downshift.serve.graphs import (
     GRAPH_COUNTS,
     GRAPH_INPUTS,
@@ -103,12 +103,12 @@ def resolve_prompt(state: ServingState, prompt_name: str | None, has_text: bool)
         default = recipe.default_prompt if recipe is not None else None
         return prompts[default] if has_text and default is not None else ""
     if not has_text:
-        raise api_error(
+        raise ApiError(
             400, "invalid_input", "'prompt_name' applies to a 'text' request. None was sent"
         )
     if prompt_name not in prompts:
         available = sorted(prompts)
-        raise api_error(
+        raise ApiError(
             400,
             "unknown_prompt",
             f"unknown prompt_name {prompt_name!r:.64}. "
@@ -197,7 +197,7 @@ def _check_timeout(state: ServingState, admitted_at: float) -> None:
     if request_timeout > 0:
         waited = time.monotonic() - admitted_at
         if waited > request_timeout:
-            raise api_error(
+            raise ApiError(
                 503,
                 "request_timeout",
                 f"request waited {waited:.1f}s in queue, past the {request_timeout:.1f}s "
@@ -301,9 +301,9 @@ def _row_tokens(feeds: dict[str, np.ndarray]) -> list[int]:
     return [ids.shape[1]] * ids.shape[0]
 
 
-def _input_error(exc: Exception) -> HTTPException:
+def _input_error(exc: Exception) -> ApiError:
     code = "text_too_long" if isinstance(exc, TextTooLongError) else "invalid_input"
-    return api_error(400, code, str(exc))
+    return ApiError(400, code, str(exc))
 
 
 def _prepare_feeds(
@@ -332,7 +332,7 @@ def _prepare_feeds(
     # A graph batch was already checked graph by graph.
     violation = _violation(state, feeds, edges=layout is None, skip_batch_axis=skip_batch_axis)
     if violation is not None:
-        raise api_error(400, "invalid_input", violation)
+        raise ApiError(400, "invalid_input", violation)
     return feeds, (time.perf_counter() - start) * 1000, layout
 
 
@@ -345,7 +345,7 @@ def _infer(
     try:
         outputs = state.backend.infer(feeds)
     except InferenceInputError as exc:
-        raise api_error(400, "invalid_input", str(exc)) from exc
+        raise ApiError(400, "invalid_input", str(exc)) from exc
     return outputs, (time.perf_counter() - start) * 1000
 
 
@@ -374,7 +374,7 @@ def _encode_response(
         try:
             per_graph = split_outputs(arrays, state.verdict.output_axes, *layout)
         except ValueError as exc:
-            raise api_error(400, "invalid_input", str(exc)) from exc
+            raise ApiError(400, "invalid_input", str(exc)) from exc
         if safetensors:
             flat = {
                 f"graphs.{g}.{name}": arr
@@ -494,7 +494,7 @@ def _json_request(state: ServingState, graph: bool, body: bytes) -> _Request:
 
     req = _validate_json(PredictRequest, body)
     if req.text is not None and state.text is None:
-        raise api_error(
+        raise ApiError(
             400,
             "text_not_supported",
             "this model takes tensors only. It was not loaded from a Hugging Face repo "
@@ -513,15 +513,15 @@ def _binary_request(state: ServingState, graph: bool, body: bytes) -> _Request:
     try:
         arrays, metadata = decode_safetensors(body, max_input_bytes=state.options.max_input_bytes)
     except ValueError as exc:
-        raise api_error(400, "invalid_input", str(exc)) from exc
+        raise ApiError(400, "invalid_input", str(exc)) from exc
     if "text" in metadata:
-        raise api_error(
+        raise ApiError(
             400, "invalid_input", "text is JSON only. A safetensors body carries tensors"
         )
     allowed = _GRAPH_TENSOR_NAMES if graph else frozenset(state.input_names)
     unknown = [name for name in arrays if name not in allowed]
     if unknown:
-        raise api_error(
+        raise ApiError(
             400,
             "invalid_input",
             f"unknown tensor name {unknown[0]!r:.64}. This route takes {sorted(allowed)}",
@@ -532,7 +532,7 @@ def _binary_request(state: ServingState, graph: bool, body: bytes) -> _Request:
             tensors=arrays, encoding=RequestOutputEncoding(encoding) if encoding else None
         )
     except ValueError:
-        raise api_error(
+        raise ApiError(
             400,
             "invalid_input",
             f"unknown output_encoding {encoding!r:.64} in __metadata__. This route takes "
@@ -546,7 +546,7 @@ def _parse(
     """The body (JSON or safetensors) as a validated _Request, or a 422 or 400."""
     start = time.perf_counter()
     if graph and not GRAPH_INPUTS.issubset(state.input_names):
-        raise api_error(
+        raise ApiError(
             400,
             "not_graph_model",
             f"model is not graph-shaped: inputs are {list(state.input_names)}, "
@@ -556,7 +556,7 @@ def _parse(
     if request.text is None and request.graphs is None:
         missing = [n for n in state.input_names if n not in (request.tensors or request.inputs)]
         if missing:
-            raise api_error(400, "missing_input", f"missing inputs: {missing}")
+            raise ApiError(400, "missing_input", f"missing inputs: {missing}")
     timings_ms["parse"] = round((time.perf_counter() - start) * 1000, 2)
     return request
 
@@ -640,7 +640,7 @@ def _cache_prepare(
     except (ValueError, TypeError, KeyError) as exc:
         raise _input_error(exc) from exc
     if violation is not None:
-        raise api_error(400, "invalid_input", violation)
+        raise ApiError(400, "invalid_input", violation)
 
     if not keys:
         whole, _, _ = _prepare_feeds(state, request)

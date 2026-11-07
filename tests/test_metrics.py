@@ -12,8 +12,9 @@ import downshift
 from downshift import settings
 from downshift.cli import render, runtime
 from downshift.loading import LoadSpec, load_model
-from downshift.serve.app import build_app
+from downshift.serve.app import RequestIdMiddleware, build_app
 from downshift.serve.engine import prepare_serving
+from downshift.serve.errors import error_response
 from downshift.serve.metrics import BUCKETS, CONTENT_TYPE, Histogram, Metrics
 from downshift.serve.metrics import render as render_text
 from downshift.serve.options import ServeOptions
@@ -174,6 +175,17 @@ def test_a_slow_request_counts_a_timeout_rejection(plain_state, monkeypatch):
     assert client.post("/predict", json=GOOD).status_code == 503
 
     assert _value(_samples(client), "downshift_rejected_total", reason="timeout") == 1
+
+
+def test_a_503_that_a_middleware_builds_is_counted():
+    async def refuse(scope, receive, send):
+        response = error_response(scope, 503, "at_capacity", "full")
+        await response(scope, receive, send)
+
+    metrics = Metrics()
+    client = TestClient(RequestIdMiddleware(refuse, metrics=metrics))
+    assert client.get("/x").status_code == 503
+    assert metrics.rejected[("capacity",)] == 1
 
 
 def test_metrics_answers_while_the_model_loads(plain_state):
