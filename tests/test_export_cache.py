@@ -317,3 +317,58 @@ def test_a_worker_with_an_artifact_never_opens_the_cache(cache, monkeypatch, tmp
     )
 
     assert runtime._build_serving_state(args) is built
+
+
+@pytest.mark.needs_torch_26
+@pytest.mark.parametrize("version", [2, None])
+def test_an_entry_with_another_format_version_is_exported_again(cache, repo, caplog, version):
+    app_for(repo, k=1, warmup=0, export_cache_dir=str(cache))
+    (entry,) = entries(cache)
+    manifest_file = entry / "model.manifest.json"
+    manifest = json.loads(manifest_file.read_text())
+    assert manifest["format_version"] == 1
+    if version is None:
+        del manifest["format_version"]
+    else:
+        manifest["format_version"] = version
+    manifest_file.write_text(json.dumps(manifest))
+    MEMO.clear()
+
+    with caplog.at_level(logging.WARNING, logger="downshift.export_cache"):
+        again = app_for(repo, k=1, warmup=0, export_cache_dir=str(cache))
+
+    assert {"export", "verify"} <= set(boot(again))
+    warnings = [r.getMessage() for r in caplog.records if "unusable" in r.getMessage()]
+    assert len(warnings) == 1
+    assert "format version" in warnings[0]
+    assert "Exporting again" in warnings[0]
+    assert json.loads(manifest_file.read_text())["format_version"] == 1
+
+
+def test_the_index_has_the_format_version_and_another_one_is_rebuilt(cache, tmp_path, caplog):
+    target = tmp_path / "weights.bin"
+    target.write_bytes(b"abc")
+    first = export_cache.ExportCache(cache)
+    digest = first.fingerprint(target)
+    saved = json.loads((cache / "index.json").read_text())
+    assert saved["format_version"] == 1
+    assert list(saved["digests"].values()) == [digest]
+
+    assert export_cache.ExportCache(cache).fingerprint(target) == digest
+
+    (cache / "index.json").write_text(json.dumps({"format_version": 2, "digests": {"x": "y"}}))
+    with caplog.at_level(logging.WARNING, logger="downshift.export_cache"):
+        second = export_cache.ExportCache(cache)
+        assert second.fingerprint(target) == digest
+        second.fingerprint(target)
+    messages = [r.getMessage() for r in caplog.records if "format version" in r.getMessage()]
+    assert len(messages) == 1
+    assert "makes the index again" in messages[0]
+    assert json.loads((cache / "index.json").read_text())["format_version"] == 1
+
+
+def test_an_index_without_a_format_version_is_rebuilt(cache, tmp_path, caplog):
+    (cache / "index.json").write_text(json.dumps({"some|file": "digest"}))
+    with caplog.at_level(logging.WARNING, logger="downshift.export_cache"):
+        assert export_cache.ExportCache(cache)._load_index() == {}
+    assert len([r for r in caplog.records if "format version" in r.getMessage()]) == 1

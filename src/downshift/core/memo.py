@@ -35,6 +35,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("downshift.memo")
 
+# The layout version of model.manifest.json and of the export cache (entries and index.json).
+# Change it only when a reader of the old layout would misread the new one.
+FORMAT_VERSION = 1
+
 MAX_ENTRIES = 2
 STORED_STATUSES = frozenset({"CLEAN", "DEGRADED"})
 

@@ -138,7 +138,7 @@ The boot is the slow part on purpose. If the boot time is important (frequent re
 - Downshift saves each CLEAN or DEGRADED export in `DIR/<key>/`: the `.onnx` file, its manifest, the verdict and the example inputs. A later boot of the same model with the same options skips the export and the verification. The `Boot` row of the banner then says `reused from --export-cache-dir`.
 - The key covers the weights, the source code of the model classes, the options of the gate, and the versions of downshift, torch, onnx, onnxscript, onnxruntime, transformers and torch_geometric. A change to any of them misses.
 - For a Hugging Face repo directory, the key comes from the content of the files, so pods that share a volume share the cache. A hit that ONNX Runtime serves does not load the weights.
-- A read checks the hashes of the graph against the manifest. A bad entry gives one warning and counts as a miss. A write goes to a temporary directory first, so a reader never sees half an entry.
+- A read checks the hashes of the graph against the manifest. A bad entry, or an entry with another `format_version`, gives one warning and counts as a miss. A write goes to a temporary directory first, so a reader never sees half an entry.
 - Downshift never removes entries. To clear the cache, delete the directory.
 
 Without the flag, nothing goes to disk.

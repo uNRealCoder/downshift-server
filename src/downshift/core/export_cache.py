@@ -7,6 +7,9 @@ entries. To clear the cache, delete the directory.
 The key is the memo key, except that HF repo files are identified by content (inodes differ
 between pods on one volume). `DIR/index.json` keeps those digests by file identity.
 
+Both the manifest of an entry and `index.json` have `format_version`. Downshift ignores a file
+with another version (or none) and makes it again, with one warning.
+
 A write builds the entry in a temporary directory and renames it into place. A read checks the
 graph against the manifest hashes. A bad entry is a miss, with one warning.
 """
@@ -21,7 +24,14 @@ from pathlib import Path
 
 import numpy as np
 
-from downshift.core.memo import MEMO, STORED_STATUSES, ExportEntry, file_identity, sha256_file
+from downshift.core.memo import (
+    FORMAT_VERSION,
+    MEMO,
+    STORED_STATUSES,
+    ExportEntry,
+    file_identity,
+    sha256_file,
+)
 
 logger = logging.getLogger("downshift.export_cache")
 
@@ -86,11 +96,21 @@ class ExportCache:
 
     def _load_index(self) -> dict[str, str]:
         if self._index is None:
+            self._index = {}
             try:
                 data = json.loads((self.root / INDEX).read_text(encoding="utf-8"))
-                self._index = data if isinstance(data, dict) else {}
             except (OSError, ValueError):
-                self._index = {}
+                return self._index
+            if not isinstance(data, dict) or data.get("format_version") != FORMAT_VERSION:
+                logger.warning(
+                    "export cache index %s has format version %r, and downshift reads %d. "
+                    "Downshift makes the index again",
+                    self.root / INDEX,
+                    data.get("format_version") if isinstance(data, dict) else None,
+                    FORMAT_VERSION,
+                )
+            elif isinstance(data.get("digests"), dict):
+                self._index = data["digests"]
         return self._index
 
     def fingerprint(self, path: str | Path) -> str:
@@ -102,7 +122,9 @@ class ExportCache:
             digest = sha256_file(path)
             index[identity] = digest
             try:
-                _write_json_atomic(self.root / INDEX, index)
+                _write_json_atomic(
+                    self.root / INDEX, {"format_version": FORMAT_VERSION, "digests": index}
+                )
             except OSError as exc:
                 logger.warning("export cache index not saved: %s", exc)
         return digest
@@ -124,6 +146,11 @@ class ExportCache:
 
     def _read(self, entry_dir: Path) -> ExportEntry:
         manifest = json.loads((entry_dir / "model.manifest.json").read_text(encoding="utf-8"))
+        if manifest.get("format_version") != FORMAT_VERSION:
+            raise ValueError(
+                f"its format version is {manifest.get('format_version')!r}, "
+                f"and downshift reads {FORMAT_VERSION}"
+            )
         onnx_path = entry_dir / MODEL
         if sha256_file(onnx_path) != manifest["onnx_sha256"]:
             raise ValueError(f"{MODEL} does not match its manifest hash")

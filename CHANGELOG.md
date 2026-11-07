@@ -21,6 +21,7 @@ All notable changes to this project are documented here. Format follows
 - `--server-timing` also works on `POST /v1/embeddings`.
 - Three error codes: `model_not_found` (`404`), `not_embedding_model` (`400`) and `dimensions_not_supported` (`400`). Refer to "Error codes" in `docs/http-api.md`.
 - `docs/stability.md` lists the public surface that 1.0 freezes: the routes, the headers, the error codes, the metrics, the options, the exit codes, the `DOWNSHIFT_*` variables, `downshift.__all__`, the `Adapter` protocol and the manifest. It defines a breaking change and the deprecation rule: a deprecated item stays for one minor release, with a warning in the log and a `CHANGELOG.md` entry. A test checks that the page names each variable, public name, error code and metric.
+- `format_version: 1` in `model.manifest.json` and in the export cache (each entry manifest and `index.json`). If a manifest or an index has another version (or none), downshift does not use it. It writes one warning and exports again. `index.json` now holds `{"format_version", "digests"}`: the first boot with an old index makes the digests again.
 - The docs say that the default verification samples are synthetic (random values at the edge shapes). To verify on inputs like real traffic, use `--vary`.
 
 ### Changed

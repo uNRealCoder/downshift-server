@@ -9,7 +9,7 @@ import onnxruntime
 import torch
 from onnx.external_data_helper import ExternalDataInfo, uses_external_data
 
-from downshift.core.memo import sha256_file
+from downshift.core.memo import FORMAT_VERSION, sha256_file
 from downshift.core.verdict import ExportVerdict
 from downshift.sources import path_basename
 
@@ -53,6 +53,7 @@ def build_manifest(
     verdict_dict = verdict.redacted_dict((onnx_path, source_path))
     verdict_dict["onnx_path"] = onnx_path.name if verdict_dict["onnx_path"] else None
     return {
+        "format_version": FORMAT_VERSION,
         "downshift_version": package_version,
         "created_utc": datetime.now(UTC).isoformat(timespec="seconds"),
         "onnx_file": onnx_path.name,
