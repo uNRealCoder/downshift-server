@@ -7,8 +7,11 @@ the ServingState. Each label has a fixed set of values. A request value is never
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+
+from downshift._version import __version__
 
 if TYPE_CHECKING:
     from downshift.serve.engine import ServingState
@@ -40,10 +43,7 @@ class Histogram:
     total: float = 0.0
 
     def observe(self, seconds: float) -> None:
-        index = 0
-        while index < len(BUCKETS) and seconds > BUCKETS[index]:
-            index += 1
-        self.counts[index] += 1
+        self.counts[bisect_left(BUCKETS, seconds)] += 1
         self.total += seconds
 
 
@@ -51,34 +51,46 @@ class Histogram:
 class Metrics:
     worker: str = "0"
     requests: dict[tuple[str, str], int] = field(default_factory=dict)  # (route, code)
-    request_seconds: dict[tuple[str], Histogram] = field(default_factory=dict)  # (route,)
-    stage_seconds: dict[tuple[str], Histogram] = field(default_factory=dict)  # (stage,)
-    rejected: dict[tuple[str], int] = field(
-        default_factory=lambda: {(reason,): 0 for reason in _REJECT_REASONS.values()}
+    request_seconds: dict[str, Histogram] = field(default_factory=dict)  # by route
+    stage_seconds: dict[str, Histogram] = field(default_factory=dict)  # by stage
+    rejected: dict[str, int] = field(
+        default_factory=lambda: {reason: 0 for reason in _REJECT_REASONS.values()}
     )
-    cache_requests: dict[tuple[str], int] = field(
-        default_factory=lambda: {(result,): 0 for result in _CACHE_RESULTS}
+    cache_requests: dict[str, int] = field(
+        default_factory=lambda: {result: 0 for result in _CACHE_RESULTS}
     )
 
     def record_request(self, route: str, status: int, seconds: float) -> None:
         key = (route, str(status))
         self.requests[key] = self.requests.get(key, 0) + 1
-        self.request_seconds.setdefault((route,), Histogram()).observe(seconds)
+        _histogram(self.request_seconds, route).observe(seconds)
 
     def record_stages(self, timings_ms: dict[str, float]) -> None:
         for stage, keys in _STAGE_KEYS.items():
-            if any(key in timings_ms for key in keys):
-                milliseconds = sum(timings_ms.get(key, 0.0) for key in keys)
-                self.stage_seconds.setdefault((stage,), Histogram()).observe(milliseconds / 1000)
+            milliseconds = 0.0
+            seen = False
+            for key in keys:
+                if key in timings_ms:
+                    milliseconds += timings_ms[key]
+                    seen = True
+            if seen:
+                _histogram(self.stage_seconds, stage).observe(milliseconds / 1000)
 
     def record_rejected(self, code: str | None) -> None:
         reason = _REJECT_REASONS.get(code or "")
         if reason is not None:
-            self.rejected[(reason,)] += 1
+            self.rejected[reason] += 1
 
     def record_cache_result(self, result: str | None) -> None:
         if result in _CACHE_RESULTS:
-            self.cache_requests[(result,)] += 1
+            self.cache_requests[result] += 1
+
+
+def _histogram(series: dict[str, Histogram], key: str) -> Histogram:
+    hist = series.get(key)
+    if hist is None:
+        hist = series[key] = Histogram()
+    return hist
 
 
 def _escape(value: object) -> str:
@@ -105,11 +117,12 @@ def render(metrics: Metrics, state: ServingState | None) -> str:
     def counter(name: str, text: str, label_names: tuple[str, ...], values: dict) -> None:
         head(name, "counter", text)
         for key, count in values.items():
-            sample(name, count, **dict(zip(label_names, key, strict=True)))
+            keys = key if isinstance(key, tuple) else (key,)
+            sample(name, count, **dict(zip(label_names, keys, strict=True)))
 
-    def histogram(name: str, text: str, label: str, values: dict[tuple[str], Histogram]) -> None:
+    def histogram(name: str, text: str, label: str, values: dict[str, Histogram]) -> None:
         head(name, "histogram", text)
-        for (value,), hist in values.items():
+        for value, hist in values.items():
             labels = {label: value}
             running = 0
             for bound, count in zip((*BUCKETS, "+Inf"), hist.counts, strict=True):
@@ -170,7 +183,7 @@ def render(metrics: Metrics, state: ServingState | None) -> str:
         sample(
             "downshift_model_info",
             1,
-            downshift_version=_version(),
+            downshift_version=__version__,
             verdict=state.verdict.status,
             backend=state.backend.name,
             family=state.verdict.model_family,
@@ -178,9 +191,3 @@ def render(metrics: Metrics, state: ServingState | None) -> str:
         for phase, seconds in state.timings.items():
             sample("downshift_boot_seconds", seconds, phase=phase)
     return "\n".join(lines) + "\n"
-
-
-def _version() -> str:
-    import downshift
-
-    return downshift.__version__

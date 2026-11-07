@@ -185,7 +185,7 @@ def test_a_503_that_a_middleware_builds_is_counted():
     metrics = Metrics()
     client = TestClient(RequestIdMiddleware(refuse, metrics=metrics))
     assert client.get("/x").status_code == 503
-    assert metrics.rejected[("capacity",)] == 1
+    assert metrics.rejected["capacity"] == 1
 
 
 def test_metrics_answers_while_the_model_loads(plain_state):
