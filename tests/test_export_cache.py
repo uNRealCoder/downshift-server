@@ -309,7 +309,7 @@ def test_a_worker_with_an_artifact_never_opens_the_cache(cache, monkeypatch, tmp
     monkeypatch.setattr(export_cache, "ExportCache", refuse)
     from downshift.serve import engine
 
-    built = SimpleNamespace(timings={})
+    built = SimpleNamespace(timings={}, verdict=SimpleNamespace(onnx_bytes=b"graph"))
     monkeypatch.setattr(engine, "state_from_entry", lambda *args, **kwargs: built)
     from downshift.cli.runtime import ArtifactHandoff
 
