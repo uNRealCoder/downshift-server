@@ -762,7 +762,7 @@ def test_predict_queued_past_request_timeout_is_503_and_never_infers(mlp_state, 
         time.sleep(0.3)
         return {"output_0": np.zeros((1, 4), dtype=np.float32)}
 
-    state = _with_options(mlp_state, max_concurrency=1, max_queue=5, request_timeout=0.05)
+    state = _with_options(mlp_state, max_concurrency=1, max_queue=5, request_timeout=0.1)
     monkeypatch.setattr(state.backend, "infer", slow_infer)
     client = TestClient(build_app(state))
 
@@ -774,9 +774,10 @@ def test_predict_queued_past_request_timeout_is_503_and_never_infers(mlp_state, 
         first_result = first.result()
         second_result = second.result()
 
-    assert first_result.status_code == 200
+    assert first_result.status_code == 503  # the limit stops a running infer too
     assert second_result.status_code == 503
     assert "--request-timeout" in second_result.json()["detail"]
+    time.sleep(0.5)  # the first infer ends, and the thread of the second starts late
     assert len(calls) == 1  # the predict in the queue never reached infer()
 
 

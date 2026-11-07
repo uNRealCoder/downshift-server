@@ -1,5 +1,6 @@
 """The FastAPI app over a ServingState. The routes are the same for both backends."""
 
+import asyncio
 import contextvars
 import hmac
 import inspect
@@ -163,7 +164,9 @@ async def _predict(
 class PredictRoute(APIRoute):
     """/predict and /predict/graph, served from the raw body: FastAPI does not parse it, and
     run_predict does so off the event loop. A slot is admitted first, so an overloaded server
-    answers 503 before it reads a byte. `finally` releases the slot on every exit."""
+    answers 503 before it reads a byte. One --request-timeout limit covers the whole request,
+    the body read included. A thread that already runs is not stopped. `finally` releases the
+    slot on every exit."""
 
     def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
         graph = self.path == "/predict/graph"
@@ -174,8 +177,16 @@ class PredictRoute(APIRoute):
                 raise _not_ready_error()
             if not state.try_admit():
                 raise _capacity_error(state)
+            timeout = state.options.request_timeout
             try:
-                return await _predict(request, state, graph, time.monotonic())
+                return await asyncio.wait_for(
+                    _predict(request, state, graph, time.monotonic()),
+                    timeout if timeout > 0 else None,
+                )
+            except TimeoutError:
+                raise HTTPException(
+                    503, f"request took more than the {timeout:.1f}s --request-timeout"
+                ) from None
             finally:
                 state.release()
 

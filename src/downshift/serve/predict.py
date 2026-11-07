@@ -630,20 +630,12 @@ def _release_claims(cache: ResultCache, prep: asyncio.Future[_CachePlan]) -> Non
         cache.fail(prep.result().owned, RuntimeError("the request did not finish"))
 
 
-async def _await_row(state: ServingState, future: Future[Row], admitted_at: float) -> Row:
-    """The row that another request computes, until --request-timeout after admission.
-    asyncio.wait (unlike awaiting the wrapped future) does not cancel it if this request
-    leaves, so the other waiters still get the row."""
+async def _await_row(future: Future[Row]) -> Row:
+    """The row that another request computes. asyncio.shield (unlike awaiting the wrapped
+    future) does not cancel it if this request leaves, so the other waiters still get the row."""
     wrapped = asyncio.wrap_future(future)
     wrapped.add_done_callback(lambda f: f.cancelled() or f.exception())  # no unread errors
-    timeout = state.options.request_timeout
-    remaining = None if timeout <= 0 else max(timeout - (time.monotonic() - admitted_at), 0.0)
-    done, _ = await asyncio.wait({wrapped}, timeout=remaining)
-    if not done:
-        raise HTTPException(
-            503, f"request waited for a row past the {timeout:.1f}s --request-timeout"
-        )
-    return wrapped.result()
+    return await asyncio.shield(wrapped)
 
 
 async def _run_cached(
@@ -713,7 +705,7 @@ async def _run_cached(
         retry: list[int] = []
         for i, future in plan.found.pending.items():
             try:
-                rows[i] = await _await_row(state, future, admitted_at)
+                rows[i] = await _await_row(future)
                 served += 1
             except HTTPException:
                 raise

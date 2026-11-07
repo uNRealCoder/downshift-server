@@ -9,7 +9,6 @@ from concurrent.futures import Future
 
 import numpy as np
 import pytest
-from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from safetensors.numpy import load as st_load
 from safetensors.numpy import save as st_save
@@ -361,11 +360,10 @@ def test_a_request_that_leaves_during_the_prep_hop_releases_its_rows(monkeypatch
 
 
 def test_a_waiter_that_leaves_does_not_cancel_the_row_of_its_owner():
-    state = _state("clean_mlp")
     future: Future = Future()
 
     async def go():
-        waiter = asyncio.ensure_future(predict._await_row(state, future, time.monotonic()))
+        waiter = asyncio.ensure_future(predict._await_row(future))
         await asyncio.sleep(0.05)
         waiter.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -377,17 +375,36 @@ def test_a_waiter_that_leaves_does_not_cancel_the_row_of_its_owner():
     future.set_result({})  # the owner can still give the row
 
 
-def test_a_waiter_gives_up_at_the_request_timeout():
-    state = _state("clean_mlp", request_timeout=0.2)
+def _slowed(fn):
+    def slow(*args, **kwargs):
+        time.sleep(3.0)
+        return fn(*args, **kwargs)
 
-    async def go():
-        await predict._await_row(state, Future(), time.monotonic())
+    return slow
 
-    with pytest.raises(HTTPException) as info:
-        asyncio.run(go())
 
-    assert info.value.status_code == 503
-    assert "--request-timeout" in info.value.detail
+@pytest.mark.parametrize("cache_rows", [100, 0])
+@pytest.mark.parametrize("slow", ["infer", "prep"])
+def test_a_slow_step_gets_a_503_at_the_request_timeout(monkeypatch, slow, cache_rows):
+    state = _state("clean_mlp", request_timeout=1.0, result_cache_rows=cache_rows)
+    if slow == "infer":
+        Spy(state, delay=3.0)
+    else:
+        for name in ("_prepare_feeds", "_cache_prepare"):
+            monkeypatch.setattr(predict, name, _slowed(getattr(predict, name)))
+    client = TestClient(build_app(state))
+
+    start = time.monotonic()
+    response = _post(client, _x(1.0))
+    elapsed = time.monotonic() - start
+
+    assert response.status_code == 503
+    assert "--request-timeout" in response.json()["detail"]
+    assert elapsed < 1.2
+    assert state.in_flight == 0, "the slot is released"
+    if slow == "infer" and state.result_cache is not None:
+        keys = predict.tensor_keys({"x": np.full((1, 16), 1.0, dtype=np.float32)}, 1)
+        assert state.result_cache.lookup(keys).missing == [0], "the claim was released"
 
 
 def test_a_waiter_that_retries_can_get_a_whole_response(monkeypatch):

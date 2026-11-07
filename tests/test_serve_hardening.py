@@ -589,7 +589,8 @@ def test_a_request_queued_for_inference_still_times_out(mlp_state, monkeypatch):
 
     assert second.status_code == 503
     assert "--request-timeout" in second.json()["detail"]
-    assert results == [200]
+    assert results == [503]  # the limit stops a running infer too
+    time.sleep(0.5)  # the first infer ends, and the thread of the second starts late
     assert len(calls) == 1
 
 
