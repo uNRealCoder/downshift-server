@@ -52,7 +52,7 @@ gnn = [
     "torch-geometric>=2.5",
 ]
 hf = [
-    "transformers>=5",
+    "transformers>=5.17",
 ]
 fast = [
     "pybase64>=1.4",  # SIMD base64 for binary tensor I/O; stdlib is used when absent
