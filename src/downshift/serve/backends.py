@@ -11,7 +11,7 @@ import onnxruntime as ort
 import torch
 from torch import nn
 
-from downshift.core.feeds import WIDEN_DTYPES, example_feeds, widen_for_wire
+from downshift.core.feeds import WIDEN_DTYPES, example_feeds, to_feed, widen_for_wire
 from downshift.core.verdict import BackendName
 from downshift.core.verify import OrtProvider, first_line, new_session
 
@@ -264,8 +264,7 @@ class TorchBackend:
         else:
             tensors = [t for t in out if isinstance(t, torch.Tensor)]
         return {
-            name: widen_for_wire(t.detach().cpu()).numpy()
-            for name, t in zip(output_names(len(tensors)), tensors, strict=True)
+            name: to_feed(t) for name, t in zip(output_names(len(tensors)), tensors, strict=True)
         }
 
     def metadata(self) -> BackendMeta:

@@ -87,22 +87,22 @@ def to_half_precision(result: CaptureResult) -> None:
     (for example, the ones that need fp32 range) in fp32."""
     from onnxruntime.transformers.float16 import convert_float_to_float16
 
-    if result.onnx_path is not None:
-        proto = onnx.load(str(result.onnx_path))
-    else:
+    path = result.onnx_path
+    if path is None:
         proto = onnx.load_from_string(result.onnx_bytes)
+    else:
+        proto = onnx.load(str(path))
     # Shape inference cannot read a proto over 2 GB, the case that uses external data.
     proto = convert_float_to_float16(
-        proto, keep_io_types=True, disable_shape_infer=result.onnx_path is not None
+        proto, keep_io_types=True, disable_shape_infer=path is not None
     )
-    if result.onnx_path is not None:
-        half_path = result.onnx_path.with_name("model_fp16.onnx")
-        onnx.save_model(
-            proto, str(half_path), save_as_external_data=True, location="model_fp16.data"
-        )
-        result.onnx_path = half_path
-    else:
+    if path is None:
         result.onnx_bytes = proto.SerializeToString()
+    else:
+        result.onnx_path = path.with_name("model_fp16.onnx")
+        onnx.save_model(
+            proto, str(result.onnx_path), save_as_external_data=True, location="model_fp16.data"
+        )
     result.onnx_program = None  # it holds the fp32 graph
     result.op_types = op_type_histogram(proto.graph.node)
 

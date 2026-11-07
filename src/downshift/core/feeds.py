@@ -14,12 +14,15 @@ def widen_for_wire(t: torch.Tensor) -> torch.Tensor:
     return t.float() if t.dtype in WIDEN_DTYPES else t
 
 
+def to_feed(t: torch.Tensor) -> np.ndarray:
+    """A tensor as a numpy array on the CPU, with bf16 and fp16 widened to float32."""
+    return widen_for_wire(t.detach().cpu()).numpy()
+
+
 def example_feeds(input_names: Sequence[str], example_inputs: tuple) -> dict[str, np.ndarray]:
     """{forward argument name: numpy array}, with bf16 and fp16 widened to float32."""
     return {
-        name: widen_for_wire(t).detach().cpu().numpy()
-        if isinstance(t, torch.Tensor)
-        else np.asarray(t)
+        name: to_feed(t) if isinstance(t, torch.Tensor) else np.asarray(t)
         for name, t in zip(input_names, example_inputs, strict=True)
     }
 

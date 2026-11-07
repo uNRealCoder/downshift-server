@@ -62,6 +62,9 @@ class BackendName(StrEnum):
 
 EXIT_CODES = {Status.CLEAN: 0, Status.FAILED: 1, Status.DEGRADED: 2, Status.UNVERIFIED: 3}
 
+_FP16_NO_KERNEL_HINT = (
+    ". If an fp16 operation has no CPU kernel, export without --fp16, or use a newer ONNX Runtime"
+)
 _ATEN_OP = re.compile(r"(?:torch\.ops\.)?aten\.(\w+)(?:\.\w+)?")
 
 
@@ -307,7 +310,7 @@ def _verify_into(
         verdict.status, verdict.recommended_backend = Status.FAILED, BackendName.torch
         verdict.reason = f"{unrunnable}: {message}"
         if fp16:
-            verdict.reason += ". If an fp16 operation has no CPU kernel, export without --fp16, or use a newer ONNX Runtime"
+            verdict.reason += _FP16_NO_KERNEL_HINT
         verdict.warnings.append(message)
         return verdict
     finally:
