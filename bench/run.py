@@ -215,7 +215,7 @@ def stage_split(port: int, body: bytes, headers: dict, n: int = 300) -> dict:
         for part in (resp.getheader("server-timing") or "").split(","):
             stage, _, dur = part.strip().partition(";dur=")
             if dur:
-                timing[stage] = float(dur)
+                timing[stage] = float(dur.partition(";")[0])
         if i >= 30:
             rows.append((ms, timing))
     conn.close()
