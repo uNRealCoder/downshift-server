@@ -261,6 +261,20 @@ def test_an_unwritable_directory_is_a_usage_error(tmp_path, repo):
         app_for(mlp(), clean_mlp.make_inputs(), export_cache_dir=str(missing))
 
 
+def test_export_reads_the_cache_directory_at_call_time_and_none_turns_it_off(
+    cache, tmp_path, monkeypatch
+):
+    monkeypatch.setattr("downshift.settings.EXPORT_CACHE_DIR", str(cache))
+    inputs = clean_mlp.make_inputs()
+
+    downshift.export(mlp(), tmp_path / "off.onnx", inputs, samples=1, export_cache_dir=None)
+    assert entries(cache) == []
+
+    MEMO.clear()
+    downshift.export(mlp(), tmp_path / "env.onnx", inputs, samples=1)
+    assert len(entries(cache)) == 1
+
+
 def test_check_ignores_the_cache_directory(cache, monkeypatch):
     monkeypatch.setattr("downshift.settings.EXPORT_CACHE_DIR", str(cache))
 

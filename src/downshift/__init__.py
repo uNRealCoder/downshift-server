@@ -13,6 +13,10 @@ from typing import TYPE_CHECKING, Any
 from downshift._defaults import DEFAULT_SAMPLES
 from downshift._version import __version__
 
+# The default of export(export_cache_dir=): read DOWNSHIFT_EXPORT_CACHE_DIR at call time. None means
+# no disk tier, as before.
+_FROM_ENV: Any = object()
+
 if TYPE_CHECKING:
     from downshift.adapters.base import Adapter, Prepared, VaryFn
     from downshift.core.memo import ExportEntry
@@ -87,14 +91,14 @@ def export(
     vary: VaryFn | str | None = None,
     axis_max: dict[str, int] | None = None,
     cache: bool = True,
-    export_cache_dir: str | Path | None = None,
+    export_cache_dir: str | Path | None = _FROM_ENV,
 ) -> ExportVerdict:
     """check(), then write the .onnx file (`output`) and its manifest. A FAILED verdict writes
     nothing. A DEGRADED one writes both: the manifest records how far the numbers differ.
 
     Unlike check(), export() reuses an earlier CLEAN or DEGRADED export of the same model and
-    options, from the in-process memo and from `export_cache_dir` (None: the value of
-    DOWNSHIFT_EXPORT_CACHE_DIR; unset means no disk). `cache=False` skips both.
+    options, from the in-process memo and from `export_cache_dir` (default: the value of
+    DOWNSHIFT_EXPORT_CACHE_DIR when you call it; None or unset means no disk). `cache=False` skips both.
     """
     from downshift.core import memo
     from downshift.core.export_cache import ExportCache, lookup, store
@@ -102,7 +106,7 @@ def export(
     from downshift.core.verdict import check
     from downshift.settings import EXPORT_CACHE_DIR
 
-    if export_cache_dir is None:
+    if export_cache_dir is _FROM_ENV:
         export_cache_dir = EXPORT_CACHE_DIR
     run = dict(
         samples=samples,

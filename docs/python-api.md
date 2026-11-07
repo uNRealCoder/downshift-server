@@ -85,14 +85,14 @@ def export(
     vary: VaryFn | str | None = None,
     axis_max: dict[str, int] | None = None,
     cache: bool = True,
-    export_cache_dir: str | Path | None = None,
+    export_cache_dir: str | Path | None = settings.EXPORT_CACHE_DIR,
 ) -> ExportVerdict
 ```
 
 `export` is `check()` plus the writing of `output` (the `.onnx` path) and a `.manifest.json` file next to it (`downshift.core.manifest.write_manifest`). Each parameter that is not in this list has the same meaning as on `check()`.
 
 - `output`: the path of the `.onnx` file. Downshift creates missing parent directories.
-- `export_cache_dir`: a directory for the disk tier of the export cache. The default, `None`, means the value of `DOWNSHIFT_EXPORT_CACHE_DIR`. If it is unset, nothing goes to disk. The key is the content of the weights. A restart then reuses a verified export.
+- `export_cache_dir`: a directory for the disk tier of the export cache. The default is the value of `DOWNSHIFT_EXPORT_CACHE_DIR` when you call `export()`. If it is unset, or you pass `None`, nothing goes to disk. The key is the content of the weights. A restart then reuses a verified export.
 - `source_path`: if it points to a real file, downshift records it in the manifest as the source checkpoint. The manifest has the file name only, never the directory. It also has the SHA-256 of the file.
 
 A `FAILED` verdict writes nothing. There is no `.onnx` file and no manifest. A `DEGRADED` verdict writes the artifact, because the manifest records how far the numbers differ. In that case, `verdict.onnx_path` is set on the returned verdict. `export` raises the same errors as `check()`.

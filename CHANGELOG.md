@@ -56,7 +56,7 @@ All notable changes to this project are documented here. Format follows
   - `downshift.serve.middleware.load_middleware` is now `downshift.serve.app.load_middleware`.
   - `downshift.serve.engine.serving_state_from_artifact` and `serving_state_from_torch_artifact` are removed. Use `downshift.serve.engine.state_from_entry`.
   - `downshift.core.verify.quiet_ort_logging` is removed. `new_session` silences the ONNX Runtime logger itself.
-- `import downshift` does not read the environment. The default of `export(export_cache_dir=...)` is `None`, which means the value of `DOWNSHIFT_EXPORT_CACHE_DIR` when you call it.
+- `import downshift` does not read the environment. `export()` reads `DOWNSHIFT_EXPORT_CACHE_DIR` when you call it, not at import. `export_cache_dir=None` still means no disk tier.
 
 ### Fixed
 
