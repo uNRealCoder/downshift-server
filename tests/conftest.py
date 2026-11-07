@@ -62,23 +62,6 @@ def tls_files(tmp_path_factory) -> TlsFiles:
     return files
 
 
-_TORCH_VERSION = tuple(int(p) for p in torch.__version__.split("+")[0].split(".")[:2])
-
-
-def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Skip `needs_torch_26` tests on the CI floor job, which uses torch 2.5.1.
-
-    A marker next to the tests replaces an inline `--deselect` list in the CI YAML. The marker
-    cannot become old when you add, rename or remove tests.
-    """
-    if _TORCH_VERSION >= (2, 6):
-        return
-    skip = pytest.mark.skip(reason=f"needs torch>=2.6, running {torch.__version__}")
-    for item in items:
-        if "needs_torch_26" in item.keywords:
-            item.add_marker(skip)
-
-
 class WorkerExit(Exception):
     """os._exit, called from a test. A `--workers` worker does this when its model fails to load
     (cli.runtime._serve_app_factory)."""

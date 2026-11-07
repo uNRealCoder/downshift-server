@@ -17,7 +17,6 @@ from tests.models import gnn_gat, gnn_gcn, gnn_output_kinds, gnn_sage
 FIXTURES = [gnn_gcn, gnn_sage, gnn_gat]
 
 
-@pytest.mark.needs_torch_26
 @pytest.mark.parametrize("module", FIXTURES, ids=lambda m: m.__name__.rsplit(".", 1)[-1])
 def test_gnn_fixture_is_clean(module) -> None:
     model = module.make_model()
@@ -31,7 +30,6 @@ def test_gnn_fixture_is_clean(module) -> None:
     assert verdict.numerics.shape_generalization
 
 
-@pytest.mark.needs_torch_26
 def test_gnn_verdict_survives_node_edge_count_mismatch() -> None:
     """If N and E were tied to one Dim, a change of the edge count with the same node count
     would fail during verification."""
@@ -43,7 +41,6 @@ def test_gnn_verdict_survives_node_edge_count_mismatch() -> None:
     assert verdict.status == "CLEAN"
 
 
-@pytest.mark.needs_torch_26
 def test_axis_max_num_nodes_pins_a_sample_at_that_size() -> None:
     verdict = downshift.check(
         gnn_gcn.make_model(), gnn_gcn.make_inputs(), axis_max={"num_nodes": 500}, samples=4
@@ -55,7 +52,6 @@ def test_axis_max_num_nodes_pins_a_sample_at_that_size() -> None:
     assert verdict.numerics.sample_shapes[1][0][0] == 500
 
 
-@pytest.mark.needs_torch_26
 def test_gcn_output_is_node_level() -> None:
     verdict = downshift.check(gnn_gcn.make_model(), gnn_gcn.make_inputs(), samples=6)
 
@@ -63,7 +59,6 @@ def test_gcn_output_is_node_level() -> None:
     assert ExportVerdict.from_dict(verdict.to_dict()).output_axes == ["node"]
 
 
-@pytest.mark.needs_torch_26
 def test_edge_model_output_is_edge_level() -> None:
     verdict = downshift.check(
         gnn_output_kinds.make_edge_model(), gnn_output_kinds.make_inputs(), samples=6
@@ -73,7 +68,6 @@ def test_edge_model_output_is_edge_level() -> None:
     assert verdict.output_axes == ["edge"]
 
 
-@pytest.mark.needs_torch_26
 def test_fixed_size_readout_output_is_fixed() -> None:
     verdict = downshift.check(
         gnn_output_kinds.make_fixed_model(), gnn_output_kinds.make_inputs(), samples=6

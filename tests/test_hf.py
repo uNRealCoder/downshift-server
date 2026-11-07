@@ -21,7 +21,6 @@ def verdict() -> downshift.ExportVerdict:
     return downshift.check(tiny_bert.make_model(), tiny_bert.make_inputs())
 
 
-@pytest.mark.needs_torch_26
 def test_bert_exports_clean(verdict):
     assert verdict.status == "CLEAN", verdict.reason
     assert verdict.model_family == "hf"
@@ -34,21 +33,18 @@ def test_bert_inputs_and_dynamic_dims(verdict):
     assert verdict.dynamic_dims == {"input_ids": [0, 1], "attention_mask": [0, 1]}
 
 
-@pytest.mark.needs_torch_26
 def test_bert_generalises_across_batch_and_sequence(verdict):
     assert verdict.numerics is not None
     assert verdict.numerics.passed
     assert verdict.numerics.shape_generalization is True
 
 
-@pytest.mark.needs_torch_26
 def test_bert_without_inputs_uses_config_derived_inputs():
     verdict = downshift.check(tiny_bert.make_model())
     assert verdict.status == "CLEAN", verdict.reason
     assert verdict.input_names == ("input_ids", "attention_mask")
 
 
-@pytest.mark.needs_torch_26
 def test_bert_at_max_position_embeddings_is_clean():
     """The example is at the own sequence-length ceiling of the model. The sampler must not push
     a varied sample above it. (This was an exit-4 crash and not a verdict.)"""
@@ -60,7 +56,6 @@ def test_bert_at_max_position_embeddings_is_clean():
     assert verdict.status == "CLEAN", verdict.reason
 
 
-@pytest.mark.needs_torch_26
 def test_bert_at_max_position_embeddings_serves():
     from downshift.loading import LoadedModel
 
@@ -74,7 +69,6 @@ def test_bert_at_max_position_embeddings_serves():
     assert state.verdict.status == "CLEAN", state.verdict.reason
 
 
-@pytest.mark.needs_torch_26
 def test_axis_max_seq_pins_a_sample_and_lowers_the_served_bound():
     verdict = downshift.check(
         tiny_bert.make_model(), tiny_bert.make_inputs(), axis_max={"seq": 24}, samples=4
@@ -182,7 +176,6 @@ def _decoder_prepared(path: str):
     return loaded, prepare_model(loaded.model, loaded.example_inputs, None, None)
 
 
-@pytest.mark.needs_torch_26
 def test_decoder_embedder_exports_clean_on_onnxruntime(tmp_path):
     path = hf_repo.write_decoder_repo(tmp_path, recipe="lasttoken")
     loaded = load_model(LoadSpec(path))
@@ -222,7 +215,6 @@ def test_a_verify_sample_has_leading_mask_zeros_under_left_padding(tmp_path):
     assert any(m[:, -1].eq(0).any() for m in masks)
 
 
-@pytest.mark.needs_torch_26
 def test_the_torch_model_is_released_after_a_clean_onnx_verdict(tmp_path):
     import gc
     import weakref

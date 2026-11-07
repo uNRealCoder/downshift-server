@@ -27,6 +27,9 @@ All notable changes to this project are documented here. Format follows
 
 ### Changed
 
+- Breaking change: the floor of `torch` is now `2.6` (it was `2.5`), and the floor of the `hf` extra `transformers` is now `5` (it was `4.40`). CI tests only these floors. torch 2.5 and transformers 4.x are no longer supported. To upgrade, install torch 2.6 or later, and transformers 5 or later if you use the `hf` extra. There is no upper cap.
+- The version is `1.0.0rc1` and the trove classifier is `Development Status :: 4 - Beta`. The release `1.0.0` moves it to `5 - Production/Stable`.
+- The package metadata uses the PEP 639 license form (`license = "MIT"`, `license-files`). The build needs `hatchling>=1.27`. The source archive (sdist) holds only the source, `tests/`, `docs/`, `examples/` and the project files. It no longer holds `bench/`, `.docs/` or the scripts.
 - Breaking change: the variable `DOWNSHIFT_SERVER_API_KEY` is now `DOWNSHIFT_API_KEY`. The old name still works for one minor release. If only the old name is set, downshift uses it and logs one warning. If both are set, `DOWNSHIFT_API_KEY` wins. To upgrade, rename the variable in your deployment.
 - Breaking change: the keyword argument `k` is now `samples` in `check()`, `export()`, `intake()`, `build_verdict()` and `ServeOptions`. There is no alias. If you pass `k=...` or `ServeOptions(k=...)`, change it to `samples=...`. The CLI option `-k` and `--samples` does not change.
 - Breaking change: the field `source_model` of `model.manifest.json` is now `source`. Its value does not change. If a script reads `source_model`, change it to `source`. Downshift itself does not read this field. A manifest without `format_version: 1` is not reused, so no old manifest is read by mistake.

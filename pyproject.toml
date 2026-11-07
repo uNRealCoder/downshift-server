@@ -1,22 +1,22 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
 name = "downshift-server"
-version = "0.6.0"
+version = "1.0.0rc1"
 description = "Serve PyTorch models over HTTP through ONNX Runtime. Downshift verifies each export against PyTorch before it serves, and it falls back to eager PyTorch."
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     {name = "Nikhil Ranjan", email = "nrnikhilranjan1997@gmail.com"}
 ]
 keywords = ["onnx", "pytorch", "model-serving", "export"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -25,7 +25,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "torch>=2.5",  # torch.onnx.export(dynamo=True) accepting an ExportedProgram with report= is 2.5+
+    "torch>=2.6",  # CI tests the floor on 2.6; torch.onnx.export(dynamo=True) with report= is 2.5+
     "onnx>=1.16",  # onnxscript's own floor; older onnx also hits real bugs in torch 2.5's exporter
     "onnxruntime>=1.17",
     "onnxscript>=0.5",  # 0.1-0.4 fail to translate ops torch 2.5's exporter emits for dynamic shapes
@@ -52,7 +52,7 @@ gnn = [
     "torch-geometric>=2.5",
 ]
 hf = [
-    "transformers>=4.40",
+    "transformers>=5",
 ]
 fast = [
     "pybase64>=1.4",  # SIMD base64 for binary tensor I/O; stdlib is used when absent
@@ -78,6 +78,10 @@ downshift = "downshift.cli.entry:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/downshift"]
 
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/tests", "/docs", "/examples", "/scripts/gen_matrix.py", "/README.md", "/LICENSE", "/CHANGELOG.md", "/llms.txt"]
+exclude = ["**/__pycache__", "**/*.pyc"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
@@ -102,14 +106,10 @@ warn_unused_configs = true
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-addopts = ["--cov=src/downshift", "--cov-report=term-missing"]
 testpaths = ["tests"]
 python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
-markers = [
-    "needs_torch_26: requires torch >= 2.6 (skipped on the CI floor job, pinned to 2.5.1)",
-]
 
 [tool.coverage.run]
 source = ["src/downshift"]

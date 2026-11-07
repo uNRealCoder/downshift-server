@@ -18,10 +18,10 @@ CI runs these commands. Run them before you finish:
 ruff check .
 ruff format --check .
 mypy src
-pytest -q
+pytest -q --cov=src/downshift --cov-report=term-missing --cov-fail-under=95
 ```
 
-CI requires 95% line coverage (`--cov-fail-under=95`). Add a test for each new code path.
+CI requires 95% line coverage (`--cov-fail-under=95`). Plain `pytest -q` does not measure coverage, so a subset run is fast. Add a test for each new code path.
 
 While you work, run only the test files that apply to the change. Run the full suite one time, at the end.
 

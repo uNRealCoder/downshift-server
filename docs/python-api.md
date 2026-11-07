@@ -438,7 +438,7 @@ It is different from a numeric mismatch. A mismatch is a `NumericsReport` with `
 ### `__version__`
 
 ```python
-__version__: str  # "0.6.0"
+__version__: str  # "1.0.0rc1"
 ```
 
 Downshift reads it from `downshift._version`. It imports it eagerly, and not through the lazy `_LAZY` map. `downshift.__version__` and `downshift --version` therefore never cause the import of torch.

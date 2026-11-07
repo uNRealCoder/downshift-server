@@ -65,7 +65,6 @@ def test_clean_mlp_without_verify_has_unsampled_facts() -> None:
     assert fact.served_max > 1
 
 
-@pytest.mark.needs_torch_26
 def test_tiny_bert_has_batch_and_seq_facts() -> None:
     verdict = downshift.check(tiny_bert.make_model(), tiny_bert.make_inputs(), samples=8)
 
@@ -76,7 +75,6 @@ def test_tiny_bert_has_batch_and_seq_facts() -> None:
         assert fact.sampled_max is not None and fact.sampled_max <= fact.served_max
 
 
-@pytest.mark.needs_torch_26
 def test_gcn_has_independent_node_and_edge_facts() -> None:
     verdict = downshift.check(gnn_gcn.make_model(), gnn_gcn.make_inputs(), samples=8)
 

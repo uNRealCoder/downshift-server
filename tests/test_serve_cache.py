@@ -603,7 +603,6 @@ def classifier_repo(tmp_path_factory) -> str:
     return str(path)
 
 
-@pytest.mark.needs_torch_26
 def test_text_rows_hit_without_the_tokenizer_and_keep_their_order(embedding_repo):
     state = _state(embedding_repo)
     spy = Spy(state)
@@ -626,7 +625,6 @@ def test_text_rows_hit_without_the_tokenizer_and_keep_their_order(embedding_repo
     )
 
 
-@pytest.mark.needs_torch_26
 def test_a_classifier_answers_predictions_for_hits_and_misses(classifier_repo):
     state = _state(classifier_repo)
     spy = Spy(state)

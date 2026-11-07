@@ -133,7 +133,6 @@ def test_a_dense_module_is_refused_and_none_is_the_way_out(tmp_path):
 # --- serving ------------------------------------------------------------------------------
 
 
-@pytest.mark.needs_torch_26
 def test_embedding_serves_on_onnx_runtime_with_the_pooling_in_the_graph(state):
     assert state.verdict.status == "CLEAN", state.verdict.reason
     assert state.backend.name == "onnxruntime"
@@ -322,7 +321,6 @@ def test_weighted_mean_matches_the_reference_formula():
     assert got[1].tolist() == pytest.approx(reference([[5.0, 6.0], [7.0, 8.0], [9.0, 10.0]]))
 
 
-@pytest.mark.needs_torch_26
 @pytest.mark.parametrize("mode", ["lasttoken", "weightedmean"])
 def test_last_token_and_weighted_mean_export_on_a_repo_without_a_recipe(tmp_path, mode):
     path = hf_repo.write_encoder_repo(tmp_path, modules=None, pooling=None, max_seq_length=None)
@@ -389,7 +387,6 @@ def test_serve_rejects_a_tokenizer_from_that_is_not_an_hf_repo(onnx_path, tmp_pa
     assert "config.json" in result.output
 
 
-@pytest.mark.needs_torch_26
 def test_serve_tokenizer_from_attaches_text_input_end_to_end(monkeypatch, onnx_path, repo):
     captured = _stub_uvicorn_server(monkeypatch)
 
@@ -402,7 +399,6 @@ def test_serve_tokenizer_from_attaches_text_input_end_to_end(monkeypatch, onnx_p
     assert serving.verdict.status == "UNVERIFIED"  # no --reference given: no numerics check
 
 
-@pytest.mark.needs_torch_26
 def test_serve_reference_alone_does_not_attach_text(monkeypatch, onnx_path, repo):
     captured = _stub_uvicorn_server(monkeypatch)
 
@@ -414,7 +410,6 @@ def test_serve_reference_alone_does_not_attach_text(monkeypatch, onnx_path, repo
     assert serving.verdict.status == "CLEAN", serving.verdict.reason
 
 
-@pytest.mark.needs_torch_26
 def test_check_takes_the_pooling_flags(repo):
     result = _cli("check", repo, "--pooling", "cls", "--no-normalize", "--json")
 
@@ -470,7 +465,6 @@ def _rebuilt(monkeypatch, args: runtime.ServeArgs) -> TestClient:
     return TestClient(api)
 
 
-@pytest.mark.needs_torch_26
 def test_onnx_artifact_worker_still_takes_text_and_reports_the_recipe(
     monkeypatch, tmp_path, repo, state, client
 ):

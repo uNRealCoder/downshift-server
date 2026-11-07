@@ -85,7 +85,6 @@ def test_encoder_repo_still_loads_as_the_bare_encoder(encoder_dir):
     assert type(model) is BertModel
 
 
-@pytest.mark.needs_torch_26
 def test_classifier_serves_on_onnx_runtime_and_returns_logits(classifier_state):
     assert classifier_state.verdict.status == "CLEAN", classifier_state.verdict.reason
     assert classifier_state.backend.name == "onnxruntime"
@@ -239,7 +238,6 @@ def test_no_predictions_when_the_output_is_not_a_class_score():
 # --- a bare .onnx served with --tokenizer-from pointing at its Hugging Face repo --------------
 
 
-@pytest.mark.needs_torch_26
 def test_onnx_plus_tokenizer_from_gets_pooling_and_text_input(embedding_onnx, embedding_dir):
     state = prepare_serving(load_model(LoadSpec(embedding_onnx)), tokenizer_from=embedding_dir)
 
@@ -267,7 +265,6 @@ def encoder_onnx(encoder_dir, tmp_path_factory) -> str:
     return str(out)
 
 
-@pytest.mark.needs_torch_26
 def test_tokenizer_from_does_not_claim_pooling_a_token_level_graph(encoder_onnx, embedding_dir):
     """embedding_dir declares mean pooling, but the served graph is the bare encoder. /schema
     must not report an embedding recipe that the graph never applies. It must say why the output
@@ -284,7 +281,6 @@ def test_tokenizer_from_does_not_claim_pooling_a_token_level_graph(encoder_onnx,
     assert any("--tokenizer-from only supplies the tokenizer" in n for n in body["notes"])
 
 
-@pytest.mark.needs_torch_26
 def test_reference_and_tokenizer_from_are_independent(embedding_onnx, embedding_dir):
     """--reference verifies the numerics. --tokenizer-from supplies the tokenizer. If you pass
     both and name the same directory, each option does its own job. Neither option implies the
@@ -300,7 +296,6 @@ def test_reference_and_tokenizer_from_are_independent(embedding_onnx, embedding_
     assert state.verdict.status == "CLEAN", state.verdict.reason
 
 
-@pytest.mark.needs_torch_26
 def test_onnx_alone_has_no_text_input_and_is_unverified(embedding_onnx):
     state = prepare_serving(load_model(LoadSpec(embedding_onnx)))
 
@@ -310,7 +305,6 @@ def test_onnx_alone_has_no_text_input_and_is_unverified(embedding_onnx):
     assert state.verdict.status == "UNVERIFIED"
 
 
-@pytest.mark.needs_torch_26
 def test_reference_alone_does_not_turn_on_text_input(embedding_onnx, embedding_dir):
     """--reference is only numeric. If you name an HF repo directory there, without
     --tokenizer-from, it verifies the graph. It does not attach a tokenizer."""
@@ -350,7 +344,6 @@ def _no_load():
     raise AssertionError("an ONNX rebuild must not load the model")
 
 
-@pytest.mark.needs_torch_26
 def test_worker_rebuild_attaches_text_from_a_carried_hf_source(embedding_onnx, embedding_dir):
     """A `--workers N` worker rebuilds from its parent's export with the resolved hf_source
     alone: no reference model and no --tokenizer-from to validate again."""
@@ -368,7 +361,6 @@ def test_worker_rebuild_attaches_text_from_a_carried_hf_source(embedding_onnx, e
     assert rebuilt.embedding.pooling == "mean"
 
 
-@pytest.mark.needs_torch_26
 def test_app_for_takes_tokenizer_from_independent_of_reference(embedding_onnx, embedding_dir):
     """The library entry point has the same split as the CLI. tokenizer_from= supplies the text
     input. reference= verifies the numerics. Neither implies the other."""
@@ -399,7 +391,6 @@ def _embed(client: TestClient, **body) -> np.ndarray:
     return np.asarray(response.json()["outputs"]["output_0"])
 
 
-@pytest.mark.needs_torch_26
 def test_decoder_text_gives_one_vector_per_row_equal_under_either_padding(tmp_path):
     (tmp_path / "left").mkdir()
     (tmp_path / "right").mkdir()
@@ -428,7 +419,6 @@ def prompted_client(tmp_path_factory) -> TestClient:
     return TestClient(build_app(_decoder_state(path)))
 
 
-@pytest.mark.needs_torch_26
 def test_prompt_name_prepends_the_named_prompt_before_tokenizing(prompted_client):
     named = _embed(prompted_client, text=["capital"], prompt_name="query")
     typed = _embed(prompted_client, text=["the capital"])
@@ -438,7 +428,6 @@ def test_prompt_name_prepends_the_named_prompt_before_tokenizing(prompted_client
     assert not np.array_equal(named, plain)
 
 
-@pytest.mark.needs_torch_26
 def test_unknown_prompt_name_is_a_400_listing_the_names_with_a_cut_echo(prompted_client):
     response = prompted_client.post("/predict", json={"text": ["hi"], "prompt_name": "x" * 500})
 
@@ -449,7 +438,6 @@ def test_unknown_prompt_name_is_a_400_listing_the_names_with_a_cut_echo(prompted
     assert len(detail) < 200
 
 
-@pytest.mark.needs_torch_26
 def test_prompt_name_without_text_is_a_400(prompted_client):
     response = prompted_client.post(
         "/predict",
@@ -460,7 +448,6 @@ def test_prompt_name_without_text_is_a_400(prompted_client):
     assert "text" in response.json()["detail"]
 
 
-@pytest.mark.needs_torch_26
 def test_default_prompt_name_applies_when_a_request_names_none(tmp_path):
     path = hf_repo.write_decoder_repo(tmp_path, recipe="lasttoken", prompts={"query": "the "})
     config_file = tmp_path / "config_sentence_transformers.json"
