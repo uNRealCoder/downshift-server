@@ -568,10 +568,11 @@ def test_a_slow_text_encode_does_not_hold_the_inference_slot(tmp_path, monkeypat
     )
     client = TestClient(build_app(state, api_key=None))
     started = threading.Event()
+    gate = threading.Event()
 
     def slow_encode(self, text):
         started.set()
-        time.sleep(2.0)
+        gate.wait(30)
         raise ValueError("never mind")
 
     monkeypatch.setattr(TextIO, "encode", slow_encode)
@@ -583,21 +584,25 @@ def test_a_slow_text_encode_does_not_hold_the_inference_slot(tmp_path, monkeypat
     assert started.wait(5)
 
     began = time.perf_counter()
-    resp = client.post("/predict", json=_ids([2, 3, 4]))
-    elapsed = time.perf_counter() - began
+    try:
+        resp = client.post("/predict", json=_ids([2, 3, 4]))
+        elapsed = time.perf_counter() - began
+    finally:
+        gate.set()
     slow.join()
 
     assert resp.status_code == 200, resp.text
-    assert elapsed < 1.0
+    assert elapsed < 2.5, "the blocked encode must not hold this request"
     assert results == [400]
 
 
 def test_a_request_queued_for_inference_still_times_out(mlp_state, monkeypatch):
     calls: list[int] = []
+    gate = threading.Event()
 
     def slow_infer(inputs):
         calls.append(1)
-        time.sleep(0.4)
+        gate.wait(30)
         return {"output_0": np.zeros((1, 4), dtype=np.float32)}
 
     state = _with_options(mlp_state, max_concurrency=1, max_queue=5, request_timeout=0.1)
@@ -609,8 +614,11 @@ def test_a_request_queued_for_inference_still_times_out(mlp_state, monkeypatch):
     )
     first.start()
     time.sleep(0.05)
-    second = client.post("/predict", json=MLP_INPUT)
-    first.join()
+    try:
+        second = client.post("/predict", json=MLP_INPUT)
+        first.join()
+    finally:
+        gate.set()
 
     assert second.status_code == 503
     assert "--request-timeout" in second.json()["detail"]

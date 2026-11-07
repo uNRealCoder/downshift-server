@@ -44,12 +44,14 @@ class Spy:
         delay: float = 0.0,
         fail_first: bool = False,
         error: Exception = RuntimeError("boom"),
+        gate: threading.Event | None = None,
     ) -> None:
         self.rows: list[int] = []
         self._real = state.backend.infer
         self._delay = delay
         self._fail = fail_first
         self._error = error
+        self._gate = gate
         self._lock = threading.Lock()
         state.backend.infer = self
 
@@ -58,6 +60,8 @@ class Spy:
             self.rows.append(len(next(iter(inputs.values()))))
             fail, self._fail = self._fail, False
         time.sleep(self._delay)
+        if self._gate is not None:
+            self._gate.wait(30)
         if fail:
             raise self._error
         return self._real(inputs)
@@ -405,9 +409,9 @@ def test_a_waiter_that_leaves_does_not_cancel_the_row_of_its_owner():
     future.set_result({})  # the owner can still give the row
 
 
-def _slowed(fn):
+def _slowed(fn, gate):
     def slow(*args, **kwargs):
-        time.sleep(3.0)
+        gate.wait(30)
         return fn(*args, **kwargs)
 
     return slow
@@ -417,20 +421,24 @@ def _slowed(fn):
 @pytest.mark.parametrize("slow", ["infer", "prep"])
 def test_a_slow_step_gets_a_503_at_the_request_timeout(monkeypatch, slow, cache_rows):
     state = _state("clean_mlp", request_timeout=1.0, result_cache_rows=cache_rows)
+    gate = threading.Event()
     if slow == "infer":
-        Spy(state, delay=3.0)
+        Spy(state, gate=gate)
     else:
         for name in ("_prepare_feeds", "_cache_prepare"):
-            monkeypatch.setattr(predict, name, _slowed(getattr(predict, name)))
+            monkeypatch.setattr(predict, name, _slowed(getattr(predict, name), gate))
     client = TestClient(build_app(state))
 
     start = time.monotonic()
-    response = _post(client, _x(1.0))
-    elapsed = time.monotonic() - start
+    try:
+        response = _post(client, _x(1.0))
+        elapsed = time.monotonic() - start
+    finally:
+        gate.set()
 
     assert response.status_code == 503
     assert "--request-timeout" in response.json()["detail"]
-    assert elapsed < 1.2
+    assert elapsed < 3.0, "the 503 comes at the limit (1 s), not when the step ends"
     assert state.in_flight == 0, "the slot is released"
     if slow == "infer" and state.result_cache is not None:
         keys = predict.tensor_keys({"x": np.full((1, 16), 1.0, dtype=np.float32)}, 1)

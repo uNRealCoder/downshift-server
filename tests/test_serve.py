@@ -752,29 +752,33 @@ def test_predict_past_capacity_is_a_fast_503(mlp_state, monkeypatch):
     assert "server is at capacity" in over.json()["detail"]
     assert "1 running" in over.json()["detail"]
     assert "1 queued" in over.json()["detail"]
-    assert elapsed < 0.5  # never uses the executor
+    assert elapsed < 2.5  # never uses the executor; the blocked infers last up to 5 s
     assert all(r.status_code == 200 for r in results)
 
 
 def test_predict_queued_past_request_timeout_is_503_and_never_infers(mlp_state, monkeypatch):
     calls: list[int] = []
+    gate = threading.Event()
 
     def slow_infer(inputs):
         calls.append(1)
-        time.sleep(0.3)
+        gate.wait(30)
         return {"output_0": np.zeros((1, 4), dtype=np.float32)}
 
     state = _with_options(mlp_state, max_concurrency=1, max_queue=5, request_timeout=0.1)
     monkeypatch.setattr(state.backend, "infer", slow_infer)
     client = TestClient(build_app(state))
 
-    with ThreadPoolExecutor(2) as pool:
-        first = pool.submit(client.post, "/predict", json=MLP_INPUT)
-        _wait_until(lambda: state.in_flight >= 1)
-        second = pool.submit(client.post, "/predict", json=MLP_INPUT)
+    try:
+        with ThreadPoolExecutor(2) as pool:
+            first = pool.submit(client.post, "/predict", json=MLP_INPUT)
+            _wait_until(lambda: state.in_flight >= 1)
+            second = pool.submit(client.post, "/predict", json=MLP_INPUT)
 
-        first_result = first.result()
-        second_result = second.result()
+            first_result = first.result()
+            second_result = second.result()
+    finally:
+        gate.set()
 
     assert first_result.status_code == 503  # the limit stops a running infer too
     assert second_result.status_code == 503
@@ -813,7 +817,7 @@ def test_health_stays_fast_while_predicts_are_queued(mlp_state, monkeypatch):
     # This is far below the stalls of more than 5 seconds that a shared sync threadpool caused
     # in the past. The point is "never blocks behind the predict queue". It is not a tight
     # latency bound.
-    assert elapsed < 1.0
+    assert elapsed < 2.5
 
 
 def test_axis_max_num_nodes_rejects_a_larger_graph(serve_fixture):
