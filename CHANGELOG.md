@@ -3,7 +3,7 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## 0.6.0 - Unreleased
+## 1.0.0 - Unreleased
 
 ### Added
 
@@ -16,7 +16,7 @@ All notable changes to this project are documented here. Format follows
 
 ### Changed
 
-- The export cache of 0.5.x exports again one time. The version of downshift is part of its key, and 0.6.0 adds the row check to the verdict.
+- The export cache of 0.5.x exports again one time. The version of downshift is part of its key, and 1.0.0 adds the row check to the verdict.
 - A bare `serve` or `app_for` on a model with independent rows now has the result cache on. To keep the old behavior, set `--result-cache-rows 0`.
 - `/predict` with the cache on does the encoding on a prep thread and not on an inference thread.
 - Breaking change: predict responses no longer have the `Server-Timing` header by default. The timings show how the server works, and a fast cache hit shows that another client sent the same row. To get the header back, pass `--server-timing` or set `DOWNSHIFT_SERVER_TIMING=1`. The access log still has the timings.
