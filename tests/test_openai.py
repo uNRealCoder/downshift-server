@@ -19,7 +19,7 @@ from downshift.loading import LoadSpec, load_model
 from downshift.serve.app import build_app
 from downshift.serve.engine import prepare_serving
 from downshift.serve.errors import ApiError
-from downshift.serve.openai import _check_dimensions, _matryoshka_cut, served_name
+from downshift.serve.openai import _check_dimensions, _matryoshka_cut
 from downshift.serve.options import ServeOptions
 from tests.models import hf_repo
 
@@ -36,7 +36,7 @@ def state(repo):
 
 @pytest.fixture(scope="module")
 def name(state) -> str:
-    return served_name(state)
+    return state.served_name
 
 
 @pytest.fixture(scope="module")
@@ -95,7 +95,7 @@ def test_served_model_name_replaces_the_name_and_survives_the_workers(state, rep
     assert renamed.get("/v1/models").json()["data"][0]["id"] == "my-embedder"
     assert renamed.get("/v1/models/my-embedder").status_code == 200
     assert _embed(renamed, "my-embedder", "hello").status_code == 200
-    assert _embed(renamed, served_name(state), "hello").status_code == 404
+    assert _embed(renamed, state.served_name, "hello").status_code == 404
 
     args = ServeArgs(
         load=LoadSpec(repo),
@@ -230,7 +230,7 @@ def test_token_vectors_are_not_an_embedding_model(tmp_path):
     )
     plain = TestClient(build_app(tokens, api_key=None))
 
-    response = _embed(plain, served_name(tokens), "hello")
+    response = _embed(plain, tokens.served_name, "hello")
 
     assert response.json()["error"]["code"] == "not_embedding_model"
 

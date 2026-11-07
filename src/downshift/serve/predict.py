@@ -192,17 +192,17 @@ def _violation(
     )
 
 
-def _check_timeout(state: ServingState, admitted_at: float) -> None:
-    request_timeout = state.options.request_timeout
-    if request_timeout > 0:
-        waited = time.monotonic() - admitted_at
-        if waited > request_timeout:
-            raise ApiError(
-                503,
-                "request_timeout",
-                f"request waited {waited:.1f}s in queue, past the {request_timeout:.1f}s "
-                "--request-timeout",
-            )
+def _check_timeout(state: ServingState, deadline: float | None) -> None:
+    """A 503 if `deadline` (a time.monotonic value, None for no limit) has passed."""
+    if deadline is not None and (now := time.monotonic()) > deadline:
+        request_timeout = state.options.request_timeout
+        waited = now - deadline + request_timeout
+        raise ApiError(
+            503,
+            "request_timeout",
+            f"request waited {waited:.1f}s in queue, past the {request_timeout:.1f}s "
+            "--request-timeout",
+        )
 
 
 def _binary_feeds(
@@ -686,13 +686,17 @@ async def _await_row(future: Future[Row]) -> Row:
 async def _run_cached(
     state: ServingState,
     cache: ResultCache,
-    parse: Parse,
     parsed: _Request | None,
-    encode: Encode,
     *,
+    body: bytes,
+    graph: bool,
+    binary: bool,
+    accept_safetensors: bool,
+    parse: Parse | None,
+    encode: Encode | None,
     with_tokens: bool,
     run_here: bool,
-    admitted_at: float,
+    deadline: float | None,
     timings_ms: dict[str, float],
     use_lookup: bool = True,
 ) -> Response:
@@ -702,7 +706,9 @@ async def _run_cached(
     pool = None if run_here else state.prep_executor
 
     def prepare() -> _CachePlan:
-        request = parsed or parse()
+        request = parsed or (
+            parse() if parse is not None else _parse(state, body, graph, binary, timings_ms)
+        )
         return _cache_prepare(state, cache, request, timings_ms, use_lookup)
 
     # If the client leaves during prep, the thread still finishes and claims rows: release them.
@@ -713,6 +719,7 @@ async def _run_cached(
         prep.add_done_callback(lambda t: _release_claims(cache, t))
         raise
     owned = plan.owned
+
     rows: dict[int, Row] = dict(plan.found.hits)
     served = len(plan.found.hits)  # the rows that this request did not compute
 
@@ -720,13 +727,17 @@ async def _run_cached(
         """Run the model on `feeds` (the rows `indexes`) and give each row to the cache."""
 
         def infer_rows() -> Response | None:
-            _check_timeout(state, admitted_at)
+            _check_timeout(state, deadline)
             outputs, infer_ms = _infer(state, feeds)
             timings_ms["infer"] = round(infer_ms, 2)
             by_row = all(o.ndim and o.shape[0] == len(indexes) for o in outputs.values())
             if plan.passthrough or (not by_row and len(indexes) == len(plan.keys)):
                 # An empty batch, or outputs without a row axis: nothing to cache or join.
-                return encode(outputs, plan.request, None, None)
+                if encode is not None:
+                    return encode(outputs, plan.request, None, None)
+                return _encode_response(
+                    state, outputs, plan.request.encoding, timings_ms, accept_safetensors, None
+                )
             if not by_row:
                 raise RuntimeError("an output of the model does not follow the batch size")
             tokens = _row_tokens(feeds) if plan.request.text is not None else None
@@ -743,7 +754,7 @@ async def _run_cached(
         return done
 
     try:
-        _check_timeout(state, admitted_at)
+        _check_timeout(state, deadline)
         if plan.feeds is not None:
             done = await compute(plan.feeds, plan.found.missing)
             if done is not None:
@@ -782,7 +793,11 @@ async def _run_cached(
         tokens = None
         if with_tokens and plan.request.text is not None:
             tokens = [int(rows[i][TOKENS_KEY]) for i in range(len(plan.keys))]
-        return encode(arrays, plan.request, tokens, None)
+        if encode is not None:
+            return encode(arrays, plan.request, tokens, None)
+        return _encode_response(
+            state, arrays, plan.request.encoding, timings_ms, accept_safetensors, None
+        )
 
     response: Response = await _run_in(pool, "encode_wait", timings_ms, finish)
     computed = len(plan.keys) - served
@@ -799,13 +814,13 @@ async def run_predict(
     graph: bool,
     binary: bool,
     inline: bool,
-    admitted_at: float,
+    deadline: float | None,
     timings_ms: dict[str, float],
     accept_safetensors: bool,
+    parse: Parse | None,
+    encode: Encode | None,
+    with_tokens: bool,
     use_cache: bool = True,
-    parse: Parse | None = None,
-    encode: Encode | None = None,
-    with_tokens: bool = False,
 ) -> Response:
     """One admitted predict, from its raw body, in two hops: parse and prepare on the prep
     pool, then infer and encode on an inference thread. The event loop does neither, so
@@ -815,46 +830,37 @@ async def run_predict(
     of it on the event loop, except tokenization. `timings_ms` collects the milliseconds of
     each stage for the access log and the optional Server-Timing header.
 
-    `parse` (default: decode `body` as a /predict body) builds the _Request, and `encode`
-    (default: the /predict response) builds the response. /v1/embeddings sets both and has the
-    same admission, pools, timeout, cache and row checks. `with_tokens` gives `encode` the token
-    count of each text row.
+    `parse` (None: decode `body` as a /predict body) builds the _Request, and `encode` (None: the
+    /predict response) builds the response. /v1/embeddings sets both and has the same admission,
+    pools, timeout, cache and row checks. `with_tokens` gives `encode` the token count of each
+    text row. `deadline` is a time.monotonic value (None for no limit).
     """
-    if parse is None:
-
-        def parse() -> _Request:
-            return _parse(state, body, graph, binary, timings_ms)
-
-    if encode is None:
-
-        def encode(
-            outputs: dict[str, np.ndarray],
-            request: _Request,
-            tokens: list[int] | None,
-            layout: GraphLayout | None,
-        ) -> Response:
-            return _encode_response(
-                state, outputs, request.encoding, timings_ms, accept_safetensors, layout
-            )
-
-    parsed = parse() if inline else None
+    parsed: _Request | None = None
+    if inline:
+        parsed = parse() if parse is not None else _parse(state, body, graph, binary, timings_ms)
     run_here = parsed is not None and parsed.text is None
     if state.result_cache is not None and not graph:
         return await _run_cached(
             state,
             state.result_cache,
-            parse,
             parsed,
-            encode,
+            body=body,
+            graph=graph,
+            binary=binary,
+            accept_safetensors=accept_safetensors,
+            parse=parse,
+            encode=encode,
             with_tokens=with_tokens,
             run_here=run_here,
-            admitted_at=admitted_at,
+            deadline=deadline,
             timings_ms=timings_ms,
             use_lookup=use_cache,
         )
 
     def prepare() -> tuple[_Request, dict[str, np.ndarray], GraphLayout | None]:
-        request = parsed or parse()
+        request = parsed or (
+            parse() if parse is not None else _parse(state, body, graph, binary, timings_ms)
+        )
         feeds, prep_ms, layout = _prepare_feeds(state, request)
         timings_ms["prep"] = round(prep_ms, 2)
         return request, feeds, layout
@@ -863,15 +869,19 @@ async def run_predict(
         None if run_here else state.prep_executor, "prep_wait", timings_ms, prepare
     )
 
-    _check_timeout(state, admitted_at)
+    _check_timeout(state, deadline)
 
     def infer_and_encode() -> Response:
         # Again: the request may have waited behind a running inference.
-        _check_timeout(state, admitted_at)
+        _check_timeout(state, deadline)
         outputs, infer_ms = _infer(state, feeds)
         timings_ms["infer"] = round(infer_ms, 2)
         tokens = _row_tokens(feeds) if with_tokens and request.text is not None else None
-        return encode(outputs, request, tokens, layout)
+        if encode is not None:
+            return encode(outputs, request, tokens, layout)
+        return _encode_response(
+            state, outputs, request.encoding, timings_ms, accept_safetensors, layout
+        )
 
     response: Response = await _run_in(
         None if run_here else state.executor, "infer_wait", timings_ms, infer_and_encode

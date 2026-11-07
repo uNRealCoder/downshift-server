@@ -22,20 +22,14 @@ from downshift.serve.predict import (
     resolve_prompt,
 )
 from downshift.serve.schemas import EmbeddingsRequest, OutputEncoding
-from downshift.sources import display_source
 
 # The "created" time of each model: the time that the server process started.
 CREATED = int(time.time())
 
 
-def served_name(state: ServingState) -> str:
-    """--served-model-name, or the name of the model source (a directory gives its last part)."""
-    return state.options.served_model_name or display_source(state.source, state.source_kind)
-
-
 def model_card(state: ServingState) -> dict[str, Any]:
     return {
-        "id": served_name(state),
+        "id": state.served_name,
         "object": "model",
         "created": CREATED,
         "owned_by": "downshift",
@@ -53,9 +47,23 @@ def _check_dimensions(dimensions: int, width: int | None) -> None:
         )
 
 
+def require_model(state: ServingState, model_id: str) -> None:
+    """A 404 if `model_id` is not the model that the server serves."""
+    name = state.served_name
+    if model_id != name:
+        raise ApiError(
+            404,
+            "model_not_found",
+            f"model {model_id!r:.64} is not served. Set 'model' to {name!r} (GET /v1/models)",
+        )
+
+
 def _matryoshka_cut(vectors: np.ndarray, dimensions: int) -> np.ndarray:
-    """The first `dimensions` values of each vector, scaled to unit length."""
-    _check_dimensions(dimensions, vectors.shape[-1])
+    """The first `dimensions` values of each vector, scaled to unit length. The request check
+    has already tested `dimensions` against a fixed width of the model. If the width is not
+    fixed, only the vector can tell."""
+    if dimensions > vectors.shape[-1]:
+        _check_dimensions(dimensions, vectors.shape[-1])
     cut = vectors[:, :dimensions]
     norms = np.linalg.norm(cut, axis=1, keepdims=True)
     return cut / np.where(norms == 0, 1.0, norms)
@@ -73,13 +81,7 @@ def parse_embeddings(state: ServingState, body: bytes, timings_ms: dict[str, flo
             "not_embedding_model",
             "this model is not a text embedding model. Send the request to POST /predict",
         )
-    name = served_name(state)
-    if req.model != name:
-        raise ApiError(
-            404,
-            "model_not_found",
-            f"model {req.model!r:.64} is not served. Set 'model' to {name!r} (GET /v1/models)",
-        )
+    require_model(state, req.model)
     if req.dimensions is not None:
         if not state.options.matryoshka:
             raise ApiError(
@@ -87,9 +89,7 @@ def parse_embeddings(state: ServingState, body: bytes, timings_ms: dict[str, flo
                 "dimensions_not_supported",
                 "Start the server with --matryoshka if the model was trained for Matryoshka cuts.",
             )
-        shape = state.backend.metadata().outputs[0].shape
-        width = shape[-1] if shape and isinstance(shape[-1], int) else None
-        _check_dimensions(req.dimensions, width)
+        _check_dimensions(req.dimensions, state.embedding_width)
     text = as_batch(req.input)
     if not text:
         raise ApiError(400, "invalid_input", "'input' is an empty list. Send at least one text")
@@ -131,7 +131,7 @@ def embeddings_response(
                 }
                 for i, vector in enumerate(vectors)
             ],
-            "model": served_name(state),
+            "model": state.served_name,
             "usage": {"prompt_tokens": count, "total_tokens": count},
         }
     )

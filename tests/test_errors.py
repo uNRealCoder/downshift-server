@@ -13,7 +13,6 @@ from fastapi.testclient import TestClient
 from downshift.adapters.text import TextTooLongError
 from downshift.serve.app import build_app
 from downshift.serve.errors import ERROR_CODES, http_error_handler
-from downshift.serve.openai import served_name
 
 GOOD = {"inputs": {"x": [[0.0] * 16]}}
 ST = "application/vnd.safetensors"
@@ -131,7 +130,7 @@ def _not_embedding_model(state, monkeypatch):
 
 def _dimensions_not_supported(state, monkeypatch):
     embedder = _embedder(state)
-    body = {"model": served_name(embedder), "input": "hello", "dimensions": 8}
+    body = {"model": embedder.served_name, "input": "hello", "dimensions": 8}
     return _client(embedder).post("/v1/embeddings", json=body)
 
 

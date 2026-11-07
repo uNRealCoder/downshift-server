@@ -44,7 +44,7 @@ from downshift.serve.options import BackendChoice, ServeOptions
 from downshift.serve.result_cache import ResultCache
 from downshift.serve.schemas import normalize_dtype
 from downshift.settings import DEFAULT_RESULT_CACHE_ROWS
-from downshift.sources import HF_REPO_DIR, UNKNOWN_SOURCE
+from downshift.sources import HF_REPO_DIR, UNKNOWN_SOURCE, display_source
 
 # Returns the loaded MODEL and its --reference model. Called only when a model is needed.
 Loader = Callable[[], tuple[LoadedModel, LoadedModel | None]]
@@ -148,6 +148,17 @@ class ServingState:
     @cached_property
     def declared_dtypes(self) -> dict[str, str | None]:
         return {name: spec.dtype for name, spec in self.input_specs.items()}
+
+    @cached_property
+    def served_name(self) -> str:
+        """--served-model-name, or the name of the model source (a directory gives its last part)."""
+        return self.options.served_model_name or display_source(self.source, self.source_kind)
+
+    @cached_property
+    def embedding_width(self) -> int | None:
+        """The size of the last axis of the first output, or None if it is not a fixed number."""
+        shape = self.backend.metadata().outputs[0].shape
+        return shape[-1] if shape and isinstance(shape[-1], int) else None
 
 
 def _prepare(loaded: LoadedModel, opts: ServeOptions) -> Prepared:

@@ -345,12 +345,16 @@ def test_a_request_that_leaves_during_the_prep_hop_releases_its_rows(monkeypatch
             predict._run_cached(
                 state,
                 cache,
-                lambda: request,
                 request,
-                _encoder(state),
+                body=b"",
+                graph=False,
+                binary=False,
+                accept_safetensors=False,
+                parse=lambda: request,
+                encode=_encoder(state),
                 with_tokens=False,
                 run_here=False,
-                admitted_at=time.monotonic(),
+                deadline=None,
                 timings_ms={},
             )
         )
@@ -433,12 +437,16 @@ def test_a_waiter_that_retries_can_get_a_whole_response(monkeypatch):
         return await predict._run_cached(
             state,
             cache,
-            lambda: request,
             request,
-            _encoder(state),
+            body=b"",
+            graph=False,
+            binary=False,
+            accept_safetensors=False,
+            parse=lambda: request,
+            encode=_encoder(state),
             with_tokens=False,
             run_here=False,
-            admitted_at=time.monotonic(),
+            deadline=None,
             timings_ms={},
         )
 

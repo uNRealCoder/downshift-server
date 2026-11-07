@@ -17,7 +17,6 @@ from fastapi.testclient import TestClient
 from downshift.loading import LoadSpec, load_model
 from downshift.serve.app import build_app
 from downshift.serve.engine import prepare_serving
-from downshift.serve.openai import served_name
 from tests.models import hf_repo
 
 TEXTS = ["hello world", "the capital"]
@@ -55,11 +54,11 @@ def _predict_vectors(app, texts):
 
 
 def test_the_sdk_default_asks_for_base64_and_gets_vectors_like_predict(app, state):
-    response = _call(app, lambda c: c.embeddings.create(model=served_name(state), input=TEXTS))
+    response = _call(app, lambda c: c.embeddings.create(model=state.served_name, input=TEXTS))
 
     vectors = np.asarray([row.embedding for row in response.data], dtype=np.float32)
     np.testing.assert_allclose(vectors, _predict_vectors(app, TEXTS), rtol=1e-5, atol=1e-6)
-    assert response.model == served_name(state)
+    assert response.model == state.served_name
     assert response.usage.prompt_tokens == 8
 
 
@@ -67,7 +66,7 @@ def test_float_format_gives_the_same_vectors(app, state):
     response = _call(
         app,
         lambda c: c.embeddings.create(
-            model=served_name(state), input=TEXTS, encoding_format="float"
+            model=state.served_name, input=TEXTS, encoding_format="float"
         ),
     )
 
@@ -78,7 +77,7 @@ def test_float_format_gives_the_same_vectors(app, state):
 def test_dimensions_through_the_sdk(app, state):
     response = _call(
         app,
-        lambda c: c.embeddings.create(model=served_name(state), input=TEXTS, dimensions=8),
+        lambda c: c.embeddings.create(model=state.served_name, input=TEXTS, dimensions=8),
     )
 
     vectors = np.asarray([row.embedding for row in response.data], dtype=np.float32)

@@ -36,7 +36,12 @@ from downshift.serve.errors import (
     validation_error_handler,
 )
 from downshift.serve.metrics import CONTENT_TYPE, Metrics, render
-from downshift.serve.openai import embeddings_response, model_card, parse_embeddings, served_name
+from downshift.serve.openai import (
+    embeddings_response,
+    model_card,
+    parse_embeddings,
+    require_model,
+)
 from downshift.serve.options import ExecutionChoice
 from downshift.serve.predict import (
     BINARY_REQUEST_TYPES,
@@ -131,7 +136,7 @@ async def _predict(
     state: ServingState,
     graph: bool,
     is_embeddings: bool,
-    admitted_at: float,
+    deadline: float | None,
 ) -> Response:
     """An admitted predict: check the content type and --max-body-bytes (before reading, if
     Content-Length is given), then run_predict on the raw body. The stage timings go to the
@@ -165,7 +170,7 @@ async def _predict(
         and not binary
         and content_length is not None
         and len(body) <= INLINE_MAX_BODY_BYTES,
-        admitted_at=admitted_at,
+        deadline=deadline,
         timings_ms=timings,
         accept_safetensors=SAFETENSORS_MEDIA_TYPE in request.headers.get("accept", "").lower(),
         use_cache="no-cache" not in request.headers.get("cache-control", "").lower(),
@@ -195,11 +200,12 @@ class PredictRoute(APIRoute):
             if not state.try_admit():
                 raise _capacity_error(state)
             timeout = state.options.request_timeout
+            deadline = time.monotonic() + timeout if timeout > 0 else None
             try:
-                return await asyncio.wait_for(
-                    _predict(request, state, graph, is_embeddings, time.monotonic()),
-                    timeout if timeout > 0 else None,
-                )
+                call = _predict(request, state, graph, is_embeddings, deadline)
+                if deadline is None:
+                    return await call
+                return await asyncio.wait_for(call, timeout)
             except TimeoutError:
                 raise ApiError(
                     503,
@@ -593,13 +599,7 @@ def build_app(
     async def get_model(
         model_id: str, current: ServingState = Depends(require_serving)
     ) -> dict[str, Any]:
-        if model_id != served_name(current):
-            raise ApiError(
-                404,
-                "model_not_found",
-                f"model {model_id!r:.64} is not served. Use {served_name(current)!r} "
-                "(GET /v1/models)",
-            )
+        require_model(current, model_id)
         return model_card(current)
 
     if counters is not None:
