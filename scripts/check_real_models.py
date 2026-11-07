@@ -67,20 +67,12 @@ def resnet_inputs():
     return (torch.randn(1, 3, 224, 224),)
 
 
-def _installed(module: str) -> bool:
-    try:
-        version(module)
-    except PackageNotFoundError:
-        return False
-    return True
-
-
 def resolve(spec: dict) -> tuple[str | None, str]:
     """Return (the argument for `check`, or None) and a note for a row with no result."""
     kind = spec["kind"]
     if kind == "code":
-        if not _installed(spec["module"]):
-            return None, "not installed"
+        if _dist_version(spec["module"]) == NOT_INSTALLED:
+            return None, NOT_INSTALLED
         return spec["target"], ""
     local = LOCAL / spec.get("local", "")
     if spec.get("local") and local.is_dir():
@@ -170,11 +162,14 @@ def render_section(specs: list[dict], results: list[dict]) -> str:
     return "\n".join(lines)
 
 
+NOT_INSTALLED = "not installed"
+
+
 def _dist_version(name: str) -> str:
     try:
         return version(name)
     except PackageNotFoundError:
-        return "not installed"
+        return NOT_INSTALLED
 
 
 def write_docs(section: str) -> None:
