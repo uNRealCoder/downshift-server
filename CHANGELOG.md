@@ -12,6 +12,7 @@ All notable changes to this project are documented here. Format follows
 - `--server-timing` and `DOWNSHIFT_SERVER_TIMING` add the `Server-Timing` header to each predict response. It is off by default. Refer to `docs/cli.md`.
 - `DOWNSHIFT_CACHE_HEADER` sets the name of the result-cache header (default `X-Downshift-Cache`).
 - `DOWNSHIFT_REQUEST_ID_HEADER` sets the name of the request-ID header (default `X-Request-Id`). The server reads the ID from this header and sets it on each response, also on a `500`. If the name is not a valid header name, downshift does not start, and the error says what to use. Refer to `docs/cli.md`.
+- A stable `code` field on each error body: `{"detail": "...", "code": "text_too_long"}`. `detail` does not change. The list of codes (`invalid_request`, `invalid_input`, `missing_input`, `text_too_long`, `unknown_prompt`, `text_not_supported`, `not_graph_model`, `unauthorized`, `body_too_large`, `unsupported_media_type`, `not_found`, `method_not_allowed`, `http_error`, `not_ready`, `at_capacity`, `request_timeout`, `internal_error`) does not change in 1.x. The `404`, `405` and `422` of FastAPI have a code too. Refer to "Error codes" in `docs/http-api.md`.
 - The docs say that the default verification samples are synthetic (random values at the edge shapes). To verify on inputs like real traffic, use `--vary`.
 
 ### Changed

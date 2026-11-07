@@ -27,7 +27,7 @@ Authentication is optional. It uses one shared key. The key is active when `DOWN
 Downshift matches the scheme without regard to case. It compares the key in constant time (`hmac.compare_digest`). A missing or wrong credential gives a `401` with the header `WWW-Authenticate: Bearer` and this body:
 
 ```json
-{"detail": "Authorization header is not set or incorrect"}
+{"detail": "Authorization header is not set or incorrect", "code": "unauthorized"}
 ```
 
 The check runs before the route. It therefore applies to unknown paths, `/docs` and `/openapi.json`.
@@ -86,7 +86,7 @@ curl -s -i localhost:8000/ready
 
 ### `GET /metadata`
 
-While no `ServingState` exists, this route returns `503` with `{"detail": "model is not ready"}` and the header `Retry-After: 2`. After that, it returns `200` with a `MetadataResponse`:
+While no `ServingState` exists, this route returns `503` with `{"detail": "model is not ready", "code": "not_ready"}` and the header `Retry-After: 2`. After that, it returns `200` with a `MetadataResponse`:
 
 ```python
 class MetadataResponse(BaseModel):
@@ -129,7 +129,7 @@ curl -s localhost:8000/metadata | python -m json.tool
 
 This route answers the question "What do I POST?". `/metadata` is the view of the operator. It shows how downshift judged the model and how long each boot phase took. `/schema` is the view of the caller. It shows the name, dtype and shape of each input. It also gives an example body that you can post back to `/predict` unchanged.
 
-While no `ServingState` exists, the route returns `503` with `{"detail": "model is not ready"}` and `Retry-After: 2`. This is the same as `/metadata`. After that, it returns `200` with a `SchemaResponse`. The server builds the answer for each request from the IO that the backend declares (`downshift/serve/describe.py`). The answer always describes the graph that is running. It never describes what the source model promised.
+While no `ServingState` exists, the route returns `503` with `{"detail": "model is not ready", "code": "not_ready"}` and `Retry-After: 2`. This is the same as `/metadata`. After that, it returns `200` with a `SchemaResponse`. The server builds the answer for each request from the IO that the backend declares (`downshift/serve/describe.py`). The answer always describes the graph that is running. It never describes what the source model promised.
 
 | Field | Meaning |
 |---|---|
@@ -343,21 +343,21 @@ Status codes:
 | Status | Body | When |
 |---|---|---|
 | `200` | `PredictResponse` | The inference ran. |
-| `400` | `{"detail": "missing inputs: [...]"}` | A declared input name is not in `inputs`. |
-| `400` | `{"detail": "input 'name': ..."}` | One input has a bad shape, dtype or base64 (from `to_numpy`). |
-| `400` | `{"detail": "this model takes tensors only. ..."}` | A `text` request to a model with no tokenizer. |
-| `400` | `{"detail": "input_ids axis 1 is 65; this model accepts 1 to 64"}` | An axis is outside the `bounds` that `GET /schema` reports for that input. |
-| `400` | `{"detail": "input_ids contains -1, outside the vocabulary [0, 30522)"}` | A model served from a Hugging Face repo directory has an `input_ids` value outside `[0, vocab_size)`. Downshift checks this before the inference, because ONNX Runtime wraps a negative index and does not refuse it. |
-| `400` | `{"detail": "x axis 1 is 5; this model takes 16"}` | The rank or a fixed axis is different from the declared inputs of the model. Downshift checks this before the inference on both backends. |
-| `400` | `{"detail": "..."}` | ONNX Runtime rejected the inputs (`InvalidArgument`). Any other failure inside the inference, on either backend, is a `500`. |
-| `401` | `{"detail": "Authorization header is not set or incorrect"}`, header `WWW-Authenticate: Bearer` | `DOWNSHIFT_SERVER_API_KEY` is set, and the request has no matching bearer token. This applies to every route except `/health` and `/ready`. |
-| `413` | `{"detail": "request body is N bytes; the server limit is M bytes (--max-body-bytes)"}` | The body is larger than `--max-body-bytes` (default 32 MiB). The server rejects it before it parses it. `N` is the declared `Content-Length`. For a chunked body, `N` is the running total when it passed the limit. |
-| `415` | `{"detail": "unsupported Content-Type; ..."}` | The body is not JSON and not safetensors (`application/vnd.safetensors` or `application/octet-stream`). |
-| `422` | The validation error body of FastAPI | The body is empty (`missing`), the JSON is malformed (`json_invalid`, with the byte offset in `loc`), or a field fails validation (`loc` starts with `"body"`). |
-| `500` | `{"detail": "inference failed on the server; see the server log", "request_id": "..."}` | An unhandled exception on the server. The real error is only in the server log. |
-| `503` | `{"detail": "model is not ready"}`, header `Retry-After: 2` | No `ServingState` exists yet. |
-| `503` | `{"detail": "server is at capacity (N running, M queued)"}`, header `Retry-After: 1` | `--max-concurrency + --max-queue` predicts are already admitted. |
-| `503` | `{"detail": "request waited X.Xs in queue, past the Y.Ys --request-timeout"}`, no `Retry-After` | The predict was admitted, but it waited longer than `--request-timeout` before the inference started. Downshift checks this after the body is prepared, and again when the inference starts. A request that waits for a row of another request (the result cache) gets the same `503` at the same limit. The text is `request waited for a row past the Y.Ys --request-timeout`. |
+| `400` | `{"detail": "missing inputs: [...]", "code": "missing_input"}` | A declared input name is not in `inputs`. |
+| `400` | `{"detail": "input 'name': ...", "code": "invalid_input"}` | One input has a bad shape, dtype or base64 (from `to_numpy`). |
+| `400` | `{"detail": "this model takes tensors only. ...", "code": "text_not_supported"}` | A `text` request to a model with no tokenizer. |
+| `400` | `{"detail": "input_ids axis 1 is 65; this model accepts 1 to 64", "code": "invalid_input"}` | An axis is outside the `bounds` that `GET /schema` reports for that input. |
+| `400` | `{"detail": "input_ids contains -1, outside the vocabulary [0, 30522)", "code": "invalid_input"}` | A model served from a Hugging Face repo directory has an `input_ids` value outside `[0, vocab_size)`. Downshift checks this before the inference, because ONNX Runtime wraps a negative index and does not refuse it. |
+| `400` | `{"detail": "x axis 1 is 5; this model takes 16", "code": "invalid_input"}` | The rank or a fixed axis is different from the declared inputs of the model. Downshift checks this before the inference on both backends. |
+| `400` | `{"detail": "...", "code": "invalid_input"}` | ONNX Runtime rejected the inputs (`InvalidArgument`). Any other failure inside the inference, on either backend, is a `500`. |
+| `401` | `{"detail": "Authorization header is not set or incorrect", "code": "unauthorized"}`, header `WWW-Authenticate: Bearer` | `DOWNSHIFT_SERVER_API_KEY` is set, and the request has no matching bearer token. This applies to every route except `/health` and `/ready`. |
+| `413` | `{"detail": "request body is N bytes; the server limit is M bytes (--max-body-bytes)", "code": "body_too_large"}` | The body is larger than `--max-body-bytes` (default 32 MiB). The server rejects it before it parses it. `N` is the declared `Content-Length`. For a chunked body, `N` is the running total when it passed the limit. |
+| `415` | `{"detail": "unsupported Content-Type; ...", "code": "unsupported_media_type"}` | The body is not JSON and not safetensors (`application/vnd.safetensors` or `application/octet-stream`). |
+| `422` | `{"detail": [...], "code": "invalid_request"}`. `detail` is the validation error list of FastAPI | The body is empty (`missing`), the JSON is malformed (`json_invalid`, with the byte offset in `loc`), or a field fails validation (`loc` starts with `"body"`). |
+| `500` | `{"detail": "inference failed on the server; see the server log", "code": "internal_error", "request_id": "..."}` | An unhandled exception on the server. The real error is only in the server log. |
+| `503` | `{"detail": "model is not ready", "code": "not_ready"}`, header `Retry-After: 2` | No `ServingState` exists yet. |
+| `503` | `{"detail": "server is at capacity (N running, M queued)", "code": "at_capacity"}`, header `Retry-After: 1` | `--max-concurrency + --max-queue` predicts are already admitted. |
+| `503` | `{"detail": "request waited X.Xs in queue, past the Y.Ys --request-timeout", "code": "request_timeout"}`, no `Retry-After` | The predict was admitted, but it waited longer than `--request-timeout` before the inference started. Downshift checks this after the body is prepared, and again when the inference starts. A request that waits for a row of another request (the result cache) gets the same `503` at the same limit. The text is `request waited for a row past the Y.Ys --request-timeout`. |
 
 If the server runs with `--server-timing`, a `200` response has this header: `Server-Timing: parse;dur=<ms>, prep_wait;dur=<ms>, prep;dur=<ms>, infer_wait;dur=<ms>, infer;dur=<ms>, encode;dur=<ms>` (see "Headers"). Every response, on every route and with every status code, has `X-Request-Id`. To use a different name, set `DOWNSHIFT_REQUEST_ID_HEADER`. If the client sent the header, downshift returns it. Otherwise, downshift makes an ID of 16 hexadecimal characters.
 
@@ -526,8 +526,33 @@ A hit is bit for bit the answer of the request that stored the row. The same row
 
 ## Error body shape
 
-Each response that is not `200` from a route handler is `{"detail": <string>}`. There are three exceptions:
+Each response that is not `200` has the body `{"detail": <string>, "code": "<code>"}`. `detail` is text for a person. `code` is stable: a client can branch on it. There are two exceptions:
 
-- The `401` from the API key check. It is the same `{"detail": ...}` plus a `WWW-Authenticate` header.
-- The handler for an unhandled exception (`500`). It adds `"request_id"`: `{"detail": "inference failed on the server; see the server log", "request_id": "..."}`.
-- `422` validation errors. They use the body shape of FastAPI and Pydantic: `{"detail": [{"type": ..., "loc": [...], "msg": ..., ...}]}`.
+- The handler for an unhandled exception (`500`). It adds `"request_id"`: `{"detail": "inference failed on the server; see the server log", "code": "internal_error", "request_id": "..."}`.
+- `422` validation errors. `detail` is the list of FastAPI and Pydantic: `{"detail": [{"type": ..., "loc": [...], "msg": ..., ...}], "code": "invalid_request"}`.
+
+The `401` has the header `WWW-Authenticate`. A `503` can have `Retry-After`. The `404` and `405` of unknown paths also have a code.
+
+### Error codes
+
+The list of codes does not change in 1.x. A new code needs a new major version.
+
+| Code | Status | Meaning |
+|---|---|---|
+| `invalid_request` | 422 | The body is empty, is not valid JSON, or has a field that is not valid. |
+| `invalid_input` | 400 | An input is not valid: its shape, dtype, values or encoding. |
+| `missing_input` | 400 | A declared input is not in the request. |
+| `text_too_long` | 400 | A text row has more tokens than the model reads. |
+| `unknown_prompt` | 400 | The prompt_name is not one of the prompts of the model. |
+| `text_not_supported` | 400 | The request has text, and the model takes tensors only. |
+| `not_graph_model` | 400 | The request is for /predict/graph, and the model is not a graph model. |
+| `unauthorized` | 401 | The API key is not set or is not correct. |
+| `body_too_large` | 413 | The body is larger than --max-body-bytes. |
+| `unsupported_media_type` | 415 | The Content-Type is not JSON and not safetensors. |
+| `not_found` | 404 | The path does not exist. |
+| `method_not_allowed` | 405 | The path does not take this HTTP method. |
+| `http_error` | any | Another HTTP error, for example from a middleware that you added. |
+| `not_ready` | 503 | The model is not loaded yet. Try again after the Retry-After seconds. |
+| `at_capacity` | 503 | All slots are in use. Try again after the Retry-After seconds. |
+| `request_timeout` | 503 | The request took more than --request-timeout. |
+| `internal_error` | 500 | The server failed. The server log has the cause. |
