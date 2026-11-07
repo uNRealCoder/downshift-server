@@ -33,6 +33,7 @@ from downshift.core.verdict import (
     prepare_model,
     unverified_verdict,
 )
+from downshift.core.verify import resolve_tolerances
 from downshift.loading import LoadedModel, LoadError
 from downshift.serve.backends import (
     Backend,
@@ -47,7 +48,7 @@ from downshift.serve.numerics import ServingNumerics, check_serving, serves_off_
 from downshift.serve.options import BackendChoice, ServeOptions
 from downshift.serve.result_cache import ResultCache
 from downshift.serve.schemas import normalize_dtype
-from downshift.settings import DEFAULT_RESULT_CACHE_ROWS, TOLERANCES
+from downshift.settings import DEFAULT_RESULT_CACHE_ROWS
 from downshift.sources import HF_REPO_DIR, UNKNOWN_SOURCE, display_source
 
 logger = logging.getLogger("downshift.serve")
@@ -376,8 +377,7 @@ def _serving_tolerances(verdict: ExportVerdict, opts: ServeOptions) -> tuple[flo
     half = verdict.onnx_path is not None and has_half_weights(
         onnx.load(str(verdict.onnx_path), load_external_data=False)
     )
-    atol, rtol = TOLERANCES["float16" if half else "float32"]
-    return (atol if opts.atol is None else opts.atol, rtol if opts.rtol is None else opts.rtol)
+    return resolve_tolerances("float16" if half else "float32", opts.atol, opts.rtol)
 
 
 def _cpu_references(

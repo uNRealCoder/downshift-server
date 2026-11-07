@@ -95,6 +95,14 @@ def default_tolerances(model: torch.nn.Module) -> tuple[str, float, float]:
     return (name, *TOLERANCES[name])
 
 
+def resolve_tolerances(
+    dtype_name: str, atol: float | None, rtol: float | None
+) -> tuple[float, float]:
+    """(atol, rtol) of a dtype name. --atol and --rtol replace the default values."""
+    default_atol, default_rtol = TOLERANCES[dtype_name]
+    return (default_atol if atol is None else atol, default_rtol if rtol is None else rtol)
+
+
 def make_shared_axis0_vary_fn(base_inputs: tuple, dynamic_shapes: tuple) -> VaryFn:
     """The default sampler: all dynamic tensors share one axis-0 size (the batch case)."""
     base_size = None
@@ -271,6 +279,17 @@ def min_row_cosine(expected: np.ndarray, got: np.ndarray) -> float:
     return float(np.nan_to_num(cosine, nan=0.0).min(initial=1.0))
 
 
+def fold_cosine(
+    expected: np.ndarray, got: np.ndarray, lowest: float | None
+) -> tuple[float | None, bool]:
+    """(the lowest row cosine so far including this pair, True if this pair is under the
+    cosine tolerance). Two arrays of different shapes are not compared."""
+    if expected.shape != got.shape:
+        return lowest, False
+    cosine = min_row_cosine(expected, got)
+    return (cosine if lowest is None else min(cosine, lowest)), cosine < TOLERANCE_COSINE
+
+
 def _shapes(sample: tuple) -> list[tuple[int, ...]]:
     return [tuple(t.shape) if isinstance(t, torch.Tensor) else () for t in sample]
 
@@ -298,18 +317,18 @@ def verify(
             raise ValueError("verify() needs either dynamic_shapes or an explicit vary_fn")
         vary_fn = make_shared_axis0_vary_fn(base_inputs, dynamic_shapes)
 
-    tolerance_dtype, default_atol, default_rtol = default_tolerances(model)
+    tolerance_dtype = default_tolerances(model)[0]
     if fp16 and tolerance_dtype in ("float32", "float64"):
         tolerance_dtype = "float16"
-        default_atol, default_rtol = TOLERANCES[tolerance_dtype]
+    tolerance_abs, tolerance_rel = resolve_tolerances(tolerance_dtype, atol, rtol)
     report = NumericsReport(
         samples_tested=samples,
         max_abs_err=0.0,
         max_rel_err=0.0,
         failures=0,
         shape_generalization=None,
-        tolerance_abs=default_atol if atol is None else atol,
-        tolerance_rel=default_rtol if rtol is None else rtol,
+        tolerance_abs=tolerance_abs,
+        tolerance_rel=tolerance_rel,
         tolerance_dtype=tolerance_dtype,
         tolerance_overridden=atol is not None or rtol is not None,
         seed=seed,
@@ -387,13 +406,10 @@ def verify(
             report.max_abs_err = max(report.max_abs_err, sample_abs)
             report.max_rel_err = max(report.max_rel_err, sample_rel)
             if embedding and ort_outs and torch_outs:
-                expected_np, got_np = tensor_to_numpy(torch_outs[0]), np.asarray(ort_outs[0])
-                if expected_np.shape == got_np.shape:
-                    cosine = min_row_cosine(expected_np, got_np)
-                    previous = 1.0 if report.min_cosine is None else report.min_cosine
-                    report.min_cosine = min(cosine, previous)
-                    if cosine < TOLERANCE_COSINE:
-                        failed = True
+                report.min_cosine, low = fold_cosine(
+                    tensor_to_numpy(torch_outs[0]), np.asarray(ort_outs[0]), report.min_cosine
+                )
+                failed = failed or low
             if failed:
                 report.failures += 1
                 report.baseline_failed = report.baseline_failed or i == 0

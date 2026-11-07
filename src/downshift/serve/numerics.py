@@ -6,9 +6,9 @@ from dataclasses import asdict, dataclass
 import numpy as np
 import torch
 
-from downshift.core.verify import compare_sample, min_row_cosine
+from downshift.core.verify import compare_sample, fold_cosine
 from downshift.serve.backends import Backend
-from downshift.settings import TOLERANCE_COSINE, TOLERANCE_TF32
+from downshift.settings import TOLERANCE_TF32
 
 
 @dataclass
@@ -66,10 +66,9 @@ def check_serving(
         sample_abs, _, sample_failed, _, _ = compare_sample(expected, actual, atol, rtol, 0)
         max_abs = max(max_abs, sample_abs)
         failed = failed or sample_failed
-        if embedding and actual and expected[0].shape == actual[0].shape:
-            row = min_row_cosine(reference[names[0]], actual[0])
-            cosine = row if cosine is None else min(cosine, row)
-            failed = failed or row < TOLERANCE_COSINE
+        if embedding and actual:
+            cosine, low = fold_cosine(reference[names[0]], actual[0], cosine)
+            failed = failed or low
     meta = backend.metadata()
     return ServingNumerics(
         provider=getattr(backend, "provider", meta.name.value),
