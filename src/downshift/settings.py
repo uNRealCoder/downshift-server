@@ -8,14 +8,13 @@ import os
 import re
 from collections.abc import Callable, Iterable
 
+from downshift._defaults import DEFAULT_SAMPLES
+
 # The decoded size that one base64 tensor input can reach. The server passes its own limit.
 DEFAULT_MAX_INPUT_BYTES = 256 * 1024 * 1024
 
 # The total size of a request body that the server reads before it parses the JSON.
 DEFAULT_MAX_BODY_BYTES = 32 * 1024 * 1024
-
-# The verification samples for check(), export(), intake(), build_verdict() and ServeOptions.samples.
-DEFAULT_SAMPLES = 8
 
 
 _CGROUP_CPU_MAX = "/sys/fs/cgroup/cpu.max"

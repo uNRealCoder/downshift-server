@@ -10,14 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from downshift._defaults import DEFAULT_SAMPLES
 from downshift._version import __version__
-
-try:
-    from downshift.settings import DEFAULT_SAMPLES, EXPORT_CACHE_DIR
-except (
-    ValueError
-):  # a bad DOWNSHIFT_* value. Every later import of downshift.settings raises it again
-    DEFAULT_SAMPLES, EXPORT_CACHE_DIR = 8, None
 
 if TYPE_CHECKING:
     from downshift.adapters.base import Adapter, Prepared, VaryFn
@@ -93,20 +87,23 @@ def export(
     vary: VaryFn | str | None = None,
     axis_max: dict[str, int] | None = None,
     cache: bool = True,
-    export_cache_dir: str | Path | None = EXPORT_CACHE_DIR,
+    export_cache_dir: str | Path | None = None,
 ) -> ExportVerdict:
     """check(), then write the .onnx file (`output`) and its manifest. A FAILED verdict writes
     nothing. A DEGRADED one writes both: the manifest records how far the numbers differ.
 
     Unlike check(), export() reuses an earlier CLEAN or DEGRADED export of the same model and
-    options, from the in-process memo and from `export_cache_dir` (default:
+    options, from the in-process memo and from `export_cache_dir` (None: the value of
     DOWNSHIFT_EXPORT_CACHE_DIR; unset means no disk). `cache=False` skips both.
     """
     from downshift.core import memo
     from downshift.core.export_cache import ExportCache, lookup, store
     from downshift.core.manifest import write_manifest
     from downshift.core.verdict import check
+    from downshift.settings import EXPORT_CACHE_DIR
 
+    if export_cache_dir is None:
+        export_cache_dir = EXPORT_CACHE_DIR
     run = dict(
         samples=samples,
         adapter=adapter,
