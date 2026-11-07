@@ -50,8 +50,10 @@ class Prepared:
     dynamic_shapes: tuple  # per input: {axis: torch.export.Dim} or None
     vary_fn: VaryFn | None  # sample i -> inputs; None means the shared-axis-0 default
     family: str  # the adapter's name
+    embedding: bool = False  # True: output 0 is a pooled embedding, one row for each text
 ```
 
+- `embedding` is optional. Set it to `True` if output 0 is a pooled text embedding. Then the verification also checks the cosine similarity of each row. Refer to `DOWNSHIFT_TOL_COSINE` in `cli.md`.
 - `model` can be a different object from the model that the caller passed in. Wrap the model if its `forward` takes a dataclass, a dict, or keyword-only arguments that `torch.export` cannot trace. The `forward` of `model` must take exactly `len(input_names)` positional tensor arguments.
 - `inputs` and `input_names` are parallel tuples. `inputs[i]` is the example value for `input_names[i]`.
 - `dynamic_shapes` is also parallel to both. It has one entry for each input. The entry is `None` (fully static) or a `{axis_index: torch.export.Dim(...)}` dict. `downshift.core.shapes` has the helpers that the built-in adapters use to build these entries:

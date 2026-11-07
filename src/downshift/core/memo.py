@@ -216,6 +216,7 @@ def common_parts(
         "atol": atol,
         "rtol": rtol,
         "tolerances": {name: list(pair) for name, pair in settings.TOLERANCES.items()},
+        "tolerance_cosine": settings.TOLERANCE_COSINE,
         "vary": _code_ref(vary),
         "axis_max": axis_max,
         "pooling": str(pooling) if pooling is not None else None,

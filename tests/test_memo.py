@@ -353,3 +353,11 @@ def test_the_banner_boot_row_says_reused(tmp_path):
     state.reused = "disk"
     assert "reused from --export-cache-dir" in render._boot_text(state)
     assert ServeOptions().export_cache_dir is None
+
+
+def test_the_key_changes_with_the_cosine_tolerance(monkeypatch):
+    model = mlp()
+    base = memo.model_key(model, None, **RUN)
+    monkeypatch.setattr(memo.settings, "TOLERANCE_COSINE", 0.5)
+
+    assert memo.model_key(model, None, **RUN) != base

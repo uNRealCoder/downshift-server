@@ -108,7 +108,7 @@ Refer to [`cli.md`](cli.md) for every option.
 - The commands are `check`, `export` and `serve`. The option `--version` and the command `python -m downshift` are frozen too.
 - The long names of the options (for example `--max-queue`) are frozen. The short names `-k` and `-o` are frozen. The options `--execution`, `--axis-max` and `--middleware` are experimental.
 - The exit codes of `check` and `export` are `0` CLEAN, `1` FAILED, `2` DEGRADED, `3` UNVERIFIED, `4` usage error and `5` crash. `serve` exits with `4` or `5` only before the server is ready.
-- The output of `check --json` and `export --json` is the verdict. Its fields follow the rules of a response body above.
+- The output of `check --json` and `export --json` is the verdict. Its fields follow the rules of a response body above. 1.0 added the verdict fields `numerics.min_cosine` and `numerics.tolerance_cosine`. They are `null` for a model that is not a text embedder.
 - The text of the boot banner and of the reports (not `--json`) is not frozen.
 
 ## Environment variables
@@ -135,7 +135,7 @@ The names `Adapter` and `Prepared` are frozen. The protocol and the fields are e
 The items in this section can change in a 1.x minor release. A change has a note in `CHANGELOG.md`. They are not part of the breaking-change rule above. They are listed here so that you know which items to pin.
 
 - The `Adapter` protocol (the attribute `name`, and the methods `matches`, `example_inputs` and `prepare`) and the fields of `Prepared`. Refer to [`adapters.md`](adapters.md).
-- The tolerance variables: `DOWNSHIFT_TOL_FLOAT32_ATOL`, `DOWNSHIFT_TOL_FLOAT32_RTOL`, `DOWNSHIFT_TOL_FLOAT64_ATOL`, `DOWNSHIFT_TOL_FLOAT64_RTOL`, `DOWNSHIFT_TOL_FLOAT16_ATOL`, `DOWNSHIFT_TOL_FLOAT16_RTOL`, `DOWNSHIFT_TOL_BFLOAT16_ATOL`, `DOWNSHIFT_TOL_BFLOAT16_RTOL`.
+- The tolerance variables: `DOWNSHIFT_TOL_FLOAT32_ATOL`, `DOWNSHIFT_TOL_FLOAT32_RTOL`, `DOWNSHIFT_TOL_FLOAT64_ATOL`, `DOWNSHIFT_TOL_FLOAT64_RTOL`, `DOWNSHIFT_TOL_FLOAT16_ATOL`, `DOWNSHIFT_TOL_FLOAT16_RTOL`, `DOWNSHIFT_TOL_BFLOAT16_ATOL`, `DOWNSHIFT_TOL_BFLOAT16_RTOL` and `DOWNSHIFT_TOL_COSINE`.
 - `--execution` and `DOWNSHIFT_EXECUTION`.
 - `--axis-max` and `DOWNSHIFT_AXIS_MAX`.
 - `--middleware`.

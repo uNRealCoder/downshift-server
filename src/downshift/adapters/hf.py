@@ -69,8 +69,9 @@ class HFAdapter:
         dynamic_shapes = lower_axis_max((spec, spec), axis_max, limits)
         vocab = int(config.vocab_size)
         inputs = (input_ids, attention_mask)
+        recipe = getattr(model, EMBEDDING_ATTR, None)
         return Prepared(
-            model=_FirstOutputShim(model, getattr(model, EMBEDDING_ATTR, None)),
+            model=_FirstOutputShim(model, recipe),
             inputs=inputs,
             input_names=INPUT_NAMES,
             dynamic_shapes=dynamic_shapes,
@@ -83,6 +84,7 @@ class HFAdapter:
                 getattr(model, PADDING_SIDE_ATTR, "right"),
             ),
             family=self.name,
+            embedding=recipe is not None,
         )
 
 

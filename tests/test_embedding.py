@@ -133,6 +133,13 @@ def test_a_dense_module_is_refused_and_none_is_the_way_out(tmp_path):
 # --- serving ------------------------------------------------------------------------------
 
 
+def test_the_verdict_has_the_minimum_cosine_of_the_embedding_rows(state):
+    numerics = state.verdict.numerics
+    assert numerics.min_cosine == pytest.approx(1.0, abs=1e-4)
+    assert numerics.tolerance_cosine == 0.9999
+    assert state.verdict.to_dict()["numerics"]["min_cosine"] == numerics.min_cosine
+
+
 def test_embedding_serves_on_onnx_runtime_with_the_pooling_in_the_graph(state):
     assert state.verdict.status == "CLEAN", state.verdict.reason
     assert state.backend.name == "onnxruntime"

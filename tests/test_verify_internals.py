@@ -8,6 +8,7 @@ import torch
 from downshift.core import verify as verify_mod
 from downshift.core.shapes import resize_axis
 from downshift.core.verify import (
+    NumericsReport,
     OnnxRuntimeError,
     _compare_sample,
     as_tensor_list,
@@ -444,3 +445,81 @@ def test_a_nan_in_both_outputs_still_fails_the_sample():
 
     assert failed is True  # the pass or fail rule did not change: NaN is never close
     assert note is not None and worst is not None
+
+
+class _Scaled(torch.nn.Module):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x * 2
+
+
+class _Rotated:
+    """An ORT stand-in that returns `x * 2` plus a fixed offset, as a drifted graph would."""
+
+    def __init__(self, offset: np.ndarray):
+        self.offset = offset
+
+    def get_inputs(self):
+        return [_FakeInput()]
+
+    def run(self, output_names, feeds):
+        return [feeds["x"] * 2 + self.offset]
+
+
+def test_min_row_cosine_is_one_for_equal_rows_and_small_for_other_directions():
+    rows = np.array([[1.0, 2.0, 3.0], [0.0, 1.0, 0.0]])
+    assert verify_mod.min_row_cosine(rows, rows * 3) == pytest.approx(1.0)
+    other = np.array([[1.0, 2.0, 3.0], [1.0, 0.0, 0.0]])
+    assert verify_mod.min_row_cosine(rows, other) == pytest.approx(0.0)
+
+
+def test_min_row_cosine_zero_norm_rules():
+    zero, unit = np.zeros((1, 3)), np.array([[1.0, 0.0, 0.0]])
+    assert verify_mod.min_row_cosine(zero, zero) == 1.0
+    assert verify_mod.min_row_cosine(zero, unit) == 0.0
+    assert verify_mod.min_row_cosine(unit, zero) == 0.0
+    assert verify_mod.min_row_cosine(np.array([[np.nan, 1.0]]), np.ones((1, 2))) == 0.0
+
+
+def test_min_row_cosine_handles_scalars_and_empty_batches():
+    assert verify_mod.min_row_cosine(np.float64(1.0), np.float64(2.0)) == 1.0
+    assert verify_mod.min_row_cosine(np.zeros((0, 4)), np.zeros((0, 4))) == 1.0
+
+
+def _embedding_inputs() -> tuple:
+    return (torch.full((2, 4), 1e-6),)
+
+
+def test_tiny_vectors_pass_isclose_and_fail_the_cosine_gate(monkeypatch):
+    offset = np.array([[0.0, 0.0, 0.0, 4e-6]] * 2, dtype=np.float32)
+    monkeypatch.setattr(verify_mod, "load_session", lambda onnx_model: _Rotated(offset))
+    inputs = _embedding_inputs()
+
+    plain = verify(_Scaled(), "unused.onnx", inputs, vary_fn=lambda i: inputs, samples=1)
+    gated = verify(
+        _Scaled(), "unused.onnx", inputs, vary_fn=lambda i: inputs, samples=1, embedding=True
+    )
+
+    assert plain.passed
+    assert plain.min_cosine is None
+    assert plain.tolerance_cosine is None
+    assert not gated.passed
+    assert gated.min_cosine is not None and gated.min_cosine < 0.9999
+    assert gated.tolerance_cosine == 0.9999
+    assert gated.notes == [
+        f"embedding rows: minimum cosine {gated.min_cosine:.5f} (tolerance 0.9999)"
+    ]
+    assert gated.to_dict()["min_cosine"] == gated.min_cosine
+    assert NumericsReport.from_dict(gated.to_dict()).min_cosine == gated.min_cosine
+
+
+def test_a_matching_embedding_passes_both_checks(monkeypatch):
+    monkeypatch.setattr(verify_mod, "load_session", lambda onnx_model: _EchoSession())
+    inputs = (torch.randn(3, 5),)
+
+    report = verify(
+        _Scaled(), "unused.onnx", inputs, vary_fn=lambda i: inputs, samples=2, embedding=True
+    )
+
+    assert report.passed
+    assert report.min_cosine == pytest.approx(1.0)
+    assert report.notes == []

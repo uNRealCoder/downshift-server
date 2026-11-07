@@ -80,9 +80,10 @@ def _numerics_text(verdict: ExportVerdict) -> str:
     if n is None:
         return "not checked"
     text = f"max abs err {n.max_abs_err:.2e} over {n.samples_tested} samples  "
-    if n.passed:
-        return text + "OK"
-    return text + f"{n.failures}/{n.samples_tested} failed"
+    text += "OK" if n.passed else f"{n.failures}/{n.samples_tested} failed"
+    if n.min_cosine is not None:
+        text += f", min cosine {n.min_cosine:.6f}"
+    return text
 
 
 def _tolerance_text(verdict: ExportVerdict) -> str | None:

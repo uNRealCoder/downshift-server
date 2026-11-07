@@ -94,6 +94,12 @@ def test_per_dtype_tolerance_override(monkeypatch: pytest.MonkeyPatch) -> None:
     assert mod.TOLERANCES["float32"] == (1e-4, 1e-3)
 
 
+def test_cosine_tolerance_default_and_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert importlib.reload(settings).TOLERANCE_COSINE == 0.9999
+    monkeypatch.setenv("DOWNSHIFT_TOL_COSINE", "0.99")
+    assert importlib.reload(settings).TOLERANCE_COSINE == 0.99
+
+
 def test_axis_max_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DOWNSHIFT_AXIS_MAX", "seq=4096, num_nodes=500")
     assert importlib.reload(settings).AXIS_MAX == {"seq": 4096, "num_nodes": 500}

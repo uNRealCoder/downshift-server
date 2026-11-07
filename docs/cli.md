@@ -66,6 +66,8 @@ A sample passes when each output element satisfies `abs(got - expected) <= atol 
 
 `--atol` and `--rtol` have priority over these variables.
 
+A text embedding model has one more check. For each row of the embedding, downshift computes the cosine similarity between the torch row and the ONNX Runtime row. The smallest value must be at least `DOWNSHIFT_TOL_COSINE` (default `0.9999`). If it is lower, the verdict is `DEGRADED`. A row with a zero norm on both sides has cosine 1. A row with a zero norm on one side has cosine 0. `--atol` and `--rtol` do not change this check. downshift makes the check at export time only, not on the request path.
+
 ## `check`
 
 `check` exports the model in memory and verifies the numbers. It writes nothing to disk. The exit code is the verdict, so `check` can gate CI.
@@ -97,6 +99,7 @@ $ downshift check examples.scatter_include_self_false:make_model
   Reason          exported via strict=False but numerics diverge on 6/8 samples (max abs err 1.02e+00)
 ```
 
+- `Numerics` shows `min cosine` for a text embedding model: the smallest cosine similarity between a torch row and an ONNX Runtime row.
 - `Tolerance` shows the dtype that selected the default, or `--atol/--rtol` if a flag set it.
 - `Worst` (DEGRADED only) is the output element with the largest error across all samples.
 - `Samples` lists the input shapes of each sample.
@@ -217,6 +220,7 @@ Downshift reads these variables one time, when `downshift` is imported. To chang
 | `DOWNSHIFT_REQUEST_ID_HEADER` | `X-Request-Id` | The name of the request-ID header. The server reads the ID from this request header and sets it on each response. Use letters, digits and `-` only. An empty value means the default. There is no flag. |
 | `DOWNSHIFT_CACHE_HEADER` | `X-Downshift-Cache` | The name of the result-cache header of `/predict` (`hit`, `partial` or `miss`). Use letters, digits and `-` only. An empty value means the default. There is no flag. |
 | `DOWNSHIFT_TOL_{FLOAT32,FLOAT64,FLOAT16,BFLOAT16}_{ATOL,RTOL}` | refer to "Tolerances" | The default tolerances. |
+| `DOWNSHIFT_TOL_COSINE` | `0.9999` | The smallest cosine similarity between a torch embedding row and an ONNX Runtime row. |
 
 A bad value (for example `DOWNSHIFT_PORT=abc`) stops the process at start with a message that names the variable. The library functions `check()`, `export()` and `intake()` use `8` as the default of `samples`. They do not read `DOWNSHIFT_SAMPLES`.
 

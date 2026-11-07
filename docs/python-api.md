@@ -333,6 +333,8 @@ class NumericsReport:
     tolerance_rel: float
     tolerance_dtype: str = "float32"
     tolerance_overridden: bool = False
+    min_cosine: float | None = None
+    tolerance_cosine: float | None = None
     baseline_failed: bool = False
     worst: WorstMismatch | None = None
     sample_shapes: list[list[tuple[int, ...]]] = []
@@ -351,6 +353,8 @@ class NumericsReport:
 | `tolerance_abs` / `tolerance_rel` | `float` | The `atol` and `rtol` that downshift used. |
 | `tolerance_dtype` | `str` | The floating dtype whose default tolerance applied (`"float32"`, `"float16"`, `"bfloat16"`, `"float64"`). Refer to `default_tolerances`. |
 | `tolerance_overridden` | `bool` | `True` if `--atol` or `--rtol` (or the `atol=` or `rtol=` keyword arguments) set the values, and not the default of `tolerance_dtype`. |
+| `min_cosine` | `float \| None` | For a text embedding model: the smallest cosine similarity between a torch row and an ONNX Runtime row, across all samples. `None` for other models. If it is lower than `tolerance_cosine`, the sample fails. |
+| `tolerance_cosine` | `float \| None` | The cosine tolerance (`DOWNSHIFT_TOL_COSINE`, default `0.9999`). `None` for a model that is not a text embedder. |
 | `baseline_failed` | `bool` | `True` if sample 0 (the example without a variation) failed. |
 | `worst` | `WorstMismatch \| None` | The element with the largest error across all samples. |
 | `sample_shapes` | `list[list[tuple[int, ...]]]` | The shapes of each input in each sample. The `Samples` row of the CLI prints them. |

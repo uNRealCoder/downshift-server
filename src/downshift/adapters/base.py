@@ -29,6 +29,7 @@ class Prepared:
     dynamic_shapes: tuple  # for each input: {axis: torch.export.Dim} or None
     vary_fn: VaryFn | None  # sample i -> inputs. None means: use the shared-axis-0 default
     family: str  # the `name` of the adapter. ExportVerdict.model_family reports it
+    embedding: bool = False  # True: the first output is a pooled embedding, one row for each text
 
     @property
     def dynamic_dims(self) -> dict[str, list[int]]:

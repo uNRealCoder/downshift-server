@@ -292,6 +292,7 @@ def _verify_into(
             atol=atol,
             rtol=rtol,
             seed=seed,
+            embedding=prepared.embedding,
         )
         verdict.row_independent, verdict.row_reason = check_rows(prepared, numerics, session)
     except OnnxRuntimeError as exc:

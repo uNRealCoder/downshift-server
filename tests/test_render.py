@@ -132,6 +132,16 @@ def test_print_verdict_failed_reason_points_at_debug_logging(caplog):
     assert "--log-level debug" in out
 
 
+def test_print_verdict_shows_the_minimum_cosine_of_an_embedding(caplog):
+    render.print_verdict(_verdict(numerics=_numerics(True, min_cosine=0.9999984)), "model")
+    assert "min cosine 0.999998" in caplog.text
+
+
+def test_print_verdict_has_no_cosine_for_other_models(caplog):
+    render.print_verdict(_verdict(numerics=_numerics(True)), "model")
+    assert "cosine" not in caplog.text
+
+
 def test_print_verdict_shows_overridden_tolerance(caplog):
     verdict = _verdict(numerics=_numerics(True, tolerance_overridden=True))
     render.print_verdict(verdict, "model")

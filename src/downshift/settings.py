@@ -255,3 +255,7 @@ TOLERANCES: dict[str, tuple[float, float]] = {
     )
     for name, (atol, rtol) in _TOLERANCE_DEFAULTS.items()
 }
+
+# The smallest cosine similarity between a torch embedding and an ONNX Runtime embedding. The
+# verification checks it for each row of an embedding model, in addition to atol and rtol.
+TOLERANCE_COSINE = _env_float("DOWNSHIFT_TOL_COSINE", 0.9999)

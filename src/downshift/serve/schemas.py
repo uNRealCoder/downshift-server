@@ -199,6 +199,8 @@ class NumericsInfo(BaseModel):
     tolerance_rel: float
     tolerance_dtype: str
     tolerance_overridden: bool
+    min_cosine: float | None = None
+    tolerance_cosine: float | None = None
     baseline_failed: bool
     worst: WorstMismatchInfo | None = None
     sample_shapes: list[list[list[int]]] = Field(default_factory=list)

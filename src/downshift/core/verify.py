@@ -16,7 +16,7 @@ import torch
 from downshift.adapters.base import VaryFn
 from downshift.core.shapes import alternative_sizes, dim_bounds, pick_size, resize_axis
 from downshift.logs import REPORT_LOGGER
-from downshift.settings import DEFAULT_SAMPLES, TOLERANCES
+from downshift.settings import DEFAULT_SAMPLES, TOLERANCE_COSINE, TOLERANCES
 
 report_logger = logging.getLogger(REPORT_LOGGER)
 
@@ -50,6 +50,9 @@ class NumericsReport:
     tolerance_dtype: str = "float32"  # the dtype whose default tolerances applied
     tolerance_overridden: bool = False  # --atol or --rtol set the values
     baseline_failed: bool = False
+    # For an embedding model: the smallest cosine between a torch row and an ONNX Runtime row.
+    min_cosine: float | None = None
+    tolerance_cosine: float | None = None
     worst: WorstMismatch | None = None
     sample_shapes: list[list[tuple[int, ...]]] = field(default_factory=list)
     output_shapes: list[list[tuple[int, ...]]] = field(default_factory=list)  # [sample][output]
@@ -252,6 +255,22 @@ def _compare_sample(
     return sample_abs, sample_rel, failed, note, worst
 
 
+def min_row_cosine(expected: np.ndarray, got: np.ndarray) -> float:
+    """The smallest cosine similarity between a row of `expected` and the same row of `got`.
+    A row is the last axis. A zero row on both sides counts as 1. A zero row on one side only
+    counts as 0. A NaN counts as 0. Two arrays of different shapes are not compared."""
+    if expected.ndim == 0:
+        return 1.0
+    a = expected.reshape(-1, expected.shape[-1]).astype(np.float64)
+    b = got.reshape(-1, got.shape[-1]).astype(np.float64)
+    norm_a, norm_b = np.linalg.norm(a, axis=1), np.linalg.norm(b, axis=1)
+    denominator = norm_a * norm_b
+    with np.errstate(invalid="ignore", divide="ignore"):
+        cosine = np.where(denominator > 0, (a * b).sum(axis=1) / denominator, 0.0)
+    cosine = np.where((norm_a == 0) & (norm_b == 0), 1.0, cosine)
+    return float(np.nan_to_num(cosine, nan=0.0).min(initial=1.0))
+
+
 def _shapes(sample: tuple) -> list[tuple[int, ...]]:
     return [tuple(t.shape) if isinstance(t, torch.Tensor) else () for t in sample]
 
@@ -266,7 +285,10 @@ def verify(
     atol: float | None = None,
     rtol: float | None = None,
     seed: int = 0,
+    embedding: bool = False,
 ) -> NumericsReport:
+    """Compare torch and ONNX Runtime on `samples` inputs. If `embedding` is True, the first
+    output is a pooled embedding. Then each of its rows must also reach the cosine tolerance."""
     if vary_fn is None:
         if dynamic_shapes is None:
             raise ValueError("verify() needs either dynamic_shapes or an explicit vary_fn")
@@ -284,6 +306,7 @@ def verify(
         tolerance_dtype=tolerance_dtype,
         tolerance_overridden=atol is not None or rtol is not None,
         seed=seed,
+        tolerance_cosine=TOLERANCE_COSINE if embedding else None,
     )
     session = load_session(onnx_model)
     input_names = [inp.name for inp in session.get_inputs()]
@@ -354,9 +377,22 @@ def verify(
                 report.worst = WorstMismatch(i, output_idx, index, expected, got, shapes)
             report.max_abs_err = max(report.max_abs_err, sample_abs)
             report.max_rel_err = max(report.max_rel_err, sample_rel)
+            if embedding and ort_outs and torch_outs:
+                expected_np, got_np = tensor_to_numpy(torch_outs[0]), np.asarray(ort_outs[0])
+                if expected_np.shape == got_np.shape:
+                    cosine = min_row_cosine(expected_np, got_np)
+                    previous = 1.0 if report.min_cosine is None else report.min_cosine
+                    report.min_cosine = min(cosine, previous)
+                    if cosine < TOLERANCE_COSINE:
+                        failed = True
             if failed:
                 report.failures += 1
                 report.baseline_failed = report.baseline_failed or i == 0
 
+    if report.min_cosine is not None and report.min_cosine < TOLERANCE_COSINE:
+        report.notes.append(
+            f"embedding rows: minimum cosine {report.min_cosine:.5f} "
+            f"(tolerance {TOLERANCE_COSINE:g})"
+        )
     report.shape_generalization = None if report.baseline_failed else report.failures == 0
     return report
