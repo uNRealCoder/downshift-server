@@ -155,6 +155,72 @@ Boot        6.4 s: load 0.3, export 2.8, verify 0.2, session 0.1, warmup 0.1
 
 `load` reads or imports the model. `export` is `torch.export` plus the ONNX translation. `verify` runs the samples through both backends. `session` builds the backend. `warmup` runs `--warmup N` inferences. The `boot` field of `/metadata` has the same numbers. With `--workers N`, the parent pays `export` and `verify` one time, and each worker pays its own `load`, `session` and `warmup`.
 
+## Metrics
+
+To count the requests, start the server with `--metrics` (or `DOWNSHIFT_METRICS=1`). The server then serves the counts on `GET /metrics` as Prometheus text (format 0.0.4). If you do not set the option, the route does not exist (`404`), and the request path counts nothing. `/metrics` follows the API key rule of the other routes: send `Authorization: Bearer <key>`. The probes `/health` and `/ready` are the only routes without a key.
+
+Each series has the label `worker`. With one process, its value is `0`. With `--workers N`, its value is the process ID of the worker.
+
+| Name | Type | Labels | Meaning |
+|---|---|---|---|
+| `downshift_requests_total` | counter | `route`, `code` | Requests. `route` is the route template (`/predict`), or `other` for a path that has no route. `code` is the HTTP status. |
+| `downshift_request_seconds` | histogram | `route` | Seconds from the start of a request to the end of its response. |
+| `downshift_stage_seconds` | histogram | `stage` | Seconds of one stage of a predict: `queue`, `prep`, `infer` or `encode`. |
+| `downshift_inflight` | gauge | none | Admitted predicts that have not finished. |
+| `downshift_queue_depth` | gauge | none | Admitted predicts that wait for an inference slot. |
+| `downshift_queue_limit` | gauge | none | The value of `--max-queue`. |
+| `downshift_rejected_total` | counter | `reason` | Requests that got a `503`: `capacity`, `timeout` or `not_ready`. |
+| `downshift_cache_rows_total` | counter | `result` | Rows that the result cache found (`hit`) or did not find (`miss`). Only with the cache on. |
+| `downshift_cache_requests_total` | counter | `result` | Predicts by the `X-Downshift-Cache` value: `hit`, `partial` or `miss`. |
+| `downshift_model_info` | gauge | `version`, `verdict`, `backend`, `family` | The value is always `1`. |
+| `downshift_ready` | gauge | none | `1` when the model is ready. `0` while the model loads. |
+| `downshift_boot_seconds` | gauge | `phase` | Seconds of each boot phase. |
+
+The histogram buckets are fixed, in seconds: 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5 and 10. The `queue` stage is `prep_wait`, `infer_wait` and `encode_wait` of the access log added together. The `prep` stage is `parse` and `prep` added together.
+
+A scrape reaches one worker only. Each worker counts for itself, and the workers share no counters. To see the whole server, scrape each worker, or use one worker for each container and scale with replicas. In a container, use one worker and set `replicas`.
+
+Scrape config:
+
+```yaml
+scrape_configs:
+  - job_name: downshift
+    metrics_path: /metrics
+    authorization:
+      credentials_file: /etc/prometheus/downshift-key
+    static_configs:
+      - targets: ["downshift:8000"]
+```
+
+Alert rules:
+
+```yaml
+groups:
+  - name: downshift
+    rules:
+      - alert: DownshiftQueueFull
+        expr: downshift_queue_depth >= downshift_queue_limit
+        for: 1m
+        annotations:
+          summary: The queue of {{ $labels.instance }} is full. New predicts get 503.
+      - alert: DownshiftErrorRate
+        expr: |
+          sum(rate(downshift_requests_total{code=~"5.."}[5m]))
+            / sum(rate(downshift_requests_total[5m])) > 0.01
+        for: 5m
+        annotations:
+          summary: More than 1% of the requests get a 5xx status.
+      - alert: DownshiftSlowPredict
+        expr: |
+          histogram_quantile(0.99,
+            sum by (le) (rate(downshift_request_seconds_bucket{route="/predict"}[5m]))) > 0.5
+        for: 10m
+        annotations:
+          summary: The p99 latency of /predict is more than 500 ms.
+```
+
+`examples/grafana-dashboard.json` is a Grafana dashboard for these series: the request rate, the error rate, the p50 and p99 latency, the latency of each stage, the queue depth and the cache hit rate. Import it in Grafana, and select your Prometheus data source.
+
 ## Logs and request IDs
 
 All output goes through Python `logging` to stdout, as plain text in the form `time LEVEL logger: message`. Point your log shipper at stdout. [`cli.md`](cli.md#logging) gives what each `--log-level` prints.
