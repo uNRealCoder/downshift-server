@@ -98,6 +98,13 @@ def _env_header(name: str, default: str) -> str:
     return raw
 
 
+def check_device(value: str) -> str:
+    """auto, cpu, cuda or cuda:N (N is 0 or more), else ValueError."""
+    if not re.fullmatch(r"auto|cpu|cuda(:[0-9]+)?", value):
+        raise ValueError(f"device {value!r} is not valid. Use auto, cpu, cuda or cuda:N")
+    return value
+
+
 def parse_axis_max(items: Iterable[str]) -> dict[str, int]:
     """ "seq=4096,num_nodes=500" (or one NAME=N per item) -> {name: N}, else ValueError."""
     result: dict[str, int] = {}
@@ -114,7 +121,9 @@ def parse_axis_max(items: Iterable[str]) -> dict[str, int]:
 
 HOST = os.environ.get("DOWNSHIFT_HOST", "127.0.0.1")
 PORT = _env_int("DOWNSHIFT_PORT", 8000)
-DEVICE = os.environ.get("DOWNSHIFT_DEVICE", "auto")
+DEVICE = _env_cast(
+    "DOWNSHIFT_DEVICE", "auto", check_device, "device (one of auto, cpu, cuda, cuda:N)"
+)
 BACKEND = _env_choice("DOWNSHIFT_BACKEND", "auto", ("auto", "onnxruntime", "torch"), "backend")
 WARMUP = _env_int("DOWNSHIFT_WARMUP", 3)
 SAMPLES = _env_int("DOWNSHIFT_SAMPLES", DEFAULT_SAMPLES)

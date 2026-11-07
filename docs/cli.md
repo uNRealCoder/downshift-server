@@ -144,7 +144,7 @@ downshift export my_pkg.models:build -o artifacts/ --name classifier
 | `--port INT` | `DOWNSHIFT_PORT` | `8000` | The port to bind. |
 | `--backend auto\|onnxruntime\|torch` | `DOWNSHIFT_BACKEND` | `auto` | `auto` follows the verdict. `torch` skips the export. `onnxruntime` on a DEGRADED verdict is an error, unless you also give `--force-onnx`. |
 | `--force-onnx` | - | off | Serve a DEGRADED graph through ONNX Runtime. The banner says so. |
-| `--device auto\|cpu\|cuda` | `DOWNSHIFT_DEVICE` | `auto` | `cuda` without CUDA is a usage error on both backends. The gate runs only on the CPU. The `Verified on` row of the banner says this when you serve on a GPU. |
+| `--device auto\|cpu\|cuda\|cuda:N` | `DOWNSHIFT_DEVICE` | `auto` | N is 0 or more. Any other value is a usage error (exit code `4`) that lists the allowed values. `cuda` without CUDA is a usage error on both backends. The gate runs only on the CPU. The `Verified on` row of the banner says this when you serve on a GPU. |
 | `--warmup INT` | `DOWNSHIFT_WARMUP` | `3` | The number of inferences before `/ready` changes to `200`. |
 | `--reference MODEL` | - | none | The PyTorch model to verify a `.onnx` `MODEL` against. |
 | `--tokenizer-from DIR` | - | none | A downloaded Hugging Face repo directory. It gives the tokenizer, the pooling recipe and the labels to a `.onnx` or PyTorch `MODEL` that has none. Then `/predict` takes `{"text": ...}`. It does not change the graph or the verification, and it does not depend on `--reference`. |

@@ -341,7 +341,9 @@ def serve_cmd(
     force_onnx: Annotated[
         bool, typer.Option("--force-onnx", help="Serve a DEGRADED graph through ONNX Runtime")
     ] = False,
-    device: Annotated[str, typer.Option("--device", help="auto | cpu | cuda")] = settings.DEVICE,
+    device: Annotated[
+        str, typer.Option("--device", help="auto | cpu | cuda | cuda:N")
+    ] = settings.DEVICE,
     warmup: Annotated[
         int, typer.Option("--warmup", min=0, help="Warm-up inferences before /ready changes")
     ] = settings.WARMUP,
@@ -398,6 +400,7 @@ def serve_cmd(
 
     _setup_logging(log_level)
     with _exit_on_error(log_level is LogLevel.debug):
+        settings.check_device(device)
         tls = _tls_config(ssl_certfile, ssl_keyfile, settings.SSL_KEYFILE_PASSWORD)
         https = bool(tls)
         # log_config=None keeps our logging sink. The app writes its own access log.

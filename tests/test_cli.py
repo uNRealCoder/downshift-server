@@ -819,3 +819,10 @@ def test_serve_matryoshka_flag_reaches_the_options(monkeypatch):
 
     _, captured = _serve_captured(monkeypatch, "--matryoshka")
     assert captured["app"].state.serving.options.matryoshka is True
+
+
+@pytest.mark.parametrize("device", ["gpu", "cuda:", "cuda:-1", "cuda:x", "CPU"])
+def test_serve_bad_device_is_usage_error(device):
+    result = run("serve", CLEAN, "--device", device)
+    assert result.exit_code == 4, result.output
+    assert "Use auto, cpu, cuda or cuda:N" in result.output

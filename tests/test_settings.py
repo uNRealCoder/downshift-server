@@ -167,6 +167,23 @@ def test_api_key_new_name_wins_over_old_name(
     assert "uses DOWNSHIFT_API_KEY" in caplog.records[0].getMessage()
 
 
+@pytest.mark.parametrize("value", ["auto", "cpu", "cuda", "cuda:0", "cuda:12"])
+def test_device_env_var_accepts_the_allowed_values(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("DOWNSHIFT_DEVICE", value)
+    assert importlib.reload(settings).DEVICE == value
+
+
+@pytest.mark.parametrize("value", ["gpu", "cuda:", "cuda:-1", "cuda:x", "cuda:1:2"])
+def test_bad_device_env_var_lists_the_allowed_values(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("DOWNSHIFT_DEVICE", value)
+    with pytest.raises(ValueError, match="DOWNSHIFT_DEVICE.*auto, cpu, cuda, cuda:N"):
+        importlib.reload(settings)
+
+
 def test_execution_defaults_to_threadpool(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DOWNSHIFT_EXECUTION", raising=False)
     assert importlib.reload(settings).EXECUTION == "threadpool"
