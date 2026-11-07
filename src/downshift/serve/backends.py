@@ -1,6 +1,7 @@
 """The inference backends. Both map {input name: numpy array} to {output name: numpy array},
 so the HTTP layer does not know which one serves."""
 
+import logging
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Protocol
@@ -13,6 +14,8 @@ from torch import nn
 from downshift.core.feeds import WIDEN_DTYPES, example_feeds, widen_for_wire
 from downshift.core.verdict import BackendName
 from downshift.core.verify import OrtProvider, first_line, new_session
+
+logger = logging.getLogger("downshift.serve")
 
 _CUDA_EP = "CUDAExecutionProvider"
 _CPU_EP = "CPUExecutionProvider"
@@ -72,9 +75,20 @@ def output_names(count: int) -> list[str]:
     return [f"output_{i}" for i in range(count)]
 
 
-def resolve_device(device: str) -> str:
+def resolve_device(device: str, *, ort_backend: bool = False) -> str:
+    """auto becomes cuda if torch has a GPU (for ONNX Runtime: and ONNX Runtime has the CUDA
+    provider), else cpu. A cuda:N with N too high is a ValueError."""
     if device == "auto":
-        return "cuda" if torch.cuda.is_available() else "cpu"
+        if not torch.cuda.is_available():
+            return "cpu"
+        return "cuda" if not ort_backend or _CUDA_EP in ort.get_available_providers() else "cpu"
+    _, _, index = device.partition(":")
+    if index and torch.cuda.is_available() and int(index) >= torch.cuda.device_count():
+        count = torch.cuda.device_count()
+        raise ValueError(
+            f"--device {device}: this machine has {count} GPUs (cuda:0 to cuda:{count - 1}). "
+            "Use a lower number, or pass --device cpu"
+        )
     return device
 
 
@@ -134,10 +148,22 @@ class OnnxRuntimeBackend:
             self.session = session
         else:
             assert model is not None
-            device = resolve_device(device)
+            requested = device
+            device = resolve_device(device, ort_backend=True)
+            if requested == "auto" and device == "cpu" and torch.cuda.is_available():
+                logger.info(
+                    "--device auto: onnxruntime has no CUDA execution provider, so it serves on "
+                    "the CPU. To use the GPU, install onnxruntime-gpu"
+                )
             options = _session_options(intra_op_threads, inter_op_threads)
             self.session = new_session(model, _ort_providers(device), options)
-            _require_cuda_provider(self.session, device)
+            try:
+                _require_cuda_provider(self.session, device)
+            except ValueError as exc:
+                if requested != "auto":
+                    raise
+                logger.warning("%s. Serving on the CPU, because --device is auto", exc)
+                self.session = new_session(model, [_CPU_EP], options)
         self.provider = self.session.get_providers()[0]
         self.input_names = [i.name for i in self.session.get_inputs()]
         self.onnx_output_names = [o.name for o in self.session.get_outputs()]

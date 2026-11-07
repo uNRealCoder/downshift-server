@@ -47,6 +47,9 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- `--device auto` now serves on the CPU if torch has a GPU but ONNX Runtime has no CUDA provider (or the provider does not start). The server logs one line. Before, the boot failed. An explicit `--device cuda` still fails with a message.
+- `--device cuda:N` with N at or above the number of GPUs now gives a usage error that names the valid range. Before, it gave a raw error and exit code `5`.
+- A `serve` process now frees the bytes of the ONNX graph after the boot. The session has its own copy.
 - `downshift.export()` and `downshift export` now write nothing when the verdict is FAILED. Before, they wrote the `.onnx` file and the manifest if ONNX Runtime could not run the graph.
 - `check()` and `app_for()` now work with a model on a CUDA device. Before, the verdict was FAILED with the message that ONNX Runtime cannot run the graph.
 - The export cache now removes the `.tmp-*` and `.old-*` directories of a killed writer when they are more than 1 hour old.

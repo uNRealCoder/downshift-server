@@ -318,7 +318,7 @@ def _reusable_verify_session(verdict: ExportVerdict, opts: ServeOptions) -> Any:
     """The session of verify, if the serving options need the same one (CPU, default
     threads). The verdict lets go of it in both cases."""
     session = verdict.take_session()
-    if resolve_device(opts.device) != "cpu":
+    if resolve_device(opts.device, ort_backend=True) != "cpu":
         return None
     if opts.intra_op_threads != 0 or opts.inter_op_threads != 0:
         return None

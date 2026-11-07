@@ -16,7 +16,10 @@ import urllib.request
 
 import uvicorn
 
-from downshift.cli.runtime import _tls_config
+from downshift.cli.runtime import ServeArgs, _build_serving_state, _tls_config
+from downshift.core.memo import MEMO, ExportEntry
+from downshift.loading import LoadSpec
+from downshift.serve.options import ServeOptions
 from tests.conftest import subprocess_env
 
 MODEL = "tests.models.clean_mlp:make_model"
@@ -133,3 +136,30 @@ def test_uvicorn_serves_https_with_the_tls_config_of_serve(tls_files) -> None:
     finally:
         server.should_exit = True
         thread.join(timeout=5)
+
+
+def _clean_mlp_args() -> ServeArgs:
+    return ServeArgs(
+        load=LoadSpec("tests.models.clean_mlp:make_model"),
+        options=ServeOptions(samples=1, device="cpu", warmup=1),
+        reference=None,
+        middleware=None,
+        log_level="warning",
+    )
+
+
+def test_a_serving_process_drops_the_graph_bytes_and_the_memo() -> None:
+    MEMO.clear()
+    MEMO.put("k", ExportEntry(verdict={"status": "CLEAN"}, input_names=[], axis_bounds={}))
+
+    state = _build_serving_state(_clean_mlp_args())
+
+    assert state.backend.name == "onnxruntime"
+    assert state.verdict.onnx_bytes == b""
+    assert len(MEMO) == 0
+
+
+def test_the_parent_of_the_workers_keeps_the_graph_bytes() -> None:
+    state = _build_serving_state(_clean_mlp_args(), keep_graph=True)
+
+    assert state.verdict.onnx_bytes

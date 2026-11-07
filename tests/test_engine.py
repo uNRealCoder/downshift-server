@@ -506,3 +506,55 @@ def test_report_updates_the_current_progress():
         assert progress.phase == "warmup"
     finally:
         CURRENT_PROGRESS.reset(token)
+
+
+def _fake_cuda_torch(monkeypatch, gpus: int) -> None:
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: gpus > 0)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: gpus)
+
+
+def test_auto_picks_cuda_for_onnx_runtime_only_if_it_has_the_cuda_provider(monkeypatch):
+    _fake_cuda_torch(monkeypatch, 1)
+    monkeypatch.setattr(
+        backends_mod.ort, "get_available_providers", lambda: ["CPUExecutionProvider"]
+    )
+
+    assert backends_mod.resolve_device("auto") == "cuda"
+    assert backends_mod.resolve_device("auto", ort_backend=True) == "cpu"
+
+
+def test_auto_on_a_cpu_only_onnx_runtime_serves_on_the_cpu_with_one_log_line(monkeypatch, caplog):
+    _fake_cuda_torch(monkeypatch, 1)
+    monkeypatch.setattr(
+        backends_mod.ort, "get_available_providers", lambda: ["CPUExecutionProvider"]
+    )
+    monkeypatch.setattr(
+        backends_mod.ort, "InferenceSession", lambda *a, **k: _FakeSession(["CPUExecutionProvider"])
+    )
+
+    with caplog.at_level("INFO", logger="downshift.serve"):
+        backend = OnnxRuntimeBackend(b"model", device="auto")
+
+    assert backend.provider == "CPUExecutionProvider"
+    assert "install onnxruntime-gpu" in caplog.text
+
+
+def test_auto_falls_back_to_the_cpu_when_the_cuda_provider_does_not_start(monkeypatch, caplog):
+    _fake_cuda_torch(monkeypatch, 1)
+    _fake_gpu_wheel(monkeypatch, ["CPUExecutionProvider"])
+
+    backend = OnnxRuntimeBackend(b"model", device="auto")
+
+    assert backend.provider == "CPUExecutionProvider"
+    assert "Serving on the CPU" in caplog.text
+
+
+def test_a_cuda_index_above_the_gpu_count_is_a_usage_error(monkeypatch):
+    _fake_cuda_torch(monkeypatch, 2)
+    _fake_gpu_wheel(monkeypatch, ["CUDAExecutionProvider"])
+
+    with pytest.raises(ValueError, match=r"this machine has 2 GPUs \(cuda:0 to cuda:1\)"):
+        OnnxRuntimeBackend(b"model", device="cuda:2")
+    with pytest.raises(ValueError, match=r"--device cuda:5: this machine has 2 GPUs"):
+        TorchBackend(clean_mlp.make_model(), ("x",), device="cuda:5")
+    assert backends_mod.resolve_device("cuda:1") == "cuda:1"
