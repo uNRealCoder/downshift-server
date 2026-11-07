@@ -1,6 +1,7 @@
 """From a loaded model (or a reused export) to a warmed-up backend in a ServingState."""
 
 import gc
+import logging
 import threading
 import time
 from collections.abc import Callable
@@ -40,11 +41,14 @@ from downshift.serve.backends import (
     resolve_device,
 )
 from downshift.serve.graphs import eager_output_axes
+from downshift.serve.numerics import ServingNumerics, check_serving, serves_off_cpu
 from downshift.serve.options import BackendChoice, ServeOptions
 from downshift.serve.result_cache import ResultCache
 from downshift.serve.schemas import normalize_dtype
-from downshift.settings import DEFAULT_RESULT_CACHE_ROWS
+from downshift.settings import DEFAULT_RESULT_CACHE_ROWS, TOLERANCES
 from downshift.sources import HF_REPO_DIR, UNKNOWN_SOURCE, display_source
+
+logger = logging.getLogger("downshift.serve")
 
 # Returns the loaded MODEL and its --reference model. Called only when a model is needed.
 Loader = Callable[[], tuple[LoadedModel, LoadedModel | None]]
@@ -79,6 +83,8 @@ class ServingState:
     # Lets /predict range-check input_ids: ORT wraps negative indices.
     vocab_size: int | None = None
     warmup_stats: WarmupStats | None = None
+    # The serving check on a GPU. None if the backend serves on the CPU.
+    serving_numerics: ServingNumerics | None = None
     # Seconds for each Phase that ran, for the Boot row and /metadata.
     timings: dict[str, float] = field(default_factory=dict)
     # For each input and dynamic axis: the (name, min, max) that the export traced. Empty for
@@ -340,7 +346,7 @@ def _build_backend(
                 verdict.onnx_path if verdict.onnx_path is not None else verdict.onnx_bytes
             )
             backend = OnnxRuntimeBackend(
-                source, opts.device, opts.intra_op_threads, opts.inter_op_threads
+                source, opts.device, opts.intra_op_threads, opts.inter_op_threads, tf32=opts.tf32
             )
     else:
         prepared = verdict.prepared
@@ -352,11 +358,89 @@ def _build_backend(
             prepared.inputs,
             opts.intra_op_threads,
             prepared.dynamic_shapes,
+            opts.tf32,
         )
     # The provider that verify() compared against (always the CPU), or None without numerics.
     backend.verified_provider = "CPUExecutionProvider" if verdict.numerics is not None else None
     timings[Phase.session] = time.perf_counter() - start
     return backend
+
+
+def _serving_tolerances(verdict: ExportVerdict, opts: ServeOptions) -> tuple[float, float]:
+    """The tolerance of the verdict. Without a verdict check: float32, or --atol and --rtol."""
+    if verdict.numerics is not None:
+        return verdict.numerics.tolerance_abs, verdict.numerics.tolerance_rel
+    atol, rtol = TOLERANCES["float32"]
+    return (atol if opts.atol is None else opts.atol, rtol if opts.rtol is None else opts.rtol)
+
+
+def _build_checked(
+    name: BackendName,
+    verdict: ExportVerdict,
+    opts: ServeOptions,
+    timings: dict[str, float],
+    feeds: dict[str, np.ndarray] | None,
+) -> tuple[Backend, ServingNumerics | None]:
+    """The backend, and its serving check if it serves off the CPU and there are example feeds.
+    The reference is the CPU result of the same model: torch for torch, ONNX Runtime for ONNX
+    (the verdict compared that one with torch). The check runs at boot only."""
+    device = resolve_device(opts.device, ort_backend=name == BackendName.onnxruntime)
+    reference: dict[str, np.ndarray] | None = None
+    start = time.perf_counter()
+    if feeds is not None and name == BackendName.torch and device.startswith("cuda"):
+        prepared = verdict.prepared
+        assert prepared is not None
+        reference = TorchBackend(prepared.model, prepared.input_names, "cpu").infer(feeds)
+    backend = _build_backend(name, verdict, opts, timings)
+    if feeds is None or not serves_off_cpu(backend):
+        return backend, None
+    if reference is None:
+        source = verdict.onnx_path if verdict.onnx_path is not None else verdict.onnx_bytes
+        reference = OnnxRuntimeBackend(source, "cpu").infer(feeds)
+    atol, rtol = _serving_tolerances(verdict, opts)
+    embedding = verdict.numerics is not None and verdict.numerics.tolerance_cosine is not None
+    numerics = check_serving(
+        backend, reference, feeds, atol, rtol, device=device, embedding=embedding, tf32=opts.tf32
+    )
+    timings[Phase.session] = time.perf_counter() - start
+    return backend, numerics
+
+
+def _falls_back(
+    numerics: ServingNumerics | None, name: BackendName, opts: ServeOptions, has_torch: bool
+) -> bool:
+    """Log a failed serving check. True if torch must serve instead. A DEGRADED verdict goes to
+    torch in the same way, unless --backend or --force-onnx names ONNX Runtime."""
+    if numerics is None or numerics.ok:
+        return False
+    fall_back = (
+        name == BackendName.onnxruntime
+        and opts.backend == BackendChoice.auto
+        and not opts.force_onnx
+        and has_torch
+    )
+    steps = ["pass --device cpu to serve on the CPU"]
+    if numerics.tf32:
+        steps.insert(0, "remove --tf32")
+    if fall_back:
+        outcome = "Serving torch instead."
+        steps.append("pass --force-onnx to serve ONNX Runtime anyway")
+    elif name == BackendName.torch:
+        outcome = "No other backend can serve, so this one serves."
+    else:
+        outcome = "Serving it as asked."
+    logger.warning(
+        "serving check failed: %s on %s differs from the CPU result (%s; atol %g, rtol %g). "
+        "%s To change this, %s.",
+        numerics.provider,
+        numerics.device,
+        numerics.summary(),
+        numerics.atol,
+        numerics.rtol,
+        outcome,
+        " or ".join(steps),
+    )
+    return fall_back
 
 
 def _finish(state: ServingState, timings: dict[str, float]) -> ServingState:
@@ -388,10 +472,16 @@ def prepare_serving(
     report(Phase.load)
     verdict = _verdict_for(loaded, reference, opts, timings)
     name, notes = choose_backend(verdict, opts)
-    backend = _build_backend(name, verdict, opts, timings)
+    prepared = verdict.prepared
+    feeds = example_feeds(prepared.input_names, prepared.inputs) if prepared is not None else None
+    backend, numerics = _build_checked(name, verdict, opts, timings, feeds)
+    if _falls_back(numerics, name, opts, prepared is not None):
+        notes.append("serving check failed: serving torch")
+        name = BackendName.torch
+        backend, numerics = _build_checked(name, verdict, opts, timings, feeds)
+        _falls_back(numerics, name, opts, True)
     verdict.take_session()  # a torch backend did not take it
 
-    prepared = verdict.prepared
     if prepared is not None:
         input_names, example_inputs = prepared.input_names, prepared.inputs
         axis_bounds = dynamic_bounds(prepared.input_names, prepared.dynamic_shapes)
@@ -416,6 +506,7 @@ def prepare_serving(
         source_kind=loaded.kind,
         axis_bounds=axis_bounds,
         hf_source=loaded.source if loaded.kind == HF_REPO_DIR else tokenizer_from,
+        serving_numerics=numerics,
     )
     return _finish(state, timings)
 
@@ -443,22 +534,34 @@ def state_from_entry(
     timings: dict[str, float] = {}
     example_inputs: tuple | None
 
-    if name == BackendName.torch:
+    def use_torch() -> tuple[str, str, tuple[str, ...], tuple | None, AxisBounds]:
         # Eager serving needs the model: the entry has only the export and its verdict.
-        if loaded is None:
+        nonlocal loaded, reference
+        if loaded is None or loaded.model is None:
             loaded, reference = load()
         report(Phase.load)
         prepared = _prepare(loaded, opts)
         verdict.prepared = prepared
-        source, kind = loaded.source, loaded.kind
-        input_names, example_inputs = prepared.input_names, prepared.inputs
-        axis_bounds = dynamic_bounds(prepared.input_names, prepared.dynamic_shapes)
+        bounds = dynamic_bounds(prepared.input_names, prepared.dynamic_shapes)
+        return loaded.source, loaded.kind, prepared.input_names, prepared.inputs, bounds
+
+    if name == BackendName.torch:
+        source, kind, input_names, example_inputs, axis_bounds = use_torch()
     else:
         _drop_models(loaded, reference)
         input_names, example_inputs = tuple(entry.input_names), entry.example_inputs()
         axis_bounds = axis_bounds_from_json(entry.axis_bounds)
 
-    backend = _build_backend(name, verdict, opts, timings)
+    def feeds_of() -> dict[str, np.ndarray] | None:
+        return None if example_inputs is None else example_feeds(input_names, example_inputs)
+
+    backend, numerics = _build_checked(name, verdict, opts, timings, feeds_of())
+    if _falls_back(numerics, name, opts, True):
+        notes.append("serving check failed: serving torch")
+        name = BackendName.torch
+        source, kind, input_names, example_inputs, axis_bounds = use_torch()
+        backend, numerics = _build_checked(name, verdict, opts, timings, feeds_of())
+        _falls_back(numerics, name, opts, True)
     state = ServingState(
         source,
         verdict,
@@ -471,6 +574,7 @@ def state_from_entry(
         axis_bounds=axis_bounds,
         hf_source=hf_source,
         reused=reused,
+        serving_numerics=numerics,
     )
     return _finish(state, timings)
 

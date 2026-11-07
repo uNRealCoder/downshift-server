@@ -43,3 +43,9 @@ def test_each_metric_is_on_the_page():
 def test_the_page_is_linked():
     assert "stability.md" in (ROOT / "docs" / "README.md").read_text(encoding="utf-8")
     assert "stability.md" in (ROOT / "llms.txt").read_text(encoding="utf-8")
+
+
+def test_the_tf32_tolerances_are_experimental():
+    experimental = PAGE[PAGE.index("## Experimental") :]
+    assert "DOWNSHIFT_TOL_TF32_ATOL" in experimental
+    assert "DOWNSHIFT_TOL_TF32_RTOL" in experimental

@@ -305,9 +305,13 @@ def test_ort_providers_prefers_cuda_when_available(monkeypatch):
         "get_available_providers",
         lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"],
     )
-    assert backends_mod._ort_providers("cuda") == ["CUDAExecutionProvider", "CPUExecutionProvider"]
-    assert backends_mod._ort_providers("cuda:1") == [
-        ("CUDAExecutionProvider", {"device_id": "1"}),
+    cuda = backends_mod._ort_providers("cuda")
+    assert cuda == [
+        ("CUDAExecutionProvider", {"device_id": "0", "use_tf32": "0"}),
+        "CPUExecutionProvider",
+    ]
+    assert backends_mod._ort_providers("cuda:1", tf32=True) == [
+        ("CUDAExecutionProvider", {"device_id": "1", "use_tf32": "1"}),
         "CPUExecutionProvider",
     ]
     assert backends_mod._ort_providers("cpu") == ["CPUExecutionProvider"]
@@ -558,3 +562,104 @@ def test_a_cuda_index_above_the_gpu_count_is_a_usage_error(monkeypatch):
     with pytest.raises(ValueError, match=r"--device cuda:5: this machine has 2 GPUs"):
         TorchBackend(clean_mlp.make_model(), ("x",), device="cuda:5")
     assert backends_mod.resolve_device("cuda:1") == "cuda:1"
+
+
+class _Off:
+    """A backend whose outputs are off by 1e-2, as a GPU with a bad kernel would be."""
+
+    def __init__(self, backend) -> None:
+        self._backend = backend
+        self.name = backend.name
+
+    def infer(self, inputs):
+        return {k: v + 1e-2 for k, v in self._backend.infer(inputs).items()}
+
+    def metadata(self):
+        return self._backend.metadata()
+
+
+@pytest.fixture
+def off_onnx(monkeypatch):
+    """Serve as if on a GPU, where the ONNX backend is off by 1e-2 and torch is exact."""
+    from downshift.serve import engine as engine_mod
+
+    real = engine_mod.check_serving
+
+    def check(backend, *args, **kwargs):
+        wrapped = _Off(backend) if backend.name == "onnxruntime" else backend
+        return real(wrapped, *args, **kwargs)
+
+    monkeypatch.setattr(engine_mod, "serves_off_cpu", lambda backend: True)
+    monkeypatch.setattr(engine_mod, "check_serving", check)
+
+
+def test_a_failed_serving_check_falls_back_to_torch_and_warns_once(off_onnx, serve_fixture, caplog):
+    with caplog.at_level(logging.WARNING, logger="downshift.serve"):
+        state = serve_fixture("clean_mlp")
+
+    assert state.backend.name == "torch"
+    assert state.serving_numerics is not None and state.serving_numerics.ok
+    assert state.serving_numerics.provider == "torch"
+    assert any("serving torch" in note for note in state.notes)
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "differs from the CPU result" in warnings[0]
+    assert "--device cpu" in warnings[0] and "--force-onnx" in warnings[0]
+
+
+def test_a_failed_serving_check_keeps_onnx_with_force_onnx(off_onnx, serve_fixture, caplog):
+    with caplog.at_level(logging.WARNING, logger="downshift.serve"):
+        state = serve_fixture("clean_mlp", force_onnx=True)
+
+    assert state.backend.name == "onnxruntime"
+    assert state.serving_numerics is not None and not state.serving_numerics.ok
+    assert state.serving_numerics.max_abs_err > 1e-3
+    assert "Serving it as asked" in caplog.text
+
+
+def test_a_failed_serving_check_of_torch_warns_and_keeps_serving(caplog):
+    from downshift.serve.engine import _falls_back
+    from downshift.serve.numerics import ServingNumerics
+
+    failed = ServingNumerics("torch", "cuda", True, 1, 0.5, None, False, 1e-3, 1e-2)
+    with caplog.at_level(logging.WARNING, logger="downshift.serve"):
+        assert _falls_back(failed, backends_mod.BackendName.torch, ServeOptions(), True) is False
+
+    assert "No other backend can serve" in caplog.text
+    assert "remove --tf32" in caplog.text
+
+
+def test_a_reused_export_falls_back_to_torch_after_a_failed_serving_check(off_onnx, exported_mlp):
+    from downshift.core.memo import ExportEntry
+    from downshift.serve.engine import state_from_entry
+
+    path, model, verdict = exported_mlp
+    inputs = clean_mlp.make_inputs()
+    entry = ExportEntry(
+        verdict.to_dict(), ["x"], {}, feeds={"x": inputs[0].numpy()}, onnx_path=path
+    )
+    loaded = LoadedModel("m", model=model)
+
+    state = state_from_entry(
+        entry, lambda: (loaded, None), ServeOptions(warmup=0), None, source="m", kind="x"
+    )
+
+    assert state.backend.name == "torch"
+    assert state.serving_numerics is not None and state.serving_numerics.ok
+
+
+def test_serving_on_the_cpu_runs_no_serving_check(mlp_state):
+    assert mlp_state.serving_numerics is None
+
+
+def test_tf32_off_sets_the_torch_flags_of_a_cuda_backend(monkeypatch):
+    from downshift.serve import backends as b
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.nn.Module, "to", lambda self, *a, **k: self)
+    monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32", False)
+    monkeypatch.setattr(torch.backends.cudnn, "allow_tf32", True)
+    b.TorchBackend(clean_mlp.make_model(), ("x",), device="cuda", tf32=True)
+    assert torch.backends.cuda.matmul.allow_tf32 is True
+    b.TorchBackend(clean_mlp.make_model(), ("x",), device="cuda", tf32=False)
+    assert torch.backends.cuda.matmul.allow_tf32 is False

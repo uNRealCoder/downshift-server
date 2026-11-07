@@ -181,7 +181,7 @@ def _bounds_text(dynamic_shapes: tuple | None) -> str | None:
 WorstCandidate = tuple[int, tuple[int, ...], float, float, float]
 
 
-def _compare_sample(
+def compare_sample(
     torch_outs: list[torch.Tensor],
     ort_outs: list,
     atol: float,
@@ -367,7 +367,7 @@ def verify(
                     f"{first_line(exc)}"
                 ) from exc
 
-            sample_abs, sample_rel, failed, note, candidate = _compare_sample(
+            sample_abs, sample_rel, failed, note, candidate = compare_sample(
                 torch_outs, ort_outs, report.tolerance_abs, report.tolerance_rel, i
             )
             if note is not None:

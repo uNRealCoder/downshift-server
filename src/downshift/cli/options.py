@@ -326,6 +326,14 @@ MatryoshkaOpt = Annotated[
         "/v1/embeddings then accepts 'dimensions'. Default: off",
     ),
 ]
+Tf32Opt = Annotated[
+    bool,
+    typer.Option(
+        "--tf32/--no-tf32",
+        help="Allow TF32 math on the GPU. It is faster and less exact. The serving check then "
+        "uses the TF32 tolerances. Default: off",
+    ),
+]
 AccessLogOpt = Annotated[
     bool,
     typer.Option(

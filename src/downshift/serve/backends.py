@@ -92,8 +92,9 @@ def resolve_device(device: str, *, ort_backend: bool = False) -> str:
     return device
 
 
-def _ort_providers(device: str) -> list[OrtProvider]:
-    """The providers for `device`. For cuda:N, the CUDA provider gets device_id N."""
+def _ort_providers(device: str, tf32: bool = False) -> list[OrtProvider]:
+    """The providers for `device`. For cuda:N, the CUDA provider gets device_id N. ORT allows
+    TF32 by default, so the provider gets use_tf32 as `tf32` says."""
     if not device.startswith("cuda"):
         return [_CPU_EP]
     available = ort.get_available_providers()
@@ -104,7 +105,8 @@ def _ort_providers(device: str) -> list[OrtProvider]:
             "pass --device cpu"
         )
     _, _, index = device.partition(":")
-    return [(_CUDA_EP, {"device_id": index}) if index else _CUDA_EP, _CPU_EP]
+    options = {"device_id": index or "0", "use_tf32": "1" if tf32 else "0"}
+    return [(_CUDA_EP, options), _CPU_EP]
 
 
 def _require_cuda_provider(session: ort.InferenceSession, device: str) -> None:
@@ -143,6 +145,7 @@ class OnnxRuntimeBackend:
         inter_op_threads: int = 0,
         *,
         session: ort.InferenceSession | None = None,
+        tf32: bool = False,
     ) -> None:
         if session is not None:
             self.session = session
@@ -156,7 +159,7 @@ class OnnxRuntimeBackend:
                     "the CPU. To use the GPU, install onnxruntime-gpu"
                 )
             options = _session_options(intra_op_threads, inter_op_threads)
-            self.session = new_session(model, _ort_providers(device), options)
+            self.session = new_session(model, _ort_providers(device, tf32), options)
             try:
                 _require_cuda_provider(self.session, device)
             except ValueError as exc:
@@ -209,6 +212,7 @@ class TorchBackend:
         example_inputs: tuple | None = None,
         intra_op_threads: int = 0,
         dynamic_shapes: tuple | None = None,
+        tf32: bool = False,
     ) -> None:
         if intra_op_threads > 0:  # 0 means "keep the default of torch"
             torch.set_num_threads(intra_op_threads)
@@ -219,6 +223,9 @@ class TorchBackend:
                 "(torch.cuda.is_available() is False). Install a CUDA build of torch, or "
                 "pass --device cpu"
             )
+        if self.device.startswith("cuda"):
+            torch.backends.cuda.matmul.allow_tf32 = tf32
+            torch.backends.cudnn.allow_tf32 = tf32
         self.module = module.eval().to(self.device)
         self.input_names = list(input_names)
         self.verified_provider: str | None = None

@@ -602,6 +602,9 @@ def build_app(
             execution=current.options.execution.value,
             boot=dict(current.timings),
             warmup=asdict(current.warmup_stats) if current.warmup_stats is not None else None,
+            serving_numerics=(
+                current.serving_numerics.to_dict() if current.serving_numerics else None
+            ),
         )
 
     @app.get("/schema", response_model=SchemaResponse)

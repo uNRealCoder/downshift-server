@@ -171,6 +171,7 @@ downshift export my_pkg.models:build -o artifacts/ --name classifier
 | `--metrics` / `--no-metrics` | `DOWNSHIFT_METRICS` | off | Counts the requests and serves them as Prometheus text on `GET /metrics`. It needs one worker (`--workers 1`). The API key rule of the other routes applies. Refer to "Metrics" in `docs/production.md`. |
 | `--served-model-name NAME` | `DOWNSHIFT_SERVED_MODEL_NAME` | the model source | The model name for `GET /v1/models` and `POST /v1/embeddings`. Without it, the name is the last part of the model path. Refer to "Model name" in `docs/production.md`. |
 | `--matryoshka` / `--no-matryoshka` | `DOWNSHIFT_MATRYOSHKA` | off | Tells downshift that the model was trained for Matryoshka cuts. `POST /v1/embeddings` then accepts `dimensions`. Refer to [`openai.md`](openai.md#dimensions-and---matryoshka). |
+| `--tf32` / `--no-tf32` | `DOWNSHIFT_TF32` | off | Allows TF32 math on the GPU. It is faster and less exact. The serving check then uses the TF32 tolerances (`DOWNSHIFT_TOL_TF32_ATOL` and `DOWNSHIFT_TOL_TF32_RTOL`). Without this option, both backends keep TF32 off on the GPU. Refer to [`production.md`](production.md#gpu). |
 | `--access-log` / `--no-access-log` | - | on | One log line for each request. |
 
 `serve` binds the port first. It then loads, exports, verifies and warms up on a background thread. `/ready` gives `503` until the model is ready. `serve` serves all four verdicts. It exits early only for a usage error (`4`) or a crash (`5`) before the server is ready. Downshift loads the TLS files before the model, so a bad TLS file stops `serve` with exit code `4`.
@@ -211,6 +212,7 @@ Downshift reads these variables one time, when `downshift` is imported. To chang
 | `DOWNSHIFT_METRICS` | `0` | `--metrics` (`1` or `0`, also `true`, `false`, `yes`, `no`, `on`, `off`) |
 | `DOWNSHIFT_SERVED_MODEL_NAME` | unset | `--served-model-name` |
 | `DOWNSHIFT_MATRYOSHKA` | `0` | `--matryoshka` (`1` or `0`, as for `DOWNSHIFT_METRICS`) |
+| `DOWNSHIFT_TF32` | `0` | `--tf32` (`1` or `0`, as for `DOWNSHIFT_METRICS`) |
 | `DOWNSHIFT_AXIS_MAX` | unset | `--axis-max` (`NAME=N,NAME=N`) |
 | `DOWNSHIFT_EXPORT_CACHE_DIR` | unset | `--export-cache-dir` |
 | `DOWNSHIFT_WORKERS` | `1` | `--workers` (CLI only) |
@@ -221,6 +223,7 @@ Downshift reads these variables one time, when `downshift` is imported. To chang
 | `DOWNSHIFT_CACHE_HEADER` | `X-Downshift-Cache` | The name of the result-cache header of `/predict` (`hit`, `partial` or `miss`). Use letters, digits and `-` only. An empty value means the default. There is no flag. |
 | `DOWNSHIFT_TOL_{FLOAT32,FLOAT64,FLOAT16,BFLOAT16}_{ATOL,RTOL}` | refer to "Tolerances" | The default tolerances. |
 | `DOWNSHIFT_TOL_COSINE` | `0.9999` | The smallest cosine similarity between a torch embedding row and an ONNX Runtime row. |
+| `DOWNSHIFT_TOL_TF32_ATOL`, `DOWNSHIFT_TOL_TF32_RTOL` | `1e-3`, `1e-2` | The smallest tolerance of the serving check on a GPU when `--tf32` is on. The check uses the larger of this pair and the tolerance of the verdict. |
 
 A bad value (for example `DOWNSHIFT_PORT=abc`) stops the process at start with a message that names the variable. The library functions `check()`, `export()` and `intake()` use `8` as the default of `samples`. They do not read `DOWNSHIFT_SAMPLES`.
 

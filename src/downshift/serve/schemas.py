@@ -293,6 +293,7 @@ class MetadataResponse(BaseModel):
     execution: str  # "threadpool" or "inline" (--execution)
     boot: dict[str, float] = Field(default_factory=dict)
     warmup: dict | None = None
+    serving_numerics: dict | None = None  # the GPU check. None if serving on the CPU
 
 
 # --------------------------------------------------------------------------------------------------

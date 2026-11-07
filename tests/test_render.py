@@ -18,6 +18,7 @@ from downshift.core.verdict import ExportVerdict
 from downshift.core.verify import NumericsReport, WorstMismatch
 from downshift.serve.backends import BackendMeta
 from downshift.serve.engine import ServeOptions, ServingState, WarmupStats
+from downshift.serve.numerics import ServingNumerics
 from downshift.serve.options import ExecutionChoice
 from downshift.serve.schemas import OutputEncoding
 
@@ -690,3 +691,23 @@ def test_print_booting_is_plain_ascii(caplog):
     assert len(messages) == 2
     assert all(_plain_ascii(m) for m in messages)
     assert "http://localhost:8000" in messages[1]
+
+
+def test_print_banner_shows_the_gpu_check(caplog):
+    check = ServingNumerics(
+        "CUDAExecutionProvider", "cuda:0", False, 1, 3.1e-6, None, True, 1e-4, 1e-3
+    )
+    render.print_banner(_serving_state(_verdict(), serving_numerics=check), "127.0.0.1", 8000)
+    assert "GPU check" in caplog.text
+    assert "CUDAExecutionProvider cuda:0  max abs err 3.1e-06 over 1 samples  OK" in caplog.text
+
+
+def test_print_banner_shows_a_failed_gpu_check_with_tf32(caplog):
+    check = ServingNumerics("torch", "cuda", True, 1, 0.5, 0.9, False, 1e-3, 1e-2)
+    render.print_banner(_serving_state(_verdict(), serving_numerics=check), "127.0.0.1", 8000)
+    assert "min cosine 0.900000  FAILED  (TF32 on)" in caplog.text
+
+
+def test_print_banner_has_no_gpu_check_row_on_the_cpu(caplog):
+    render.print_banner(_serving_state(_verdict()), "127.0.0.1", 8000)
+    assert "GPU check" not in caplog.text

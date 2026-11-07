@@ -253,7 +253,25 @@ A person tested `--device cuda` one time, by hand: an RTX 4050, torch 2.14 (CUDA
 - Install `onnxruntime-gpu` in place of `onnxruntime`.
 - Install a torch build with the same CUDA major version as the `onnxruntime-gpu` wheel (1.30 needs CUDA 13). If the versions differ, ONNX Runtime cannot load its CUDA libraries, and `serve --device cuda` stops with exit code `4`.
 
-The gate runs only on the CPU. The CUDA provider of ONNX Runtime uses TF32 matrix multiplies by default. In the test, this moved the output of a small MLP by 4e-4 against the CPU, which is more than the float32 tolerance. The gate does not see this. With `--backend torch` on CUDA, the output matched the CPU to 5e-8. The `Verified on` row of the banner says when the numerics did not cover the serving device.
+The verdict is made on the CPU. When the server serves on a GPU, it runs a serving check at boot. It is not on the request path.
+
+1. The server builds the backend that serves (ONNX Runtime with the CUDA provider, or torch on `cuda`).
+2. It runs the example input one time through that backend and one time through the CPU. For ONNX Runtime, the CPU run is the same graph on the CPU provider. For torch, it is the same model on the CPU.
+3. It compares the two results with the tolerance of the verdict. For an embedding model, each row must also reach `DOWNSHIFT_TOL_COSINE`.
+
+The `GPU check` row of the banner shows the result, for example `CUDAExecutionProvider cuda  max abs err 3.1e-06 over 1 samples  OK`. `GET /metadata` has the same data in `serving_numerics`. On the CPU, the check does not run and `serving_numerics` is `null`. If the model has no example input (a `.onnx` file with no reference), the check does not run.
+
+The CUDA provider of ONNX Runtime uses TF32 matrix multiplies by default on Ampere and newer GPUs. TF32 moves the result by about 1e-3 relative, which is more than the float32 tolerance. For this reason, downshift turns TF32 off for ONNX Runtime (`use_tf32` is `0`) and for torch (`torch.backends.cuda.matmul.allow_tf32` and `torch.backends.cudnn.allow_tf32` are `False`). To allow TF32, pass `--tf32` (or set `DOWNSHIFT_TF32=1`). The serving check then uses the larger of the TF32 tolerance (`DOWNSHIFT_TOL_TF32_ATOL` and `DOWNSHIFT_TOL_TF32_RTOL`, default `1e-3` and `1e-2`) and the tolerance of the verdict.
+
+If the serving check fails, the server logs one `WARNING` that names the provider, the error and the next step.
+
+- With `--backend auto` and no `--force-onnx`, the server serves torch instead (as for a DEGRADED verdict). The torch backend then gets the same check.
+- With `--backend onnxruntime` or `--force-onnx`, the server serves ONNX Runtime as you asked. `serving_numerics.ok` is `false`.
+- If torch fails the check, the server keeps serving, because there is no other backend. `serving_numerics.ok` is `false`.
+
+To remove the failure, do one of these steps: remove `--tf32`, pass `--device cpu`, or pass `--force-onnx` to keep ONNX Runtime.
+
+The check adds a few inferences to the boot time. The `session` value of `boot` includes them.
 
 ## Kubernetes
 

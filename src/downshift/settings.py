@@ -231,6 +231,10 @@ SERVED_MODEL_NAME = os.environ.get("DOWNSHIFT_SERVED_MODEL_NAME") or None
 # `dimensions`: it keeps the first values of each vector and scales the vector to unit length.
 MATRYOSHKA = _env_bool("DOWNSHIFT_MATRYOSHKA", False)
 
+# Allow TF32 math on the GPU (Ampere and newer). It is faster and less exact. It is off by
+# default, so the GPU result stays close to the CPU result that the verdict checked.
+TF32 = _env_bool("DOWNSHIFT_TF32", False)
+
 # HTTPS. If SSL_CERTFILE is set, `serve` uses TLS. The key can be in the cert file, or in its
 # own file. The password of an encrypted key is an environment variable only, so that it does
 # not show in the process list.
@@ -259,3 +263,11 @@ TOLERANCES: dict[str, tuple[float, float]] = {
 # The smallest cosine similarity between a torch embedding and an ONNX Runtime embedding. The
 # verification checks it for each row of an embedding model, in addition to atol and rtol.
 TOLERANCE_COSINE = _env_float("DOWNSHIFT_TOL_COSINE", 0.9999)
+
+# (atol, rtol) of the serving check when TF32 is on. TF32 has a 10-bit mantissa, so its error is
+# about 1e-3 relative. The serving check uses the larger of this pair and the tolerance of the
+# verdict. Experimental.
+TOLERANCE_TF32 = (
+    _env_float("DOWNSHIFT_TOL_TF32_ATOL", 1e-3),
+    _env_float("DOWNSHIFT_TOL_TF32_RTOL", 1e-2),
+)

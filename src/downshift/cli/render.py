@@ -389,6 +389,14 @@ def print_banner(
     verified_on = _verified_on_text(state)
     if verified_on is not None:
         rows.add("Verified on", verified_on)
+    gpu_check = state.serving_numerics
+    if gpu_check is not None:
+        verdict_word = "OK" if gpu_check.ok else "FAILED"
+        rows.add(
+            "GPU check",
+            f"{gpu_check.provider} {gpu_check.device}  {gpu_check.summary()}  {verdict_word}"
+            f"{'  (TF32 on)' if gpu_check.tf32 else ''}",
+        )
     for note in state.notes:  # notes about the backend selection, from the engine
         rows.note(f"{_WARN} {note}")
     if state.embedding is not None:

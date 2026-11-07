@@ -306,3 +306,18 @@ def test_an_empty_new_api_key_wins_over_the_old_name(monkeypatch: pytest.MonkeyP
     monkeypatch.setenv("DOWNSHIFT_API_KEY", "")
     monkeypatch.setenv("DOWNSHIFT_SERVER_API_KEY", "old")
     assert importlib.reload(settings).API_KEY == ""
+
+
+def test_tf32_is_off_by_default_and_read_from_the_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DOWNSHIFT_TF32", raising=False)
+    assert importlib.reload(settings).TF32 is False
+
+    monkeypatch.setenv("DOWNSHIFT_TF32", "1")
+    assert importlib.reload(settings).TF32 is True
+
+
+def test_the_tf32_tolerance_is_read_from_the_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert importlib.reload(settings).TOLERANCE_TF32 == (1e-3, 1e-2)
+
+    monkeypatch.setenv("DOWNSHIFT_TOL_TF32_ATOL", "0.5")
+    assert importlib.reload(settings).TOLERANCE_TF32 == (0.5, 1e-2)

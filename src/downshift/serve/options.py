@@ -62,6 +62,7 @@ class ServeOptions:
     metrics: bool = settings.METRICS  # count requests and serve GET /metrics
     served_model_name: str | None = settings.SERVED_MODEL_NAME  # None = from the model source
     matryoshka: bool = settings.MATRYOSHKA  # /v1/embeddings takes `dimensions`
+    tf32: bool = settings.TF32  # allow TF32 math on the GPU
     atol: float | None = None  # None means "by the floating dtype of the model"
     rtol: float | None = None
     seed: int = 0  # makes the verification samples reproducible

@@ -10,8 +10,8 @@ from downshift.core.shapes import resize_axis
 from downshift.core.verify import (
     NumericsReport,
     OnnxRuntimeError,
-    _compare_sample,
     as_tensor_list,
+    compare_sample,
     default_tolerances,
     load_session,
     make_shared_axis0_vary_fn,
@@ -68,7 +68,7 @@ def test_compare_sample_uses_per_element_allclose_not_the_maxima():
     expected = torch.tensor([1000.0, 1e-6])
     got = np.array([1000.5, 1e-6 + 5e-5])
 
-    sample_abs, sample_rel, failed, note, _ = _compare_sample([expected], [got], atol, rtol, 0)
+    sample_abs, sample_rel, failed, note, _ = compare_sample([expected], [got], atol, rtol, 0)
 
     assert failed is False
     assert note is None
@@ -82,7 +82,7 @@ def test_compare_sample_fails_when_any_single_element_exceeds_allclose():
     expected = torch.tensor([1.0])
     got = np.array([2.0])  # abs_err 1.0 >> atol + rtol * |expected| == 1.1e-3
 
-    _, _, failed, note, _ = _compare_sample([expected], [got], atol, rtol, 0)
+    _, _, failed, note, _ = compare_sample([expected], [got], atol, rtol, 0)
 
     assert failed is True
     assert note is None
@@ -92,7 +92,7 @@ def test_compare_sample_notes_a_shape_mismatch_instead_of_raising():
     expected = torch.zeros(2, 4)
     got = np.zeros((2, 3))
 
-    _, _, failed, note, _ = _compare_sample([expected], [got], 1e-4, 1e-3, 3)
+    _, _, failed, note, _ = compare_sample([expected], [got], 1e-4, 1e-3, 3)
 
     assert failed is True
     assert note == "sample 3: output_0 shape (2, 4) from torch vs (2, 3) from onnxruntime"
@@ -102,7 +102,7 @@ def test_compare_sample_notes_an_output_count_mismatch_instead_of_raising():
     expected = [torch.zeros(2), torch.zeros(2)]
     got = [np.zeros(2)]
 
-    _, _, failed, note, _ = _compare_sample(expected, got, 1e-4, 1e-3, 1)
+    _, _, failed, note, _ = compare_sample(expected, got, 1e-4, 1e-3, 1)
 
     assert failed is True
     assert note == "sample 1: 2 torch outputs vs 1 onnxruntime outputs"
@@ -112,7 +112,7 @@ def test_compare_sample_worst_is_the_argmax_error_element():
     expected = torch.tensor([[1.0, 2.0], [3.0, 100.0]])
     got = np.array([[1.0, 2.0], [3.0, 90.0]])  # only [1, 1] is off, by 10
 
-    _, _, _, _, worst = _compare_sample([expected], [got], 1e-4, 1e-3, 5)
+    _, _, _, _, worst = compare_sample([expected], [got], 1e-4, 1e-3, 5)
 
     assert worst is not None
     output_idx, index, expected_val, got_val, abs_err = worst
@@ -125,7 +125,7 @@ def test_compare_sample_worst_is_none_when_no_output_is_comparable():
     expected = torch.zeros(2, 4)
     got = np.zeros((2, 3))
 
-    _, _, _, _, worst = _compare_sample([expected], [got], 1e-4, 1e-3, 0)
+    _, _, _, _, worst = compare_sample([expected], [got], 1e-4, 1e-3, 0)
 
     assert worst is None
 
@@ -158,7 +158,7 @@ def test_bf16_output_is_cast_to_float32_before_numpy_conversion():
     assert expected.dtype is torch.bfloat16
 
     got = expected.float().numpy()
-    sample_abs, sample_rel, failed, note, _ = _compare_sample([expected], [got], 1.0, 1.0, 0)
+    sample_abs, sample_rel, failed, note, _ = compare_sample([expected], [got], 1.0, 1.0, 0)
 
     assert note is None
     assert failed is False
@@ -412,7 +412,7 @@ def test_a_nan_mismatch_is_the_worst_element_and_stays_out_of_the_error_numbers(
     expected = [torch.tensor([float("nan")]), torch.tensor([1.0])]
     got = [np.array([0.0]), np.array([3.0])]
 
-    sample_abs, sample_rel, failed, note, worst = _compare_sample(expected, got, 1e-4, 1e-3, 0)
+    sample_abs, sample_rel, failed, note, worst = compare_sample(expected, got, 1e-4, 1e-3, 0)
 
     assert failed is True
     assert sample_abs == 2.0
@@ -427,7 +427,7 @@ def test_an_all_nan_output_reports_the_nan_and_no_error_of_zero():
     expected = [torch.tensor([1.0, 2.0, 3.0])]
     got = [np.array([float("nan")] * 3)]
 
-    sample_abs, _, failed, note, worst = _compare_sample(expected, got, 1e-4, 1e-3, 4)
+    sample_abs, _, failed, note, worst = compare_sample(expected, got, 1e-4, 1e-3, 4)
 
     assert failed is True
     assert sample_abs == 0.0
@@ -441,7 +441,7 @@ def test_a_nan_in_both_outputs_still_fails_the_sample():
     expected = [torch.tensor([float("nan"), 1.0])]
     got = [np.array([float("nan"), 1.0])]
 
-    _, _, failed, note, worst = _compare_sample(expected, got, 1e-4, 1e-3, 0)
+    _, _, failed, note, worst = compare_sample(expected, got, 1e-4, 1e-3, 0)
 
     assert failed is True  # the pass or fail rule did not change: NaN is never close
     assert note is not None and worst is not None

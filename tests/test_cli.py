@@ -914,3 +914,13 @@ def test_the_metrics_and_workers_variables_together_are_a_usage_error():
 
     assert result.returncode == main.EXIT_USAGE
     assert "--metrics needs one worker" in result.stdout
+
+
+def test_serve_tf32_flag_reaches_the_options_and_the_worker_json(monkeypatch):
+    _, captured = _serve_captured(monkeypatch)
+    assert captured["app"].state.serving.options.tf32 is False
+
+    _, captured = _serve_captured(monkeypatch, "--tf32")
+    options = captured["app"].state.serving.options
+    assert options.tf32 is True
+    assert ServeArgs.from_json(_serve_args(options=options).to_json()).options.tf32 is True

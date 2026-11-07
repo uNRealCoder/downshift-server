@@ -117,6 +117,7 @@ Refer to "Environment variables" in [`cli.md`](cli.md). These variables are froz
 
 - Server: `DOWNSHIFT_HOST`, `DOWNSHIFT_PORT`, `DOWNSHIFT_WORKERS`, `DOWNSHIFT_DEVICE`, `DOWNSHIFT_BACKEND`, `DOWNSHIFT_WARMUP`, `DOWNSHIFT_SAMPLES`.
 - Threads and limits: `DOWNSHIFT_INTRA_OP_THREADS`, `DOWNSHIFT_INTER_OP_THREADS`, `DOWNSHIFT_PREP_THREADS`, `DOWNSHIFT_MAX_INPUT_BYTES`, `DOWNSHIFT_MAX_BODY_BYTES`, `DOWNSHIFT_MAX_CONCURRENCY`, `DOWNSHIFT_MAX_QUEUE`, `DOWNSHIFT_REQUEST_TIMEOUT`.
+- GPU: `DOWNSHIFT_TF32`.
 - Request and response: `DOWNSHIFT_OUTPUT_ENCODING`, `DOWNSHIFT_RESULT_CACHE_ROWS`, `DOWNSHIFT_SERVER_TIMING`, `DOWNSHIFT_METRICS`, `DOWNSHIFT_SERVED_MODEL_NAME`, `DOWNSHIFT_MATRYOSHKA`.
 - Security: `DOWNSHIFT_API_KEY`, `DOWNSHIFT_SSL_CERTFILE`, `DOWNSHIFT_SSL_KEYFILE`, `DOWNSHIFT_SSL_KEYFILE_PASSWORD`.
 - Export cache: `DOWNSHIFT_EXPORT_CACHE_DIR`.
@@ -136,6 +137,7 @@ The items in this section can change in a 1.x minor release. A change has a note
 
 - The `Adapter` protocol (the attribute `name`, and the methods `matches`, `example_inputs` and `prepare`) and the fields of `Prepared`. Refer to [`adapters.md`](adapters.md).
 - The tolerance variables: `DOWNSHIFT_TOL_FLOAT32_ATOL`, `DOWNSHIFT_TOL_FLOAT32_RTOL`, `DOWNSHIFT_TOL_FLOAT64_ATOL`, `DOWNSHIFT_TOL_FLOAT64_RTOL`, `DOWNSHIFT_TOL_FLOAT16_ATOL`, `DOWNSHIFT_TOL_FLOAT16_RTOL`, `DOWNSHIFT_TOL_BFLOAT16_ATOL`, `DOWNSHIFT_TOL_BFLOAT16_RTOL` and `DOWNSHIFT_TOL_COSINE`.
+- The tolerances of the serving check on a GPU: `DOWNSHIFT_TOL_TF32_ATOL` and `DOWNSHIFT_TOL_TF32_RTOL`. The check itself (what it runs and the rule for a failure) can also change.
 - `--execution` and `DOWNSHIFT_EXECUTION`.
 - `--axis-max` and `DOWNSHIFT_AXIS_MAX`.
 - `--middleware`.

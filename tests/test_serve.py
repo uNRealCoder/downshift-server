@@ -957,3 +957,18 @@ def test_inline_errors_and_admission_behave_like_the_pools(mlp_state):
     assert state.in_flight == 0
     assert client.post("/predict", json=MLP_INPUT).status_code == 200
     assert state.in_flight == 0
+
+
+def test_metadata_has_no_serving_numerics_on_the_cpu(mlp_client):
+    assert mlp_client.get("/metadata").json()["serving_numerics"] is None
+
+
+def test_metadata_shows_the_serving_numerics(mlp_state, monkeypatch):
+    from downshift.serve.numerics import ServingNumerics
+
+    check = ServingNumerics("CUDAExecutionProvider", "cuda", False, 1, 2e-6, None, True, 1e-4, 1e-3)
+    monkeypatch.setattr(mlp_state, "serving_numerics", check)
+    with TestClient(build_app(mlp_state)) as client:
+        body = client.get("/metadata").json()["serving_numerics"]
+    assert body["provider"] == "CUDAExecutionProvider"
+    assert body["ok"] is True and body["tf32"] is False and body["min_cosine"] is None
