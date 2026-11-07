@@ -59,4 +59,5 @@ Known problems and their fixes:
 - [OpenAI routes](docs/openai.md): `/v1/embeddings` for a text embedding model, with the `openai` package.
 - [Production](docs/production.md): HTTPS, the API key, probes, sizing and Kubernetes.
 - [Adapters](docs/adapters.md): add a model family.
+- [Stability](docs/stability.md): what 1.0 freezes, what a breaking change is, and the deprecation rule.
 - OpenAPI: `GET /openapi.json` on a running server.

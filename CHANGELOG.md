@@ -20,6 +20,7 @@ All notable changes to this project are documented here. Format follows
 - `--matryoshka` and `DOWNSHIFT_MATRYOSHKA`: tell downshift that the model was trained for Matryoshka cuts. `POST /v1/embeddings` then accepts `dimensions`. It keeps the first values of each vector and scales the vector to unit length. The result cache keeps the full vector, so one entry serves all sizes. A `dimensions` outside 1 to the vector width is a `400` (`invalid_input`, `param` `dimensions`). Without the option, `dimensions` is a `400` (`dimensions_not_supported`).
 - `--server-timing` also works on `POST /v1/embeddings`.
 - Three error codes: `model_not_found` (`404`), `not_embedding_model` (`400`) and `dimensions_not_supported` (`400`). Refer to "Error codes" in `docs/http-api.md`.
+- `docs/stability.md` lists the public surface that 1.0 freezes: the routes, the headers, the error codes, the metrics, the options, the exit codes, the `DOWNSHIFT_*` variables, `downshift.__all__`, the `Adapter` protocol and the manifest. It defines a breaking change and the deprecation rule: a deprecated item stays for one minor release, with a warning in the log and a `CHANGELOG.md` entry. A test checks that the page names each variable, public name, error code and metric.
 - The docs say that the default verification samples are synthetic (random values at the edge shapes). To verify on inputs like real traffic, use `--vary`.
 
 ### Changed

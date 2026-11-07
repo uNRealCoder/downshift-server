@@ -13,6 +13,7 @@ For a first walkthrough, read the repo [`README.md`](../README.md). The pages be
 | [`python-api.md`](python-api.md) | Use downshift as a library: `check`, `export`, `intake`, `app_for` and the verdict types. |
 | [`serving.md`](serving.md) | Change the serving layer: `ServeOptions`, `ServingState`, the boot builders, the request path and the backends. |
 | [`adapters.md`](adapters.md) | Add a model family with your own adapter. |
+| [`stability.md`](stability.md) | See which routes, codes, metrics, options, variables and names stay the same in 1.x. It also defines a breaking change and the deprecation rule. |
 | [`compatibility.md`](compatibility.md) | See which export hazards downshift catches. A script generates this page. |
 
 ## Module map
