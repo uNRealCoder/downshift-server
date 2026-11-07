@@ -91,7 +91,10 @@ def to_half_precision(result: CaptureResult) -> None:
         proto = onnx.load(str(result.onnx_path))
     else:
         proto = onnx.load_from_string(result.onnx_bytes)
-    proto = convert_float_to_float16(proto, keep_io_types=True)
+    # Shape inference cannot read a proto over 2 GB, the case that uses external data.
+    proto = convert_float_to_float16(
+        proto, keep_io_types=True, disable_shape_infer=result.onnx_path is not None
+    )
     if result.onnx_path is not None:
         half_path = result.onnx_path.with_name("model_fp16.onnx")
         onnx.save_model(

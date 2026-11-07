@@ -307,7 +307,7 @@ def _verify_into(
         verdict.status, verdict.recommended_backend = Status.FAILED, BackendName.torch
         verdict.reason = f"{unrunnable}: {message}"
         if fp16:
-            verdict.reason += ". If an fp16 operation has no CPU kernel, serve with --device cuda"
+            verdict.reason += ". If an fp16 operation has no CPU kernel, export without --fp16, or use a newer ONNX Runtime"
         verdict.warnings.append(message)
         return verdict
     finally:

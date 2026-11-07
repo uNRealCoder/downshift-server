@@ -48,7 +48,7 @@ def check(
 - `samples`: the number of verification samples.
 - `adapter`: an `Adapter` instance, an adapter name (`"generic"`, `"pyg"`, `"hf"`), a `path/to/adapter.py[:attr]` spec, or `None` to detect the adapter.
 - `dynamic`: `{input_name: [axis, ...]}`. It overrides the dynamic axes. The default is axis 0 of every input.
-- `fp16`: exports `model` in fp32, then changes the ONNX graph to fp16 weights (`onnxruntime.transformers.float16`). The graph keeps fp32 inputs and outputs. Downshift verifies it against the fp32 `model` with the `float16` tolerances. The model and the tensors in `example_inputs` do not change. If ONNX Runtime has no CPU kernel for an fp16 operation, the verdict is `FAILED`. Then use a GPU to serve the graph.
+- `fp16`: exports `model` in fp32, then changes the ONNX graph to fp16 weights (`onnxruntime.transformers.float16`). The graph keeps fp32 inputs and outputs. Downshift verifies it against the fp32 `model` with the `float16` tolerances. The model and the tensors in `example_inputs` do not change. If ONNX Runtime has no CPU kernel for an fp16 operation, the verdict is `FAILED`. Then export without `fp16`, or use a newer ONNX Runtime.
 - `verify_numerics`: `False` skips the numerics check. This is the `--no-verify` behaviour. The graph is still exported, but the verdict can be only `UNVERIFIED` and never `CLEAN`.
 - `atol` and `rtol`: override the absolute and relative tolerance. `None` (the default for both) selects the tolerance from the floating dtype of the model. Refer to `downshift.core.verify.default_tolerances` and `settings.TOLERANCES`.
 - `seed`: seeds the generator of verification samples. `verify()` runs under `torch.random.fork_rng`, so the global RNG state of the caller does not change.

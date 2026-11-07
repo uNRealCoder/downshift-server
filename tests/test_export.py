@@ -142,7 +142,7 @@ def test_fp16_graph_that_onnx_runtime_cannot_run_points_to_cuda(monkeypatch) -> 
 
     assert verdict.status == "FAILED"
     assert "Foo(1)" in verdict.reason
-    assert "--device cuda" in verdict.reason
+    assert "without --fp16" in verdict.reason
 
 
 def test_build_verdict_uses_first_failure_and_mines_unsupported_ops_from_all(monkeypatch) -> None:
