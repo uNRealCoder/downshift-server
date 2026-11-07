@@ -167,7 +167,7 @@ If the model was trained for Matryoshka cuts, start the server with `--matryoshk
 
 To count the requests, start the server with `--metrics` (or `DOWNSHIFT_METRICS=1`). The server then serves the counts on `GET /metrics` as Prometheus text (format 0.0.4). If you do not set the option, the route does not exist (`404`), and the request path counts nothing. `/metrics` follows the API key rule of the other routes: send `Authorization: Bearer <key>`. The probes `/health` and `/ready` are the only routes without a key.
 
-Each series has the label `worker`. With one process, its value is `0`. With `--workers N`, its value is the process ID of the worker.
+Each series has the label `worker`. Its value is `0`, because `--metrics` needs one worker.
 
 | Name | Type | Labels | Meaning |
 |---|---|---|---|
@@ -186,7 +186,7 @@ Each series has the label `worker`. With one process, its value is `0`. With `--
 
 The histogram buckets are fixed, in seconds: 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5 and 10. The `queue` stage is `prep_wait`, `infer_wait` and `encode_wait` of the access log added together. The `prep` stage is `parse` and `prep` added together.
 
-A scrape reaches one worker only. Each worker counts for itself, and the workers share no counters. To see the whole server, scrape each worker, or use one worker for each container and scale with replicas. In a container, use one worker and set `replicas`.
+A scrape reaches one worker only, so `--metrics` with `--workers N` (N above 1) is a usage error (exit code `4`). Use one worker for each container and scale with replicas.
 
 Scrape config:
 

@@ -304,8 +304,8 @@ MetricsOpt = Annotated[
     bool,
     typer.Option(
         "--metrics/--no-metrics",
-        help="Count the requests and serve them as Prometheus text on GET /metrics. Each "
-        "worker counts for itself. The API key rule of the other routes applies",
+        help="Count the requests and serve them as Prometheus text on GET /metrics. It "
+        "needs one worker. The API key rule of the other routes applies",
     ),
 ]
 ServedModelNameOpt = Annotated[

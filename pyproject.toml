@@ -68,7 +68,7 @@ Changelog = "https://github.com/uNRealCoder/downshift-server/blob/main/CHANGELOG
 Issues = "https://github.com/uNRealCoder/downshift-server/issues"
 
 [project.scripts]
-downshift = "downshift.cli.main:app"
+downshift = "downshift.cli.entry:main"
 
 # The built-in adapters (generic, pyg, hf) are not entry points. downshift.adapters.registry
 # imports them directly, and it uses sys.modules as a gate. The search for adapters therefore

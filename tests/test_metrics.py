@@ -1,7 +1,6 @@
 """GET /metrics: the Prometheus text, the counters, and the --metrics option."""
 
 import dataclasses
-import os
 import time
 
 import pytest
@@ -10,7 +9,7 @@ from prometheus_client.parser import text_string_to_metric_families
 
 import downshift
 from downshift import settings
-from downshift.cli import render, runtime
+from downshift.cli import render
 from downshift.loading import LoadSpec, load_model
 from downshift.serve.app import RequestIdMiddleware, build_app
 from downshift.serve.engine import prepare_serving
@@ -18,7 +17,7 @@ from downshift.serve.errors import error_response
 from downshift.serve.metrics import BUCKETS, CONTENT_TYPE, Histogram, Metrics
 from downshift.serve.metrics import render as render_text
 from downshift.serve.options import ServeOptions
-from tests.test_cli import _rebuilt_app, _serve_captured
+from tests.test_cli import _serve_captured
 from tests.test_render import _serving_state, _verdict
 
 GOOD = {"inputs": {"x": [[0.0] * 16]}}
@@ -224,22 +223,8 @@ def test_the_api_key_applies_to_metrics(plain_state):
     assert _samples(client, headers={"Authorization": "Bearer s3cret"})
 
 
-def test_the_worker_label_is_the_pid_only_for_a_workers_child(plain_state, monkeypatch):
+def test_the_worker_label_is_zero(plain_state):
     assert 'worker="0"' in _client(plain_state).get("/metrics").text
-
-    args = runtime.ServeArgs(
-        load=LoadSpec("tests.models.clean_mlp:make_model"),
-        options=ServeOptions(samples=1, device="cpu", warmup=1, metrics=True),
-        reference=None,
-        middleware=None,
-        log_level="warning",
-    )
-    monkeypatch.setenv(runtime._SERVE_ARGS_ENV, args.to_json())
-    api = _rebuilt_app()
-
-    text = TestClient(api).get("/metrics").text
-    assert f'worker="{os.getpid()}"' in text
-    assert 'worker="0"' not in text
 
 
 def test_a_label_value_is_escaped():
@@ -277,10 +262,6 @@ def test_the_option_reaches_the_app_and_the_banner(monkeypatch, caplog):
     _, captured = _serve_captured(monkeypatch)
     assert captured["app"].state.serving.options.metrics is False
     assert TestClient(captured["app"]).get("/metrics").status_code == 404
-
-    _serve_captured(monkeypatch, "--metrics", "--workers", "2")
-    args = runtime.ServeArgs.from_json(os.environ[runtime._SERVE_ARGS_ENV])
-    assert args.options.metrics is True
 
 
 def test_the_env_variable_turns_the_option_on(monkeypatch):

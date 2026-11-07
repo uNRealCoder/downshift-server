@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -19,7 +20,7 @@ from downshift.core.axes import DimBound, axis_bounds_from_json, axis_bounds_to_
 from downshift.loading import LoadSpec
 from downshift.serve.options import BackendChoice, ServeOptions
 from downshift.serve.schemas import OutputEncoding
-from tests.conftest import TLS_KEY_PASSWORD
+from tests.conftest import REPO_ROOT, TLS_KEY_PASSWORD
 from tests.models import clean_mlp
 
 CLEAN = "tests.models.clean_mlp:make_model"
@@ -395,7 +396,7 @@ def test_serve_no_access_log_disables_it(monkeypatch):
 @pytest.mark.parametrize("value", ["hex", "safetensors"])
 def test_serve_rejects_unknown_output_encoding(value):
     result = run("serve", CLEAN, "--output-encoding", value)
-    assert result.exit_code == 2, result.output  # typer usage error: not one of the choices
+    assert result.exit_code == main.EXIT_USAGE, result.output  # typer usage error: not one of the choices
 
 
 def test_serve_load_failure_on_the_loader_thread_exits_with_the_usual_code(monkeypatch):
@@ -704,7 +705,7 @@ def test_serve_passes_execution_inline(monkeypatch):
 
 def test_serve_rejects_an_unknown_execution_mode(monkeypatch):
     result = run("serve", CLEAN, "--execution", "auto")
-    assert result.exit_code == 2, result.output
+    assert result.exit_code == main.EXIT_USAGE, result.output
 
 
 def test_serve_execution_round_trips_through_serve_args():
@@ -826,3 +827,62 @@ def test_serve_bad_device_is_usage_error(device):
     result = run("serve", CLEAN, "--device", device)
     assert result.exit_code == 4, result.output
     assert "Use auto, cpu, cuda or cuda:N" in result.output
+
+
+def _downshift(*args: str, **env: str) -> subprocess.CompletedProcess:
+    full_env = {**os.environ, "PYTHONPATH": str(REPO_ROOT / "src"), **env}
+    return subprocess.run(
+        [sys.executable, "-m", "downshift", *args],
+        capture_output=True,
+        text=True,
+        env=full_env,
+        timeout=120,
+    )
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ("serve", CLEAN, "--bogus"),
+        ("serve", CLEAN, "--workers", "0"),
+        ("check",),
+        ("check", CLEAN, "--samples", "x"),
+    ],
+)
+def test_a_click_usage_error_exits_4(args):
+    assert run(*args).exit_code == main.EXIT_USAGE
+
+
+def test_help_still_exits_0():
+    assert run("serve", "--help").exit_code == 0
+
+
+def test_a_usage_error_exits_4_in_a_real_process():
+    result = _downshift("serve", "x", "--bogus")
+
+    assert result.returncode == main.EXIT_USAGE
+    assert "--bogus" in result.stderr
+
+
+def test_a_bad_environment_value_is_a_one_line_usage_error():
+    for args in (("--help",), ("check", CLEAN)):
+        result = _downshift(*args, DOWNSHIFT_PORT="abc")
+
+        assert result.returncode == main.EXIT_USAGE
+        assert "DOWNSHIFT_PORT='abc' is not a valid integer" in result.stdout
+        assert "Traceback" not in result.stdout + result.stderr
+        assert len(result.stdout.strip().splitlines()) == 1
+
+
+def test_metrics_with_more_than_one_worker_is_a_usage_error():
+    result = run("serve", CLEAN, "--metrics", "--workers", "2")
+
+    assert result.exit_code == main.EXIT_USAGE
+    assert "--metrics needs one worker" in result.output
+
+
+def test_the_metrics_and_workers_variables_together_are_a_usage_error():
+    result = _downshift("serve", CLEAN, DOWNSHIFT_METRICS="1", DOWNSHIFT_WORKERS="2")
+
+    assert result.returncode == main.EXIT_USAGE
+    assert "--metrics needs one worker" in result.stdout

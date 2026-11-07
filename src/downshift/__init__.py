@@ -11,7 +11,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from downshift._version import __version__
-from downshift.settings import DEFAULT_SAMPLES, EXPORT_CACHE_DIR
+
+try:
+    from downshift.settings import DEFAULT_SAMPLES, EXPORT_CACHE_DIR
+except (
+    ValueError
+):  # a bad DOWNSHIFT_* value. Every later import of downshift.settings raises it again
+    DEFAULT_SAMPLES, EXPORT_CACHE_DIR = 8, None
 
 if TYPE_CHECKING:
     from downshift.adapters.base import Adapter, Prepared, VaryFn

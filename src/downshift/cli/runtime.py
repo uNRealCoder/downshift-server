@@ -218,7 +218,6 @@ def _serve_app_factory() -> FastAPI:
         middleware=tuple(args.middleware or ()),
         access_log=args.access_log,
         metrics=args.options.metrics,
-        worker=str(os.getpid()),
     )
 
 

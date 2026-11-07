@@ -473,15 +473,13 @@ def build_app(
     api_key: str | None = API_KEY,
     access_log: bool = True,
     metrics: bool = False,
-    worker: str = "0",
 ) -> FastAPI:
     """The app over `state`, or over the result of `loader`. With a loader, the app binds at
     once: /health is 200, and /ready and the model routes are 503 until the loader finishes.
 
     `api_key` defaults to DOWNSHIFT_API_KEY. None or "" turns it off (with a warning).
     `access_log=False` drops the request lines of `downshift.access`.
-    `metrics=True` counts the requests and adds GET /metrics. `worker` is the value of the
-    `worker` label of each series.
+    `metrics=True` counts the requests and adds GET /metrics.
     """
     if (state is None) == (loader is None):
         raise ValueError("build_app needs exactly one of state or loader")
@@ -514,7 +512,7 @@ def build_app(
     load_middleware(app, middleware)
     app.add_middleware(ApiKeyMiddleware, api_key=api_key)
     request_id_header = settings.REQUEST_ID_HEADER
-    counters = Metrics(worker=worker) if metrics else None
+    counters = Metrics() if metrics else None
     app.add_middleware(
         RequestIdMiddleware, access_log=access_log, header=request_id_header, metrics=counters
     )

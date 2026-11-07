@@ -80,6 +80,14 @@ if TYPE_CHECKING:
 EXIT_USAGE = 4  # a bad model spec, a bad option, a file that cannot load
 EXIT_CRASH = 5
 
+# A click usage error (an unknown flag, a missing argument, a bad value) exits 2 by default.
+# That is the DEGRADED exit code, so a usage error uses 4 on all commands.
+try:
+    from typer._click.exceptions import UsageError  # typer 0.27 and later bundle their own click
+except ImportError:  # pragma: no cover
+    from click.exceptions import UsageError  # type: ignore[assignment]
+UsageError.exit_code = EXIT_USAGE
+
 _EXIT_CODES = "Exit codes: 0 CLEAN, 1 FAILED, 2 DEGRADED, 3 UNVERIFIED, 4 usage error, 5 crash."
 
 
@@ -400,6 +408,11 @@ def serve_cmd(
 
     _setup_logging(log_level)
     with _exit_on_error(log_level is LogLevel.debug):
+        if metrics and workers > 1:
+            raise ValueError(
+                "--metrics needs one worker. A scrape reaches one worker only. "
+                "Run one worker for each container and scale with replicas"
+            )
         settings.check_device(device)
         tls = _tls_config(ssl_certfile, ssl_keyfile, settings.SSL_KEYFILE_PASSWORD)
         https = bool(tls)

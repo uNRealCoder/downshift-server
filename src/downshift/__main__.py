@@ -1,3 +1,3 @@
-from downshift.cli.main import app
+from downshift.cli.entry import main
 
-app()
+main()
