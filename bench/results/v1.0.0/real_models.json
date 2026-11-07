@@ -1,0 +1,1906 @@
+{
+  "date": "2026-11-07",
+  "device": "cpu",
+  "versions": {
+    "torch": "2.14.0",
+    "onnx": "1.22.0",
+    "onnxruntime": "1.30.0",
+    "transformers": "5.17.0",
+    "torch_geometric": "2.8.0.post1",
+    "torchvision": "not installed"
+  },
+  "models": [
+    {
+      "id": "sentence-transformers/all-MiniLM-L6-v2",
+      "outcome": "ok",
+      "exit_code": 0,
+      "seconds": 20.2,
+      "verdict": {
+        "status": "CLEAN",
+        "model_family": "hf",
+        "capture_strategy": "strict=False",
+        "opset": 20,
+        "op_types": {
+          "Add": 56,
+          "MatMul": 48,
+          "Reshape": 36,
+          "Transpose": 30,
+          "Slice": 19,
+          "Concat": 17,
+          "LayerNormalization": 13,
+          "Mul": 13,
+          "Shape": 9,
+          "Unsqueeze": 8,
+          "Where": 7,
+          "Softmax": 6,
+          "IsNaN": 6,
+          "Gelu": 6,
+          "Expand": 4,
+          "Gather": 3,
+          "Squeeze": 2,
+          "Cast": 2,
+          "Range": 2,
+          "And": 2,
+          "ReduceSum": 2,
+          "Clip": 2,
+          "Div": 2,
+          "GatherElements": 1,
+          "GreaterOrEqual": 1,
+          "Max": 1,
+          "GatherND": 1,
+          "ReduceL2": 1
+        },
+        "numerics": {
+          "samples_tested": 8,
+          "max_abs_err": 2.384185791015625e-07,
+          "max_rel_err": 0.005889608506136842,
+          "failures": 0,
+          "shape_generalization": true,
+          "tolerance_abs": 0.0001,
+          "tolerance_rel": 0.001,
+          "tolerance_dtype": "float32",
+          "tolerance_overridden": false,
+          "baseline_failed": false,
+          "min_cosine": 0.9999999999994024,
+          "tolerance_cosine": 0.9999,
+          "worst": {
+            "sample": 7,
+            "output": 0,
+            "index": [
+              0,
+              99
+            ],
+            "expected": 0.9429237246513367,
+            "got": 0.9429239630699158,
+            "input_shapes": [
+              [
+                4,
+                3
+              ],
+              [
+                4,
+                3
+              ]
+            ]
+          },
+          "sample_shapes": [
+            [
+              [
+                2,
+                8
+              ],
+              [
+                2,
+                8
+              ]
+            ],
+            [
+              [
+                1,
+                512
+              ],
+              [
+                1,
+                512
+              ]
+            ],
+            [
+              [
+                3,
+                9
+              ],
+              [
+                3,
+                9
+              ]
+            ],
+            [
+              [
+                1,
+                1
+              ],
+              [
+                1,
+                1
+              ]
+            ],
+            [
+              [
+                1,
+                2
+              ],
+              [
+                1,
+                2
+              ]
+            ],
+            [
+              [
+                3,
+                16
+              ],
+              [
+                3,
+                16
+              ]
+            ],
+            [
+              [
+                1,
+                16
+              ],
+              [
+                1,
+                16
+              ]
+            ],
+            [
+              [
+                4,
+                3
+              ],
+              [
+                4,
+                3
+              ]
+            ]
+          ],
+          "output_shapes": [
+            [
+              [
+                2,
+                384
+              ]
+            ],
+            [
+              [
+                1,
+                384
+              ]
+            ],
+            [
+              [
+                3,
+                384
+              ]
+            ],
+            [
+              [
+                1,
+                384
+              ]
+            ],
+            [
+              [
+                1,
+                384
+              ]
+            ],
+            [
+              [
+                3,
+                384
+              ]
+            ],
+            [
+              [
+                1,
+                384
+              ]
+            ],
+            [
+              [
+                4,
+                384
+              ]
+            ]
+          ],
+          "seed": 0,
+          "notes": [],
+          "passed": true
+        },
+        "shape_generalization": true,
+        "shape_generalization_reason": null,
+        "recommended_backend": "onnxruntime",
+        "reason": "exported via strict=False; numerics ok across 8 samples (max abs err 2.38e-07)",
+        "input_names": [
+          "input_ids",
+          "attention_mask"
+        ],
+        "dynamic_dims": {
+          "input_ids": [
+            0,
+            1
+          ],
+          "attention_mask": [
+            0,
+            1
+          ]
+        },
+        "axes": [
+          {
+            "input": "input_ids",
+            "axis": 0,
+            "name": "batch",
+            "served_min": 1,
+            "served_max": 4096,
+            "sampled_min": 1,
+            "sampled_max": 4
+          },
+          {
+            "input": "input_ids",
+            "axis": 1,
+            "name": "seq",
+            "served_min": 1,
+            "served_max": 512,
+            "sampled_min": 1,
+            "sampled_max": 512
+          },
+          {
+            "input": "attention_mask",
+            "axis": 0,
+            "name": "batch",
+            "served_min": 1,
+            "served_max": 4096,
+            "sampled_min": 1,
+            "sampled_max": 4
+          },
+          {
+            "input": "attention_mask",
+            "axis": 1,
+            "name": "seq",
+            "served_min": 1,
+            "served_max": 512,
+            "sampled_min": 1,
+            "sampled_max": 512
+          }
+        ],
+        "output_axes": [],
+        "unsupported_ops": [],
+        "warnings": [],
+        "row_independent": true,
+        "row_reason": null,
+        "onnx_path": null
+      }
+    },
+    {
+      "id": "BAAI/bge-small-en-v1.5",
+      "outcome": "ok",
+      "exit_code": 0,
+      "seconds": 22.7,
+      "verdict": {
+        "status": "CLEAN",
+        "model_family": "hf",
+        "capture_strategy": "strict=False",
+        "opset": 20,
+        "op_types": {
+          "Add": 110,
+          "MatMul": 96,
+          "Reshape": 72,
+          "Transpose": 60,
+          "Slice": 37,
+          "Concat": 29,
+          "LayerNormalization": 25,
+          "Mul": 24,
+          "Shape": 15,
+          "Where": 13,
+          "Softmax": 12,
+          "IsNaN": 12,
+          "Gelu": 12,
+          "Unsqueeze": 7,
+          "Expand": 4,
+          "Gather": 4,
+          "Squeeze": 2,
+          "Range": 2,
+          "And": 2,
+          "GatherElements": 1,
+          "Cast": 1,
+          "GreaterOrEqual": 1,
+          "Max": 1,
+          "GatherND": 1,
+          "ReduceL2": 1,
+          "Clip": 1,
+          "Div": 1
+        },
+        "numerics": {
+          "samples_tested": 8,
+          "max_abs_err": 2.980232238769531e-07,
+          "max_rel_err": 0.010267709660577091,
+          "failures": 0,
+          "shape_generalization": true,
+          "tolerance_abs": 0.0001,
+          "tolerance_rel": 0.001,
+          "tolerance_dtype": "float32",
+          "tolerance_overridden": false,
+          "baseline_failed": false,
+          "min_cosine": 0.9999999999989986,
+          "tolerance_cosine": 0.9999,
+          "worst": {
+            "sample": 7,
+            "output": 0,
+            "index": [
+              2,
+              99
+            ],
+            "expected": 0.35514581203460693,
+            "got": 0.3551461100578308,
+            "input_shapes": [
+              [
+                4,
+                3
+              ],
+              [
+                4,
+                3
+              ]
+            ]
+          },
+          "sample_shapes": [
+            [
+              [
+                2,
+                8
+              ],
+              [
+                2,
+                8
+              ]
+            ],
+            [
+              [
+                1,
+                512
+              ],
+              [
+                1,
+                512
+              ]
+            ],
+            [
+              [
+                3,
+                9
+              ],
+              [
+                3,
+                9
+              ]
+            ],
+            [
+              [
+                1,
+                1
+              ],
+              [
+                1,
+                1
+              ]
+            ],
+            [
+              [
+                1,
+                2
+              ],
+              [
+                1,
+                2
+              ]
+            ],
+            [
+              [
+                3,
+                16
+              ],
+              [
+                3,
+                16
+              ]
+            ],
+            [
+              [
+                1,
+                16
+              ],
+              [
+                1,
+                16
+              ]
+            ],
+            [
+              [
+                4,
+                3
+              ],
+              [
+                4,
+                3
+              ]
+            ]
+          ],
+          "output_shapes": [
+            [
+              [
+                2,
+                384
+              ]
+            ],
+            [
+              [
+                1,
+                384
+              ]
+            ],
+            [
+              [
+                3,
+                384
+              ]
+            ],
+            [
+              [
+                1,
+                384
+              ]
+            ],
+            [
+              [
+                1,
+                384
+              ]
+            ],
+            [
+              [
+                3,
+                384
+              ]
+            ],
+            [
+              [
+                1,
+                384
+              ]
+            ],
+            [
+              [
+                4,
+                384
+              ]
+            ]
+          ],
+          "seed": 0,
+          "notes": [],
+          "passed": true
+        },
+        "shape_generalization": true,
+        "shape_generalization_reason": null,
+        "recommended_backend": "onnxruntime",
+        "reason": "exported via strict=False; numerics ok across 8 samples (max abs err 2.98e-07)",
+        "input_names": [
+          "input_ids",
+          "attention_mask"
+        ],
+        "dynamic_dims": {
+          "input_ids": [
+            0,
+            1
+          ],
+          "attention_mask": [
+            0,
+            1
+          ]
+        },
+        "axes": [
+          {
+            "input": "input_ids",
+            "axis": 0,
+            "name": "batch",
+            "served_min": 1,
+            "served_max": 4096,
+            "sampled_min": 1,
+            "sampled_max": 4
+          },
+          {
+            "input": "input_ids",
+            "axis": 1,
+            "name": "seq",
+            "served_min": 1,
+            "served_max": 512,
+            "sampled_min": 1,
+            "sampled_max": 512
+          },
+          {
+            "input": "attention_mask",
+            "axis": 0,
+            "name": "batch",
+            "served_min": 1,
+            "served_max": 4096,
+            "sampled_min": 1,
+            "sampled_max": 4
+          },
+          {
+            "input": "attention_mask",
+            "axis": 1,
+            "name": "seq",
+            "served_min": 1,
+            "served_max": 512,
+            "sampled_min": 1,
+            "sampled_max": 512
+          }
+        ],
+        "output_axes": [],
+        "unsupported_ops": [],
+        "warnings": [],
+        "row_independent": true,
+        "row_reason": null,
+        "onnx_path": null
+      }
+    },
+    {
+      "id": "intfloat/e5-small-v2",
+      "outcome": "ok",
+      "exit_code": 0,
+      "seconds": 23.6,
+      "verdict": {
+        "status": "CLEAN",
+        "model_family": "hf",
+        "capture_strategy": "strict=False",
+        "opset": 20,
+        "op_types": {
+          "Add": 110,
+          "MatMul": 96,
+          "Reshape": 72,
+          "Transpose": 60,
+          "Slice": 37,
+          "Concat": 29,
+          "LayerNormalization": 25,
+          "Mul": 25,
+          "Shape": 15,
+          "Where": 13,
+          "Softmax": 12,
+          "IsNaN": 12,
+          "Gelu": 12,
+          "Unsqueeze": 8,
+          "Expand": 4,
+          "Gather": 3,
+          "Squeeze": 2,
+          "Cast": 2,
+          "Range": 2,
+          "And": 2,
+          "ReduceSum": 2,
+          "Clip": 2,
+          "Div": 2,
+          "GatherElements": 1,
+          "GreaterOrEqual": 1,
+          "Max": 1,
+          "GatherND": 1,
+          "ReduceL2": 1
+        },
+        "numerics": {
+          "samples_tested": 8,
+          "max_abs_err": 2.421438694000244e-07,
+          "max_rel_err": 0.005363694720869738,
+          "failures": 0,
+          "shape_generalization": true,
+          "tolerance_abs": 0.0001,
+          "tolerance_rel": 0.001,
+          "tolerance_dtype": "float32",
+          "tolerance_overridden": false,
+          "baseline_failed": false,
+          "min_cosine": 0.9999999999990057,
+          "tolerance_cosine": 0.9999,
+          "worst": {
+            "sample": 5,
+            "output": 0,
+            "index": [
+              1,
+              282
+            ],
+            "expected": 0.01892085187137127,
+            "got": 0.01892060972750187,
+            "input_shapes": [
+              [
+                3,
+                16
+              ],
+              [
+                3,
+                16
+              ]
+            ]
+          },
+          "sample_shapes": [
+            [
+              [
+                2,
+                8
+              ],
+              [
+                2,
+                8
+              ]
+            ],
+            [
+              [
+                1,
+                512
+              ],
+              [
+                1,
+                512
+              ]
+            ],
+            [
+              [
+                3,
+                9
+              ],
+              [
+                3,
+                9
+              ]
+            ],
+            [
+              [
+                1,
+                1
+              ],
+              [
+                1,
+                1
+              ]
+            ],
+            [
+              [
+                1,
+                2
+              ],
+              [
+                1,
+                2
+              ]
+            ],
+            [
+              [
+                3,
+                16
+              ],
+              [
+                3,
+                16
+              ]
+            ],
+            [
+              [
+                1,
+                16
+              ],
+              [
+                1,
+                16
+              ]
+            ],
+            [
+              [
+                4,
+                3
+              ],
+              [
+                4,
+                3
+              ]
+            ]
+          ],
+          "output_shapes": [
+            [
+              [
+                2,
+                384
+              ]
+            ],
+            [
+              [
+                1,
+                384
+              ]
+            ],
+            [
+              [
+                3,
+                384
+              ]
+            ],
+            [
+              [
+                1,
+                384
+              ]
+            ],
+            [
+              [
+                1,
+                384
+              ]
+            ],
+            [
+              [
+                3,
+                384
+              ]
+            ],
+            [
+              [
+                1,
+                384
+              ]
+            ],
+            [
+              [
+                4,
+                384
+              ]
+            ]
+          ],
+          "seed": 0,
+          "notes": [],
+          "passed": true
+        },
+        "shape_generalization": true,
+        "shape_generalization_reason": null,
+        "recommended_backend": "onnxruntime",
+        "reason": "exported via strict=False; numerics ok across 8 samples (max abs err 2.42e-07)",
+        "input_names": [
+          "input_ids",
+          "attention_mask"
+        ],
+        "dynamic_dims": {
+          "input_ids": [
+            0,
+            1
+          ],
+          "attention_mask": [
+            0,
+            1
+          ]
+        },
+        "axes": [
+          {
+            "input": "input_ids",
+            "axis": 0,
+            "name": "batch",
+            "served_min": 1,
+            "served_max": 4096,
+            "sampled_min": 1,
+            "sampled_max": 4
+          },
+          {
+            "input": "input_ids",
+            "axis": 1,
+            "name": "seq",
+            "served_min": 1,
+            "served_max": 512,
+            "sampled_min": 1,
+            "sampled_max": 512
+          },
+          {
+            "input": "attention_mask",
+            "axis": 0,
+            "name": "batch",
+            "served_min": 1,
+            "served_max": 4096,
+            "sampled_min": 1,
+            "sampled_max": 4
+          },
+          {
+            "input": "attention_mask",
+            "axis": 1,
+            "name": "seq",
+            "served_min": 1,
+            "served_max": 512,
+            "sampled_min": 1,
+            "sampled_max": 512
+          }
+        ],
+        "output_axes": [],
+        "unsupported_ops": [],
+        "warnings": [],
+        "row_independent": true,
+        "row_reason": null,
+        "onnx_path": null
+      }
+    },
+    {
+      "id": "distilbert/distilbert-base-uncased-finetuned-sst-2-english",
+      "outcome": "ok",
+      "exit_code": 0,
+      "seconds": 21.3,
+      "verdict": {
+        "status": "CLEAN",
+        "model_family": "hf",
+        "capture_strategy": "strict=False",
+        "opset": 20,
+        "op_types": {
+          "Add": 55,
+          "MatMul": 48,
+          "Reshape": 36,
+          "Transpose": 30,
+          "Slice": 19,
+          "Concat": 15,
+          "LayerNormalization": 13,
+          "Mul": 12,
+          "Shape": 9,
+          "Unsqueeze": 7,
+          "Where": 7,
+          "Softmax": 6,
+          "IsNaN": 6,
+          "Gelu": 6,
+          "Gather": 3,
+          "Squeeze": 2,
+          "Range": 2,
+          "And": 2,
+          "Expand": 2,
+          "Gemm": 2,
+          "Cast": 1,
+          "GreaterOrEqual": 1,
+          "Max": 1,
+          "GatherND": 1,
+          "Relu": 1
+        },
+        "numerics": {
+          "samples_tested": 8,
+          "max_abs_err": 1.3172626495361328e-05,
+          "max_rel_err": 1.3455831187553595e-05,
+          "failures": 0,
+          "shape_generalization": true,
+          "tolerance_abs": 0.0001,
+          "tolerance_rel": 0.001,
+          "tolerance_dtype": "float32",
+          "tolerance_overridden": false,
+          "baseline_failed": false,
+          "min_cosine": null,
+          "tolerance_cosine": null,
+          "worst": {
+            "sample": 3,
+            "output": 0,
+            "index": [
+              0,
+              1
+            ],
+            "expected": 0.9789530038833618,
+            "got": 0.9789398312568665,
+            "input_shapes": [
+              [
+                1,
+                1
+              ],
+              [
+                1,
+                1
+              ]
+            ]
+          },
+          "sample_shapes": [
+            [
+              [
+                2,
+                8
+              ],
+              [
+                2,
+                8
+              ]
+            ],
+            [
+              [
+                1,
+                512
+              ],
+              [
+                1,
+                512
+              ]
+            ],
+            [
+              [
+                3,
+                9
+              ],
+              [
+                3,
+                9
+              ]
+            ],
+            [
+              [
+                1,
+                1
+              ],
+              [
+                1,
+                1
+              ]
+            ],
+            [
+              [
+                1,
+                2
+              ],
+              [
+                1,
+                2
+              ]
+            ],
+            [
+              [
+                3,
+                16
+              ],
+              [
+                3,
+                16
+              ]
+            ],
+            [
+              [
+                1,
+                16
+              ],
+              [
+                1,
+                16
+              ]
+            ],
+            [
+              [
+                4,
+                3
+              ],
+              [
+                4,
+                3
+              ]
+            ]
+          ],
+          "output_shapes": [
+            [
+              [
+                2,
+                2
+              ]
+            ],
+            [
+              [
+                1,
+                2
+              ]
+            ],
+            [
+              [
+                3,
+                2
+              ]
+            ],
+            [
+              [
+                1,
+                2
+              ]
+            ],
+            [
+              [
+                1,
+                2
+              ]
+            ],
+            [
+              [
+                3,
+                2
+              ]
+            ],
+            [
+              [
+                1,
+                2
+              ]
+            ],
+            [
+              [
+                4,
+                2
+              ]
+            ]
+          ],
+          "seed": 0,
+          "notes": [],
+          "passed": true
+        },
+        "shape_generalization": true,
+        "shape_generalization_reason": null,
+        "recommended_backend": "onnxruntime",
+        "reason": "exported via strict=False; numerics ok across 8 samples (max abs err 1.32e-05)",
+        "input_names": [
+          "input_ids",
+          "attention_mask"
+        ],
+        "dynamic_dims": {
+          "input_ids": [
+            0,
+            1
+          ],
+          "attention_mask": [
+            0,
+            1
+          ]
+        },
+        "axes": [
+          {
+            "input": "input_ids",
+            "axis": 0,
+            "name": "batch",
+            "served_min": 1,
+            "served_max": 4096,
+            "sampled_min": 1,
+            "sampled_max": 4
+          },
+          {
+            "input": "input_ids",
+            "axis": 1,
+            "name": "seq",
+            "served_min": 1,
+            "served_max": 512,
+            "sampled_min": 1,
+            "sampled_max": 512
+          },
+          {
+            "input": "attention_mask",
+            "axis": 0,
+            "name": "batch",
+            "served_min": 1,
+            "served_max": 4096,
+            "sampled_min": 1,
+            "sampled_max": 4
+          },
+          {
+            "input": "attention_mask",
+            "axis": 1,
+            "name": "seq",
+            "served_min": 1,
+            "served_max": 512,
+            "sampled_min": 1,
+            "sampled_max": 512
+          }
+        ],
+        "output_axes": [],
+        "unsupported_ops": [],
+        "warnings": [],
+        "row_independent": true,
+        "row_reason": null,
+        "onnx_path": null
+      }
+    },
+    {
+      "id": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+      "outcome": "ok",
+      "exit_code": 0,
+      "seconds": 19.5,
+      "verdict": {
+        "status": "CLEAN",
+        "model_family": "hf",
+        "capture_strategy": "strict=False",
+        "opset": 20,
+        "op_types": {
+          "Add": 56,
+          "MatMul": 48,
+          "Reshape": 36,
+          "Transpose": 30,
+          "Slice": 19,
+          "Concat": 16,
+          "LayerNormalization": 13,
+          "Mul": 12,
+          "Shape": 9,
+          "Unsqueeze": 7,
+          "Where": 7,
+          "Softmax": 6,
+          "IsNaN": 6,
+          "Gelu": 6,
+          "Gather": 4,
+          "Expand": 3,
+          "Squeeze": 2,
+          "Range": 2,
+          "And": 2,
+          "Gemm": 2,
+          "GatherElements": 1,
+          "Cast": 1,
+          "GreaterOrEqual": 1,
+          "Max": 1,
+          "GatherND": 1,
+          "Tanh": 1
+        },
+        "numerics": {
+          "samples_tested": 8,
+          "max_abs_err": 6.67572021484375e-06,
+          "max_rel_err": 9.905713436452682e-07,
+          "failures": 0,
+          "shape_generalization": true,
+          "tolerance_abs": 0.0001,
+          "tolerance_rel": 0.001,
+          "tolerance_dtype": "float32",
+          "tolerance_overridden": false,
+          "baseline_failed": false,
+          "min_cosine": null,
+          "tolerance_cosine": null,
+          "worst": {
+            "sample": 7,
+            "output": 0,
+            "index": [
+              3,
+              0
+            ],
+            "expected": -8.942428588867188,
+            "got": -8.942435264587402,
+            "input_shapes": [
+              [
+                4,
+                3
+              ],
+              [
+                4,
+                3
+              ]
+            ]
+          },
+          "sample_shapes": [
+            [
+              [
+                2,
+                8
+              ],
+              [
+                2,
+                8
+              ]
+            ],
+            [
+              [
+                1,
+                512
+              ],
+              [
+                1,
+                512
+              ]
+            ],
+            [
+              [
+                3,
+                9
+              ],
+              [
+                3,
+                9
+              ]
+            ],
+            [
+              [
+                1,
+                1
+              ],
+              [
+                1,
+                1
+              ]
+            ],
+            [
+              [
+                1,
+                2
+              ],
+              [
+                1,
+                2
+              ]
+            ],
+            [
+              [
+                3,
+                16
+              ],
+              [
+                3,
+                16
+              ]
+            ],
+            [
+              [
+                1,
+                16
+              ],
+              [
+                1,
+                16
+              ]
+            ],
+            [
+              [
+                4,
+                3
+              ],
+              [
+                4,
+                3
+              ]
+            ]
+          ],
+          "output_shapes": [
+            [
+              [
+                2,
+                1
+              ]
+            ],
+            [
+              [
+                1,
+                1
+              ]
+            ],
+            [
+              [
+                3,
+                1
+              ]
+            ],
+            [
+              [
+                1,
+                1
+              ]
+            ],
+            [
+              [
+                1,
+                1
+              ]
+            ],
+            [
+              [
+                3,
+                1
+              ]
+            ],
+            [
+              [
+                1,
+                1
+              ]
+            ],
+            [
+              [
+                4,
+                1
+              ]
+            ]
+          ],
+          "seed": 0,
+          "notes": [],
+          "passed": true
+        },
+        "shape_generalization": true,
+        "shape_generalization_reason": null,
+        "recommended_backend": "onnxruntime",
+        "reason": "exported via strict=False; numerics ok across 8 samples (max abs err 6.68e-06)",
+        "input_names": [
+          "input_ids",
+          "attention_mask"
+        ],
+        "dynamic_dims": {
+          "input_ids": [
+            0,
+            1
+          ],
+          "attention_mask": [
+            0,
+            1
+          ]
+        },
+        "axes": [
+          {
+            "input": "input_ids",
+            "axis": 0,
+            "name": "batch",
+            "served_min": 1,
+            "served_max": 4096,
+            "sampled_min": 1,
+            "sampled_max": 4
+          },
+          {
+            "input": "input_ids",
+            "axis": 1,
+            "name": "seq",
+            "served_min": 1,
+            "served_max": 512,
+            "sampled_min": 1,
+            "sampled_max": 512
+          },
+          {
+            "input": "attention_mask",
+            "axis": 0,
+            "name": "batch",
+            "served_min": 1,
+            "served_max": 4096,
+            "sampled_min": 1,
+            "sampled_max": 4
+          },
+          {
+            "input": "attention_mask",
+            "axis": 1,
+            "name": "seq",
+            "served_min": 1,
+            "served_max": 512,
+            "sampled_min": 1,
+            "sampled_max": 512
+          }
+        ],
+        "output_axes": [],
+        "unsupported_ops": [],
+        "warnings": [],
+        "row_independent": true,
+        "row_reason": null,
+        "onnx_path": null
+      }
+    },
+    {
+      "id": "meta-llama/Prompt-Guard-86M",
+      "outcome": "ok",
+      "exit_code": 0,
+      "seconds": 42.1,
+      "verdict": {
+        "status": "CLEAN",
+        "model_family": "hf",
+        "capture_strategy": "strict=False",
+        "opset": 20,
+        "op_types": {
+          "Reshape": 169,
+          "Add": 147,
+          "Transpose": 144,
+          "MatMul": 144,
+          "Div": 38,
+          "LayerNormalization": 26,
+          "Expand": 26,
+          "Tile": 24,
+          "GatherElements": 24,
+          "Where": 14,
+          "Gelu": 13,
+          "Softmax": 12,
+          "Unsqueeze": 8,
+          "Concat": 8,
+          "Cast": 6,
+          "Squeeze": 5,
+          "Mul": 5,
+          "Shape": 2,
+          "Gather": 2,
+          "Clip": 2,
+          "Gemm": 2,
+          "Range": 1,
+          "Sub": 1,
+          "Sign": 1,
+          "Less": 1,
+          "Greater": 1,
+          "And": 1,
+          "Abs": 1,
+          "Log": 1,
+          "Ceil": 1,
+          "LessOrEqual": 1,
+          "Neg": 1,
+          "Not": 1
+        },
+        "numerics": {
+          "samples_tested": 8,
+          "max_abs_err": 6.008148193359375e-05,
+          "max_rel_err": 7.106468608342965e-05,
+          "failures": 0,
+          "shape_generalization": true,
+          "tolerance_abs": 0.0001,
+          "tolerance_rel": 0.001,
+          "tolerance_dtype": "float32",
+          "tolerance_overridden": false,
+          "baseline_failed": false,
+          "min_cosine": null,
+          "tolerance_cosine": null,
+          "worst": {
+            "sample": 5,
+            "output": 0,
+            "index": [
+              2,
+              0
+            ],
+            "expected": 3.519460678100586,
+            "got": 3.5195207595825195,
+            "input_shapes": [
+              [
+                3,
+                16
+              ],
+              [
+                3,
+                16
+              ]
+            ]
+          },
+          "sample_shapes": [
+            [
+              [
+                2,
+                8
+              ],
+              [
+                2,
+                8
+              ]
+            ],
+            [
+              [
+                1,
+                512
+              ],
+              [
+                1,
+                512
+              ]
+            ],
+            [
+              [
+                3,
+                9
+              ],
+              [
+                3,
+                9
+              ]
+            ],
+            [
+              [
+                1,
+                1
+              ],
+              [
+                1,
+                1
+              ]
+            ],
+            [
+              [
+                1,
+                2
+              ],
+              [
+                1,
+                2
+              ]
+            ],
+            [
+              [
+                3,
+                16
+              ],
+              [
+                3,
+                16
+              ]
+            ],
+            [
+              [
+                1,
+                16
+              ],
+              [
+                1,
+                16
+              ]
+            ],
+            [
+              [
+                4,
+                3
+              ],
+              [
+                4,
+                3
+              ]
+            ]
+          ],
+          "output_shapes": [
+            [
+              [
+                2,
+                3
+              ]
+            ],
+            [
+              [
+                1,
+                3
+              ]
+            ],
+            [
+              [
+                3,
+                3
+              ]
+            ],
+            [
+              [
+                1,
+                3
+              ]
+            ],
+            [
+              [
+                1,
+                3
+              ]
+            ],
+            [
+              [
+                3,
+                3
+              ]
+            ],
+            [
+              [
+                1,
+                3
+              ]
+            ],
+            [
+              [
+                4,
+                3
+              ]
+            ]
+          ],
+          "seed": 0,
+          "notes": [],
+          "passed": true
+        },
+        "shape_generalization": true,
+        "shape_generalization_reason": null,
+        "recommended_backend": "onnxruntime",
+        "reason": "exported via strict=False; numerics ok across 8 samples (max abs err 6.01e-05)",
+        "input_names": [
+          "input_ids",
+          "attention_mask"
+        ],
+        "dynamic_dims": {
+          "input_ids": [
+            0,
+            1
+          ],
+          "attention_mask": [
+            0,
+            1
+          ]
+        },
+        "axes": [
+          {
+            "input": "input_ids",
+            "axis": 0,
+            "name": "batch",
+            "served_min": 1,
+            "served_max": 4096,
+            "sampled_min": 1,
+            "sampled_max": 4
+          },
+          {
+            "input": "input_ids",
+            "axis": 1,
+            "name": "seq",
+            "served_min": 1,
+            "served_max": 512,
+            "sampled_min": 1,
+            "sampled_max": 512
+          },
+          {
+            "input": "attention_mask",
+            "axis": 0,
+            "name": "batch",
+            "served_min": 1,
+            "served_max": 4096,
+            "sampled_min": 1,
+            "sampled_max": 4
+          },
+          {
+            "input": "attention_mask",
+            "axis": 1,
+            "name": "seq",
+            "served_min": 1,
+            "served_max": 512,
+            "sampled_min": 1,
+            "sampled_max": 512
+          }
+        ],
+        "output_axes": [],
+        "unsupported_ops": [],
+        "warnings": [],
+        "row_independent": true,
+        "row_reason": null,
+        "onnx_path": null
+      }
+    },
+    {
+      "id": "torchvision/resnet18",
+      "outcome": "skipped",
+      "note": "not installed"
+    },
+    {
+      "id": "pyg/GCN (tests/models/gnn_gcn)",
+      "outcome": "ok",
+      "exit_code": 0,
+      "seconds": 18.1,
+      "verdict": {
+        "status": "CLEAN",
+        "model_family": "pyg",
+        "capture_strategy": "strict=False",
+        "opset": 20,
+        "op_types": {
+          "Gather": 6,
+          "Reshape": 6,
+          "Expand": 6,
+          "Concat": 5,
+          "Mul": 4,
+          "Shape": 3,
+          "Squeeze": 3,
+          "Transpose": 3,
+          "Unsqueeze": 3,
+          "GatherND": 3,
+          "Add": 3,
+          "ConstantOfShape": 3,
+          "ScatterElements": 3,
+          "Equal": 2,
+          "Gemm": 2,
+          "Not": 1,
+          "Range": 1,
+          "Tile": 1,
+          "NonZero": 1,
+          "Max": 1,
+          "Pow": 1,
+          "Where": 1,
+          "Relu": 1
+        },
+        "numerics": {
+          "samples_tested": 8,
+          "max_abs_err": 3.5762786865234375e-07,
+          "max_rel_err": 4.275300793473328e-06,
+          "failures": 0,
+          "shape_generalization": true,
+          "tolerance_abs": 0.0001,
+          "tolerance_rel": 0.001,
+          "tolerance_dtype": "float32",
+          "tolerance_overridden": false,
+          "baseline_failed": false,
+          "min_cosine": null,
+          "tolerance_cosine": null,
+          "worst": {
+            "sample": 7,
+            "output": 0,
+            "index": [
+              2,
+              3
+            ],
+            "expected": 1.670002818107605,
+            "got": 1.6700024604797363,
+            "input_shapes": [
+              [
+                3,
+                8
+              ],
+              [
+                2,
+                20
+              ]
+            ]
+          },
+          "sample_shapes": [
+            [
+              [
+                6,
+                8
+              ],
+              [
+                2,
+                10
+              ]
+            ],
+            [
+              [
+                12,
+                8
+              ],
+              [
+                2,
+                20
+              ]
+            ],
+            [
+              [
+                1,
+                8
+              ],
+              [
+                2,
+                20
+              ]
+            ],
+            [
+              [
+                3,
+                8
+              ],
+              [
+                2,
+                20
+              ]
+            ],
+            [
+              [
+                12,
+                8
+              ],
+              [
+                2,
+                11
+              ]
+            ],
+            [
+              [
+                12,
+                8
+              ],
+              [
+                2,
+                3
+              ]
+            ],
+            [
+              [
+                1,
+                8
+              ],
+              [
+                2,
+                2
+              ]
+            ],
+            [
+              [
+                3,
+                8
+              ],
+              [
+                2,
+                20
+              ]
+            ]
+          ],
+          "output_shapes": [
+            [
+              [
+                6,
+                4
+              ]
+            ],
+            [
+              [
+                12,
+                4
+              ]
+            ],
+            [
+              [
+                1,
+                4
+              ]
+            ],
+            [
+              [
+                3,
+                4
+              ]
+            ],
+            [
+              [
+                12,
+                4
+              ]
+            ],
+            [
+              [
+                12,
+                4
+              ]
+            ],
+            [
+              [
+                1,
+                4
+              ]
+            ],
+            [
+              [
+                3,
+                4
+              ]
+            ]
+          ],
+          "seed": 0,
+          "notes": [],
+          "passed": true
+        },
+        "shape_generalization": true,
+        "shape_generalization_reason": null,
+        "recommended_backend": "onnxruntime",
+        "reason": "exported via strict=False; numerics ok across 8 samples (max abs err 3.58e-07)",
+        "input_names": [
+          "x",
+          "edge_index"
+        ],
+        "dynamic_dims": {
+          "x": [
+            0
+          ],
+          "edge_index": [
+            1
+          ]
+        },
+        "axes": [
+          {
+            "input": "x",
+            "axis": 0,
+            "name": "num_nodes",
+            "served_min": 1,
+            "served_max": 65536,
+            "sampled_min": 1,
+            "sampled_max": 12
+          },
+          {
+            "input": "edge_index",
+            "axis": 1,
+            "name": "num_edges",
+            "served_min": 1,
+            "served_max": 65536,
+            "sampled_min": 2,
+            "sampled_max": 20
+          }
+        ],
+        "output_axes": [
+          "node"
+        ],
+        "unsupported_ops": [],
+        "warnings": [],
+        "row_independent": false,
+        "row_reason": "input edge_index has no dynamic batch axis",
+        "onnx_path": null
+      }
+    }
+  ]
+}
