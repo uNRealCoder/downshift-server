@@ -45,27 +45,43 @@ jobs:
           name: dist
           path: dist/
 
-  test:
+  # The test matrix, the floor job and the Windows job of ci.yml. They enforce the 95% coverage.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  # Install the built wheel, not the checkout, into a clean venv with only the CPU torch. This
+  # finds a wheel that misses a file or that imports torch at import time.
+  smoke-wheel:
+    needs: build
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
-      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
-      - run: pip install -e ".[dev,gnn,hf,fast]"
-      - run: ruff check .
-      - run: ruff format --check .
-      - run: mypy src
-      - run: pytest -q --cov=src/downshift --cov-report=term-missing --cov-fail-under=95
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Install the wheel in a clean venv
+        run: |
+          python -m venv "$RUNNER_TEMP/smoke"
+          "$RUNNER_TEMP/smoke/bin/pip" install torch --index-url https://download.pytorch.org/whl/cpu
+          "$RUNNER_TEMP/smoke/bin/pip" install dist/*.whl
+      - name: Run the commands
+        # The checkout has no src/downshift on the path. Python imports downshift from the venv.
+        # The "examples" package comes from the current directory (the checkout).
+        run: |
+          export PATH="$RUNNER_TEMP/smoke/bin:$PATH"
+          downshift --version
+          downshift --help
+          python -c "import downshift, sys; assert 'torch' not in sys.modules"
+          python -c "import downshift; assert 'site-packages' in downshift.__file__, downshift.__file__"
+          downshift check examples.clean_mlp:make_model
 
   publish-pypi:
     if: github.event_name == 'release'
-    needs: [build, test]
+    needs: [build, ci, smoke-wheel]
     runs-on: ubuntu-latest
     environment:
       name: pypi
