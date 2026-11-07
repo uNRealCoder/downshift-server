@@ -29,18 +29,18 @@ CLEAN means that the ONNX graph agrees with PyTorch. It does not mean that the g
 <!-- real-models:start -->
 ## Tested real models
 
-Generated 2026-11-07 by `scripts/check_real_models.py` with torch 2.14.0, onnx 1.22.0, onnxruntime 1.30.0, transformers 5.17.0, torch_geometric 2.8.0.post1, torchvision not installed.
+Generated 2026-11-07 by `scripts/check_real_models.py` with torch 2.14.0, onnx 1.22.0, onnxruntime 1.30.0, transformers 5.17.0, torch_geometric 2.8.0.post1, torchvision 0.29.2+cpu.
 Downshift ran `downshift check --json` on each model, on the CPU.
 The Rows column is the number of verification samples. The script is in the repository: to run it again, use `python scripts/check_real_models.py`.
 
 | Model | Family | Verdict | Rows | Max abs err | Min cosine | Backend | Seconds |
 |---|---|---|---|---|---|---|---|
-| `sentence-transformers/all-MiniLM-L6-v2` | hf | CLEAN | 8 | 2.4e-07 | 1.000000 | onnxruntime | 20.2 |
-| `BAAI/bge-small-en-v1.5` | hf | CLEAN | 8 | 3.0e-07 | 1.000000 | onnxruntime | 22.7 |
-| `intfloat/e5-small-v2` | hf | CLEAN | 8 | 2.4e-07 | 1.000000 | onnxruntime | 23.6 |
-| `distilbert/distilbert-base-uncased-finetuned-sst-2-english` | hf | CLEAN | 8 | 1.3e-05 | — | onnxruntime | 21.3 |
-| `cross-encoder/ms-marco-MiniLM-L-6-v2` | hf | CLEAN | 8 | 6.7e-06 | — | onnxruntime | 19.5 |
-| `meta-llama/Prompt-Guard-86M` | hf | CLEAN | 8 | 6.0e-05 | — | onnxruntime | 42.1 |
-| `torchvision/resnet18` | — | not installed | — | — | — | — | — |
-| `pyg/GCN (tests/models/gnn_gcn)` | pyg | CLEAN | 8 | 3.6e-07 | — | onnxruntime | 18.1 |
+| `sentence-transformers/all-MiniLM-L6-v2` | hf | CLEAN | 8 | 2.4e-07 | 1.000000 | onnxruntime | 19.2 |
+| `BAAI/bge-small-en-v1.5` | hf | CLEAN | 8 | 3.0e-07 | 1.000000 | onnxruntime | 21.9 |
+| `intfloat/e5-small-v2` | hf | CLEAN | 8 | 2.4e-07 | 1.000000 | onnxruntime | 21.8 |
+| `distilbert/distilbert-base-uncased-finetuned-sst-2-english` | hf | CLEAN | 8 | 1.3e-05 | — | onnxruntime | 20.4 |
+| `cross-encoder/ms-marco-MiniLM-L-6-v2` | hf | CLEAN | 8 | 6.7e-06 | — | onnxruntime | 18.6 |
+| `meta-llama/Prompt-Guard-86M` | hf | CLEAN | 8 | 6.0e-05 | — | onnxruntime | 39.0 |
+| `torchvision/resnet18` | generic | CLEAN | 8 | 3.8e-06 | — | onnxruntime | 10.6 |
+| `pyg/GCN (tests/models/gnn_gcn)` | pyg | CLEAN | 8 | 1.2e-07 | — | onnxruntime | 17.6 |
 <!-- real-models:end -->

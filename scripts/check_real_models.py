@@ -2,7 +2,7 @@
 
 Run from the repository root:
 
-    python scripts/check_real_models.py [--only ID] [--large] [--device cpu|cuda] [--out FILE]
+    python scripts/check_real_models.py [--only ID] [--large] [--out FILE]
 
 Each model runs in its own subprocess, one at a time, so the memory is free between models.
 A full run replaces the "Tested real models" section of docs/compatibility.md and writes the
@@ -96,12 +96,10 @@ def resolve(spec: dict) -> tuple[str | None, str]:
         return None, "not downloaded"
 
 
-def run_check(spec: dict, target: str, device: str, has_device: bool) -> dict:
+def run_check(spec: dict, target: str) -> dict:
     command = [sys.executable, "-m", "downshift", "check", target, "--json"]
     if spec["kind"] == "code":
         command += ["--inputs", spec["inputs"]]
-    if has_device:
-        command += ["--device", device]
     start = time.perf_counter()
     try:
         done = subprocess.run(
@@ -190,21 +188,10 @@ def write_docs(section: str) -> None:
     DOCS.write_text(text, encoding="utf-8")
 
 
-def has_device_flag() -> bool:
-    done = subprocess.run(
-        [sys.executable, "-m", "downshift", "check", "--help"],
-        capture_output=True,
-        text=True,
-        cwd=REPO_ROOT,
-    )
-    return "--device" in done.stdout
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--only", help="Run only the model with this id.")
     parser.add_argument("--large", action="store_true", help="Include the large models.")
-    parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT, help="The JSON results file.")
     args = parser.parse_args()
 
@@ -214,10 +201,6 @@ def main() -> int:
         if not specs:
             ids = ", ".join(s["id"] for s in MODELS)
             parser.error(f"unknown id {args.only!r}. Use one of: {ids}")
-    has_device = has_device_flag()
-    if args.device != "cpu" and not has_device:
-        print("`downshift check` has no --device option: the check runs as usual.", file=sys.stderr)
-
     results = []
     for spec in specs:
         print(f"checking {spec['id']} ...", file=sys.stderr)
@@ -225,13 +208,12 @@ def main() -> int:
         if target is None:
             results.append({"outcome": "skipped", "note": note})
         else:
-            results.append(run_check(spec, target, args.device, has_device))
+            results.append(run_check(spec, target))
         print(f"  {table_row(spec, results[-1])}", file=sys.stderr)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "date": f"{datetime.now(UTC):%Y-%m-%d}",
-        "device": args.device,
         "versions": {name: _dist_version(name) for name in VERSIONED},
         "models": [{"id": s["id"], **r} for s, r in zip(specs, results, strict=True)],
     }

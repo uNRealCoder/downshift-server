@@ -1,20 +1,19 @@
 {
   "date": "2026-11-07",
-  "device": "cpu",
   "versions": {
     "torch": "2.14.0",
     "onnx": "1.22.0",
     "onnxruntime": "1.30.0",
     "transformers": "5.17.0",
     "torch_geometric": "2.8.0.post1",
-    "torchvision": "not installed"
+    "torchvision": "0.29.2+cpu"
   },
   "models": [
     {
       "id": "sentence-transformers/all-MiniLM-L6-v2",
       "outcome": "ok",
       "exit_code": 0,
-      "seconds": 20.2,
+      "seconds": 19.2,
       "verdict": {
         "status": "CLEAN",
         "model_family": "hf",
@@ -287,7 +286,7 @@
       "id": "BAAI/bge-small-en-v1.5",
       "outcome": "ok",
       "exit_code": 0,
-      "seconds": 22.7,
+      "seconds": 21.9,
       "verdict": {
         "status": "CLEAN",
         "model_family": "hf",
@@ -559,7 +558,7 @@
       "id": "intfloat/e5-small-v2",
       "outcome": "ok",
       "exit_code": 0,
-      "seconds": 23.6,
+      "seconds": 21.8,
       "verdict": {
         "status": "CLEAN",
         "model_family": "hf",
@@ -832,7 +831,7 @@
       "id": "distilbert/distilbert-base-uncased-finetuned-sst-2-english",
       "outcome": "ok",
       "exit_code": 0,
-      "seconds": 21.3,
+      "seconds": 20.4,
       "verdict": {
         "status": "CLEAN",
         "model_family": "hf",
@@ -1102,7 +1101,7 @@
       "id": "cross-encoder/ms-marco-MiniLM-L-6-v2",
       "outcome": "ok",
       "exit_code": 0,
-      "seconds": 19.5,
+      "seconds": 18.6,
       "verdict": {
         "status": "CLEAN",
         "model_family": "hf",
@@ -1373,7 +1372,7 @@
       "id": "meta-llama/Prompt-Guard-86M",
       "outcome": "ok",
       "exit_code": 0,
-      "seconds": 42.1,
+      "seconds": 39.0,
       "verdict": {
         "status": "CLEAN",
         "model_family": "hf",
@@ -1649,14 +1648,212 @@
     },
     {
       "id": "torchvision/resnet18",
-      "outcome": "skipped",
-      "note": "not installed"
+      "outcome": "ok",
+      "exit_code": 0,
+      "seconds": 10.6,
+      "verdict": {
+        "status": "CLEAN",
+        "model_family": "generic",
+        "capture_strategy": "strict=False",
+        "opset": 20,
+        "op_types": {
+          "Conv": 20,
+          "Relu": 17,
+          "Add": 8,
+          "MaxPool": 1,
+          "ReduceMean": 1,
+          "Reshape": 1,
+          "Gemm": 1
+        },
+        "numerics": {
+          "samples_tested": 8,
+          "max_abs_err": 3.814697265625e-06,
+          "max_rel_err": 0.004866292896303196,
+          "failures": 0,
+          "shape_generalization": true,
+          "tolerance_abs": 0.0001,
+          "tolerance_rel": 0.001,
+          "tolerance_dtype": "float32",
+          "tolerance_overridden": false,
+          "baseline_failed": false,
+          "min_cosine": null,
+          "tolerance_cosine": null,
+          "worst": {
+            "sample": 2,
+            "output": 0,
+            "index": [
+              2,
+              377
+            ],
+            "expected": -3.285567283630371,
+            "got": -3.2855710983276367,
+            "input_shapes": [
+              [
+                3,
+                3,
+                224,
+                224
+              ]
+            ]
+          },
+          "sample_shapes": [
+            [
+              [
+                1,
+                3,
+                224,
+                224
+              ]
+            ],
+            [
+              [
+                2,
+                3,
+                224,
+                224
+              ]
+            ],
+            [
+              [
+                3,
+                3,
+                224,
+                224
+              ]
+            ],
+            [
+              [
+                2,
+                3,
+                224,
+                224
+              ]
+            ],
+            [
+              [
+                2,
+                3,
+                224,
+                224
+              ]
+            ],
+            [
+              [
+                3,
+                3,
+                224,
+                224
+              ]
+            ],
+            [
+              [
+                3,
+                3,
+                224,
+                224
+              ]
+            ],
+            [
+              [
+                2,
+                3,
+                224,
+                224
+              ]
+            ]
+          ],
+          "output_shapes": [
+            [
+              [
+                1,
+                1000
+              ]
+            ],
+            [
+              [
+                2,
+                1000
+              ]
+            ],
+            [
+              [
+                3,
+                1000
+              ]
+            ],
+            [
+              [
+                2,
+                1000
+              ]
+            ],
+            [
+              [
+                2,
+                1000
+              ]
+            ],
+            [
+              [
+                3,
+                1000
+              ]
+            ],
+            [
+              [
+                3,
+                1000
+              ]
+            ],
+            [
+              [
+                2,
+                1000
+              ]
+            ]
+          ],
+          "seed": 0,
+          "notes": [],
+          "passed": true
+        },
+        "shape_generalization": true,
+        "shape_generalization_reason": null,
+        "recommended_backend": "onnxruntime",
+        "reason": "exported via strict=False; numerics ok across 8 samples (max abs err 3.81e-06)",
+        "input_names": [
+          "x"
+        ],
+        "dynamic_dims": {
+          "x": [
+            0
+          ]
+        },
+        "axes": [
+          {
+            "input": "x",
+            "axis": 0,
+            "name": "dim0",
+            "served_min": 1,
+            "served_max": 65536,
+            "sampled_min": 1,
+            "sampled_max": 3
+          }
+        ],
+        "output_axes": [],
+        "unsupported_ops": [],
+        "warnings": [
+          "model was in training mode; switched to eval() for export"
+        ],
+        "row_independent": true,
+        "row_reason": null,
+        "onnx_path": null
+      }
     },
     {
       "id": "pyg/GCN (tests/models/gnn_gcn)",
       "outcome": "ok",
       "exit_code": 0,
-      "seconds": 18.1,
+      "seconds": 17.6,
       "verdict": {
         "status": "CLEAN",
         "model_family": "pyg",
@@ -1689,8 +1886,8 @@
         },
         "numerics": {
           "samples_tested": 8,
-          "max_abs_err": 3.5762786865234375e-07,
-          "max_rel_err": 4.275300793473328e-06,
+          "max_abs_err": 1.1920928955078125e-07,
+          "max_rel_err": 1.7671605231703866e-05,
           "failures": 0,
           "shape_generalization": true,
           "tolerance_abs": 0.0001,
@@ -1701,22 +1898,22 @@
           "min_cosine": null,
           "tolerance_cosine": null,
           "worst": {
-            "sample": 7,
+            "sample": 4,
             "output": 0,
             "index": [
-              2,
+              0,
               3
             ],
-            "expected": 1.670002818107605,
-            "got": 1.6700024604797363,
+            "expected": 1.3132822513580322,
+            "got": 1.3132823705673218,
             "input_shapes": [
               [
-                3,
+                12,
                 8
               ],
               [
                 2,
-                20
+                11
               ]
             ]
           },
@@ -1859,7 +2056,7 @@
         "shape_generalization": true,
         "shape_generalization_reason": null,
         "recommended_backend": "onnxruntime",
-        "reason": "exported via strict=False; numerics ok across 8 samples (max abs err 3.58e-07)",
+        "reason": "exported via strict=False; numerics ok across 8 samples (max abs err 1.19e-07)",
         "input_names": [
           "x",
           "edge_index"
