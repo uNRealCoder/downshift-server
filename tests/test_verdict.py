@@ -39,6 +39,33 @@ def test_intake_with_matching_reference_is_clean(exported_mlp):
     assert verdict.numerics is not None and verdict.numerics.passed
 
 
+def test_intake_of_an_fp16_graph_uses_the_float16_tolerances(tmp_path):
+    model = clean_mlp.make_model()
+    out = tmp_path / "half.onnx"
+    downshift.export(model, out, clean_mlp.make_inputs(), fp16=True)
+
+    verdict = intake(out, reference=model, example_inputs=clean_mlp.make_inputs())
+
+    assert verdict.status == "CLEAN", verdict.reason
+    assert verdict.numerics is not None
+    assert verdict.numerics.tolerance_dtype == "float16"
+
+
+def test_serving_check_of_an_fp16_file_without_a_reference_uses_float16_tolerances(
+    tmp_path, exported_mlp
+):
+    from downshift.serve.engine import ServeOptions, _serving_tolerances
+
+    out = tmp_path / "half.onnx"
+    downshift.export(clean_mlp.make_model(), out, clean_mlp.make_inputs(), fp16=True)
+
+    half = intake(out)
+    full = intake(exported_mlp[0])
+
+    assert _serving_tolerances(half, ServeOptions()) == (1e-2, 1e-2)
+    assert _serving_tolerances(full, ServeOptions()) == (1e-4, 1e-3)
+
+
 def test_intake_with_reference_fails_via_onnx_runtime_not_a_crash(exported_mlp, monkeypatch):
     path, model, _ = exported_mlp
 

@@ -12,12 +12,14 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import onnx
 import torch
 
 from downshift.adapters.base import Prepared
 from downshift.adapters.embedding import EmbeddingRecipe
 from downshift.adapters.text import TextIO
 from downshift.core.axes import AxisBounds, axis_bounds_from_json
+from downshift.core.capture import has_half_weights
 from downshift.core.feeds import example_feeds
 from downshift.core.memo import ExportEntry
 from downshift.core.phase import Phase, report
@@ -367,10 +369,14 @@ def _build_backend(
 
 
 def _serving_tolerances(verdict: ExportVerdict, opts: ServeOptions) -> tuple[float, float]:
-    """The tolerance of the verdict. Without a verdict check: float32, or --atol and --rtol."""
+    """The tolerance of the verdict. Without a verdict check: float32 (float16 for a graph with
+    fp16 weights), or --atol and --rtol."""
     if verdict.numerics is not None:
         return verdict.numerics.tolerance_abs, verdict.numerics.tolerance_rel
-    atol, rtol = TOLERANCES["float32"]
+    half = verdict.onnx_path is not None and has_half_weights(
+        onnx.load(str(verdict.onnx_path), load_external_data=False)
+    )
+    atol, rtol = TOLERANCES["float16" if half else "float32"]
     return (atol if opts.atol is None else opts.atol, rtol if opts.rtol is None else opts.rtol)
 
 

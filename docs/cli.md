@@ -119,7 +119,7 @@ downshift check my_pkg.models:build --json -k 16 > verdict.json
 |---|---|---|---|
 | `-o`, `--output DIR` | - | *(required)* | The output directory. |
 | `--name STR` | - | the model slug | The name of the files, without the extension. |
-| `--fp16` | - | off | Cast a copy of the model to fp16 before the export. This is a plain `.half()` and not quantization. |
+| `--fp16` | - | off | Export the model in fp32, then change the graph to fp16 weights. The inputs and outputs stay fp32. The verdict uses the `float16` tolerances. This is not quantization. |
 | `--no-verify` | - | off | Skip the numerics check. The verdict is `UNVERIFIED`. |
 | `--json` | - | off | As for `check`. The JSON also has `manifest_path`. |
 | `--export-cache-dir DIR` | `DOWNSHIFT_EXPORT_CACHE_DIR` | none | An existing directory. Downshift reuses a verified export from it, and saves new ones in it. Refer to "Export cache" in [`production.md`](production.md#export-cache). |

@@ -271,6 +271,19 @@ If the serving check fails, the server logs one `WARNING` that names the provide
 
 To remove the failure, do one of these steps: remove `--tf32`, pass `--device cpu`, or pass `--force-onnx` to keep ONNX Runtime.
 
+### Half precision
+
+To serve in half precision on a GPU, export with `downshift export --fp16`, then serve the file with the PyTorch model as the reference:
+
+```bash
+downshift export ./model -o ./out --fp16
+downshift serve ./out/model.onnx --reference ./model --device cuda
+```
+
+`--fp16` exports the fp32 graph and then changes the weights to fp16. The inputs and outputs of the graph stay fp32, so clients do not change. Downshift verifies the graph against the fp32 torch model with the `float16` tolerances. The serving check on the GPU uses the same tolerances for a graph with fp16 weights. A person measured an RTX 4050 with all-MiniLM-L6-v2: the maximum absolute error was 3.7e-4, the minimum cosine was 0.999998, and a request took 3.7 ms in place of 4.0 ms with the fp32 graph. On a small model, the gain is small. Measure your model before you rely on it.
+
+If ONNX Runtime has no CPU kernel for an fp16 operation, the check of the export gives `FAILED`. Use a newer ONNX Runtime, or export the model without `--fp16`.
+
 The check adds a few inferences to the boot time. The `session` value of `boot` includes them.
 
 ## Kubernetes

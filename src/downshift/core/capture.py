@@ -76,6 +76,34 @@ def op_type_histogram(nodes: Iterable[Any]) -> dict[str, int]:
     return dict(sorted(counts.items(), key=lambda kv: kv[1], reverse=True))
 
 
+def has_half_weights(proto: onnx.ModelProto) -> bool:
+    """Does the graph keep fp16 weights (for example, an fp16 export)?"""
+    return any(init.data_type == onnx.TensorProto.FLOAT16 for init in proto.graph.initializer)
+
+
+def to_half_precision(result: CaptureResult) -> None:
+    """Change the fp32 graph of `result` to fp16, in place. The inputs and outputs stay fp32,
+    so clients do not change. The converter keeps the operations that fp16 would break
+    (for example, the ones that need fp32 range) in fp32."""
+    from onnxruntime.transformers.float16 import convert_float_to_float16
+
+    if result.onnx_path is not None:
+        proto = onnx.load(str(result.onnx_path))
+    else:
+        proto = onnx.load_from_string(result.onnx_bytes)
+    proto = convert_float_to_float16(proto, keep_io_types=True)
+    if result.onnx_path is not None:
+        half_path = result.onnx_path.with_name("model_fp16.onnx")
+        onnx.save_model(
+            proto, str(half_path), save_as_external_data=True, location="model_fp16.data"
+        )
+        result.onnx_path = half_path
+    else:
+        result.onnx_bytes = proto.SerializeToString()
+    result.onnx_program = None  # it holds the fp32 graph
+    result.op_types = op_type_histogram(proto.graph.node)
+
+
 def _weights_nbytes(exported_program: "torch.export.ExportedProgram") -> int:
     tensors = [*exported_program.state_dict.values(), *exported_program.constants.values()]
     return sum(t.numel() * t.element_size() for t in tensors if isinstance(t, torch.Tensor))

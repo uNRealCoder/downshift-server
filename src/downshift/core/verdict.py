@@ -24,7 +24,7 @@ from downshift.adapters import registry
 from downshift.adapters.base import Adapter, Family, Prepared, VaryFn
 from downshift.core import memo
 from downshift.core.axes import AxisFact, axis_facts, classify_outputs
-from downshift.core.capture import capture, op_type_histogram
+from downshift.core.capture import capture, has_half_weights, op_type_histogram, to_half_precision
 from downshift.core.feeds import bound_samples
 from downshift.core.phase import Phase, report
 from downshift.core.rows import check_rows
@@ -276,6 +276,7 @@ def _verify_into(
     rtol: float | None,
     seed: int,
     timings: dict[str, float] | None,
+    fp16: bool = False,
 ) -> ExportVerdict:
     """Run verify() and the row check on one CPU session, and set the outcome on `verdict`.
     The prefixes start the reason of a pass, a numeric failure, or an ORT failure."""
@@ -298,12 +299,15 @@ def _verify_into(
             seed=seed,
             embedding=prepared.embedding,
             keep_feeds=kept_feeds,
+            fp16=fp16,
         )
         verdict.row_independent, verdict.row_reason = check_rows(prepared, numerics, session)
     except OnnxRuntimeError as exc:
         message = first_line(exc)
         verdict.status, verdict.recommended_backend = Status.FAILED, BackendName.torch
         verdict.reason = f"{unrunnable}: {message}"
+        if fp16:
+            verdict.reason += ". If an fp16 operation has no CPU kernel, serve with --device cuda"
         verdict.warnings.append(message)
         return verdict
     finally:
@@ -332,10 +336,13 @@ def build_verdict(
     rtol: float | None = None,
     seed: int = 0,
     timings: dict[str, float] | None = None,
+    fp16: bool = False,
     _external_data_threshold: int | None = None,
 ) -> ExportVerdict:
     """Capture, then verify. With verify_numerics=False (--no-verify), the graph is made but
-    the verdict is UNVERIFIED. `timings` gets the seconds of Phase.export and Phase.verify."""
+    the verdict is UNVERIFIED. `timings` gets the seconds of Phase.export and Phase.verify.
+    With fp16=True, the fp32 graph changes to fp16 (fp32 inputs and outputs) before it is
+    verified against the fp32 model, with the float16 tolerances."""
     warnings = _tied_weight_warnings(prepared.model)
     if prepared.model.training:
         warnings.append("model was in training mode; switched to eval() for export")
@@ -349,6 +356,8 @@ def build_verdict(
         prepared.dynamic_shapes,
         external_data_threshold=_external_data_threshold,
     )
+    if fp16 and result.success:
+        to_half_precision(result)
     if timings is not None:
         timings[Phase.export] = time.perf_counter() - start
     # A translation failure has no per-strategy exceptions, only the one it raised.
@@ -403,6 +412,7 @@ def build_verdict(
         rtol,
         seed,
         timings,
+        fp16,
     )
     if verdict.numerics is not None and prepared.family == Family.pyg:
         verdict.output_axes = classify_outputs(
@@ -435,7 +445,8 @@ def check(
     check() never reads the export memo, because it is the audit gate. It does store a CLEAN
     or DEGRADED result there for export() and app_for(), unless `cache=False`.
 
-    fp16=True exports a float16 copy; the model and inputs of the caller do not change.
+    fp16=True changes the fp32 graph to fp16 after the export. The graph keeps fp32 inputs and
+    outputs, and it is verified against the fp32 model with the float16 tolerances.
     atol and rtol default to the tolerances of the model's dtype. `seed` makes the samples
     reproducible. See prepare_model for `vary` and `axis_max`.
     """
@@ -455,16 +466,15 @@ def check(
             axis_max=axis_max,
             fp16=fp16,
         )
-    if fp16:
-        model = copy.deepcopy(model).half()
-        if example_inputs is not None:
-            example_inputs = tuple(
-                t.half() if isinstance(t, torch.Tensor) and t.is_floating_point() else t
-                for t in example_inputs
-            )
     prepared = prepare_model(model, example_inputs, adapter, dynamic, vary=vary, axis_max=axis_max)
     verdict = build_verdict(
-        prepared, samples=samples, verify_numerics=verify_numerics, atol=atol, rtol=rtol, seed=seed
+        prepared,
+        samples=samples,
+        verify_numerics=verify_numerics,
+        atol=atol,
+        rtol=rtol,
+        seed=seed,
+        fp16=fp16,
     )
     if key is not None:
         memo.store_verdict(key, verdict)
@@ -521,4 +531,5 @@ def intake(
         rtol,
         seed,
         timings,
+        has_half_weights(proto),
     )

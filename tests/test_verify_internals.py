@@ -309,6 +309,23 @@ def test_verify_records_tolerance_dtype_and_seed_on_the_report(monkeypatch):
     assert report.tolerance_overridden is False
 
 
+def test_fp16_graph_uses_the_float16_tolerances_for_an_fp32_model(monkeypatch):
+    monkeypatch.setattr(verify_mod, "load_session", lambda onnx_model: _EchoSession())
+    inputs = clean_mlp.make_inputs()
+
+    report = verify(
+        clean_mlp.make_model(),
+        "unused.onnx",
+        inputs,
+        vary_fn=lambda i: inputs,
+        samples=1,
+        fp16=True,
+    )
+
+    assert report.tolerance_dtype == "float16"
+    assert (report.tolerance_abs, report.tolerance_rel) == (1e-2, 1e-2)
+
+
 def test_atol_rtol_override_the_dtype_default(monkeypatch):
     monkeypatch.setattr(verify_mod, "load_session", lambda onnx_model: _EchoSession())
     model = clean_mlp.make_model()

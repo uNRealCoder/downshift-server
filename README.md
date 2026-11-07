@@ -239,7 +239,7 @@ Downshift serves models that give their answer in one forward pass: tensors in, 
 - **No text generation.** There is no KV cache or sampling loop. There are no chat or completions routes. (`/v1/embeddings` exists.) Use vLLM, TGI or llama.cpp. Downshift refuses a decoder-only repo (`...ForCausalLM`), unless it has an embedding recipe, as Qwen3-Embedding has.
 - **No remote code.** Downshift never sets `trust_remote_code`. A repo with an `auto_map` does not load. Export it to ONNX yourself and serve it with `--tokenizer-from`.
 - **No multimodal Hugging Face models.** Text in, one tensor out.
-- **No quantization or graph optimization.** Use Olive or `onnxruntime.quantization`, then serve the result with `downshift serve model.onnx --reference model.pt`, so downshift verifies it against the original weights. `--fp16` is a cast before the trace.
+- **No quantization or graph optimization.** Use Olive or `onnxruntime.quantization`, then serve the result with `downshift serve model.onnx --reference model.pt`, so downshift verifies it against the original weights. `--fp16` changes the fp32 graph to fp16 weights, with fp32 inputs and outputs.
 - **No dynamic request batching.** One request makes one inference. `/predict/graph` joins a batch of graphs only when the outputs are for each node or each edge.
 - **No container image in 1.0.** Container images come in 1.1. Use pip and version pins until then.
 - **No DGL adapter.** PyG is the supported GNN family.

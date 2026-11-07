@@ -135,7 +135,7 @@ def export(
         _memo_key=key,
         **run,  # type: ignore[arg-type]
     )
-    if verdict.status == "FAILED" or verdict.onnx_program is None:
+    if verdict.status == "FAILED":
         return verdict
     if disk is not None and key is not None:
         entry = memo.entry_from_verdict(verdict)
@@ -144,9 +144,18 @@ def export(
     output.parent.mkdir(parents=True, exist_ok=True)
     if verdict.onnx_bytes:
         output.write_bytes(verdict.onnx_bytes)
-    else:
+    elif verdict.onnx_program is not None:
         # External data: save through the program, so the data file is named after `output`.
         verdict.onnx_program.save(str(output), external_data=True)  # type: ignore[attr-defined]
+    else:
+        import onnx
+
+        onnx.save_model(
+            onnx.load(str(verdict.onnx_path)),
+            str(output),
+            save_as_external_data=True,
+            location=f"{output.name}.data",
+        )
     verdict.onnx_path = output
     write_manifest(output, verdict, source_path, __version__)
     return verdict

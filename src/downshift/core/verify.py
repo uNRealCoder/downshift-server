@@ -287,16 +287,21 @@ def verify(
     seed: int = 0,
     embedding: bool = False,
     keep_feeds: list[dict[str, np.ndarray]] | None = None,
+    fp16: bool = False,
 ) -> NumericsReport:
     """Compare torch and ONNX Runtime on `samples` inputs. If `embedding` is True, the first
     output is a pooled embedding. Then each of its rows must also reach the cosine tolerance.
-    The input feeds of each sample are appended to `keep_feeds`, if you give it."""
+    The input feeds of each sample are appended to `keep_feeds`, if you give it. With `fp16`,
+    the graph is an fp16 copy of the fp32 `model`: the float16 tolerances apply."""
     if vary_fn is None:
         if dynamic_shapes is None:
             raise ValueError("verify() needs either dynamic_shapes or an explicit vary_fn")
         vary_fn = make_shared_axis0_vary_fn(base_inputs, dynamic_shapes)
 
     tolerance_dtype, default_atol, default_rtol = default_tolerances(model)
+    if fp16 and tolerance_dtype in ("float32", "float64"):
+        tolerance_dtype = "float16"
+        default_atol, default_rtol = TOLERANCES[tolerance_dtype]
     report = NumericsReport(
         samples_tested=samples,
         max_abs_err=0.0,

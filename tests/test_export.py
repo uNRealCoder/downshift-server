@@ -8,11 +8,13 @@ scatter_include_self_false is DEGRADED and not FAILED, because it exports under 
 and returns wrong numbers without a message. Verification finds the second case.
 """
 
+import onnx
 import pytest
 import torch
 
 import downshift
 from downshift.core import verdict as verdict_mod
+from downshift.core import verify as verify_mod
 from downshift.core.capture import CaptureResult
 from tests.models import (
     bf16_weights,
@@ -93,15 +95,54 @@ def test_bf16_weights_fixture_fails_via_onnx_runtime_not_a_crash() -> None:
     assert verdict.op_types
 
 
-def test_check_with_fp16_does_not_mutate_the_callers_model() -> None:
+def _io_and_weight_types(model_bytes: bytes) -> tuple[set[int], set[int]]:
+    proto = onnx.load_from_string(model_bytes)
+    io = {v.type.tensor_type.elem_type for v in [*proto.graph.input, *proto.graph.output]}
+    return io, {init.data_type for init in proto.graph.initializer}
+
+
+def test_check_with_fp16_converts_the_graph_and_keeps_the_model_in_fp32() -> None:
     model = clean_mlp.make_model()
-    original_dtype = next(model.parameters()).dtype
 
     verdict = downshift.check(model, clean_mlp.make_inputs(), samples=2, fp16=True)
 
-    assert next(model.parameters()).dtype == original_dtype
+    assert verdict.status == "CLEAN", verdict.reason
+    assert next(model.parameters()).dtype == torch.float32
     assert verdict.prepared is not None
-    assert next(verdict.prepared.model.parameters()).dtype == torch.float16
+    assert next(verdict.prepared.model.parameters()).dtype == torch.float32
+    io, weights = _io_and_weight_types(verdict.onnx_bytes)
+    assert io == {onnx.TensorProto.FLOAT}
+    assert weights == {onnx.TensorProto.FLOAT16}
+    assert verdict.numerics is not None
+    assert verdict.numerics.tolerance_dtype == "float16"
+    assert verdict.op_types["Cast"] >= 1
+
+
+def test_export_with_fp16_and_external_data_writes_the_converted_graph(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr("downshift.core.capture.EXTERNAL_DATA_THRESHOLD", 0)
+    out = tmp_path / "half.onnx"
+
+    verdict = downshift.export(clean_mlp.make_model(), out, clean_mlp.make_inputs(), fp16=True)
+
+    assert verdict.status == "CLEAN", verdict.reason
+    assert (tmp_path / "half.onnx.data").is_file()
+    proto = onnx.load(str(out))
+    assert {init.data_type for init in proto.graph.initializer} == {onnx.TensorProto.FLOAT16}
+
+
+def test_fp16_graph_that_onnx_runtime_cannot_run_points_to_cuda(monkeypatch) -> None:
+    def boom(onnx_model):
+        raise RuntimeError("Could not find an implementation for Foo(1)")
+
+    monkeypatch.setattr(verify_mod, "new_session", boom)
+
+    verdict = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(), fp16=True)
+
+    assert verdict.status == "FAILED"
+    assert "Foo(1)" in verdict.reason
+    assert "--device cuda" in verdict.reason
 
 
 def test_build_verdict_uses_first_failure_and_mines_unsupported_ops_from_all(monkeypatch) -> None:

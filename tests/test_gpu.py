@@ -47,3 +47,27 @@ def test_torch_cuda_serving_check_sets_the_tf32_flags():
     assert torch.backends.cuda.matmul.allow_tf32 is True
     assert torch.backends.cudnn.allow_tf32 is True
     torch.backends.cuda.matmul.allow_tf32 = False
+
+
+def test_fp16_graph_passes_the_serving_check_on_cuda(tmp_path):
+    import downshift
+
+    model = load_model(LoadSpec("tests.models.clean_mlp:make_model")).model
+    from tests.models import clean_mlp
+
+    path = tmp_path / "half.onnx"
+    verdict = downshift.export(model, path, clean_mlp.make_inputs(), fp16=True)
+    assert verdict.status == "CLEAN", verdict.reason
+
+    reference = load_model(LoadSpec("tests.models.clean_mlp:make_model"))
+    reference.model = model
+    state = prepare_serving(
+        load_model(LoadSpec(str(path))), ServeOptions(warmup=1, device="cuda"), reference=reference
+    )
+
+    check = state.serving_numerics
+    assert check is not None
+    assert check.ok
+    assert check.provider == "CUDAExecutionProvider"
+    assert (check.atol, check.rtol) == (1e-2, 1e-2)
+    assert state.verdict.numerics.tolerance_dtype == "float16"
