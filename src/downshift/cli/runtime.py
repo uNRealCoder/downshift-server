@@ -151,10 +151,19 @@ class ServeArgs:
         return cls(**data)
 
 
-def _build_serving_state(args: ServeArgs, *, keep_graph: bool = False) -> ServingState:
-    """Boot the state of `args`. The backend has its own copy of the graph, so a process that
-    serves drops the bytes of the graph and the export memo. Only the parent of the workers
-    needs the bytes (`keep_graph=True`), to write the file for the workers."""
+def release_graph(state: ServingState) -> None:
+    """The backend has its own copy of the graph. Drop the bytes of the graph and the export
+    memo. A process that serves calls this. The parent of the workers does not: it needs the
+    bytes to write the file for the workers."""
+    from downshift.core.memo import MEMO
+
+    state.verdict.onnx_bytes = b""
+    state.verdict.sample_feeds = []
+    MEMO.clear()
+
+
+def _build_serving_state(args: ServeArgs) -> ServingState:
+    """Boot the state of `args`."""
     from downshift.loading import hf_repo_dir
     from downshift.serve.engine import state_from_entry
     from downshift.serve.reuse import prepare_serving_reusing
@@ -191,12 +200,6 @@ def _build_serving_state(args: ServeArgs, *, keep_graph: bool = False) -> Servin
             cache=bool(opts.export_cache_dir),
         )
     state.timings[Phase.load] = load_s
-    if not keep_graph:
-        from downshift.core.memo import MEMO
-
-        state.verdict.onnx_bytes = b""
-        state.verdict.sample_feeds = []
-        MEMO.clear()
     return state
 
 
@@ -222,6 +225,7 @@ def _serve_app_factory() -> FastAPI:
                 render.print_traceback()
             render.error(f"model failed to load in this worker: {type(exc).__name__}: {exc}")
             os._exit(STARTUP_FAILURE)
+        release_graph(state)
         render.print_ready(state)
         return state
 
@@ -286,7 +290,7 @@ def _run_workers(
     from downshift.core.axes import axis_bounds_to_json
 
     parent_options = replace(args.options, warmup=0, intra_op_threads=0, inter_op_threads=0)
-    state = _build_serving_state(replace(args, options=parent_options), keep_graph=True)
+    state = _build_serving_state(replace(args, options=parent_options))
     state.options = args.options  # the banner reports what the workers use
     announce(state, workers)
     temp_dir: Path | None = None

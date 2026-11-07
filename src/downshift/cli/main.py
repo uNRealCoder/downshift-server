@@ -73,6 +73,7 @@ from downshift.cli.runtime import (
     _run_workers,
     _setup_logging,
     _tls_config,
+    release_graph,
 )
 from downshift.serve.options import BackendChoice, ExecutionChoice, ServeOptions
 from downshift.serve.schemas import OutputEncoding
@@ -534,6 +535,7 @@ def serve_cmd(
                 failure.append(exc)
                 server.should_exit = True
                 raise
+            release_graph(state)
             announce(state)
             render.print_ready(state)
             return state

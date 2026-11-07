@@ -16,7 +16,7 @@ import urllib.request
 
 import uvicorn
 
-from downshift.cli.runtime import ServeArgs, _build_serving_state, _tls_config
+from downshift.cli.runtime import ServeArgs, _build_serving_state, _tls_config, release_graph
 from downshift.core.memo import MEMO, ExportEntry
 from downshift.loading import LoadSpec
 from downshift.serve.options import ServeOptions
@@ -153,13 +153,16 @@ def test_a_serving_process_drops_the_graph_bytes_and_the_memo() -> None:
     MEMO.put("k", ExportEntry(verdict={"status": "CLEAN"}, input_names=[], axis_bounds={}))
 
     state = _build_serving_state(_clean_mlp_args())
+    assert state.verdict.onnx_bytes
+    release_graph(state)
 
     assert state.backend.name == "onnxruntime"
     assert state.verdict.onnx_bytes == b""
+    assert state.verdict.sample_feeds == []
     assert len(MEMO) == 0
 
 
 def test_the_parent_of_the_workers_keeps_the_graph_bytes() -> None:
-    state = _build_serving_state(_clean_mlp_args(), keep_graph=True)
+    state = _build_serving_state(_clean_mlp_args())
 
     assert state.verdict.onnx_bytes
