@@ -637,3 +637,44 @@ def test_a_500_sets_the_configured_request_id_header(torch_state, monkeypatch):
 
     assert resp.status_code == 500
     assert resp.json()["request_id"] == resp.headers["x-correlation-id"] == "trace-500"
+
+
+def test_a_timeout_error_inside_the_backend_is_not_a_request_timeout(mlp_state, monkeypatch):
+    state = _with_options(mlp_state, request_timeout=30.0)
+
+    def broken(_inputs):
+        raise TimeoutError("the backend lost a socket")
+
+    monkeypatch.setattr(state.backend, "infer", broken)
+    client = TestClient(build_app(state, api_key=None), raise_server_exceptions=False)
+
+    response = client.post("/predict", json=MLP_INPUT)
+
+    assert response.status_code == 500
+    assert response.json()["code"] == "internal_error"
+
+
+@pytest.mark.parametrize("supplied", ["bad id", "a" * 129, "x<script>", "caf\u00e9"])
+def test_a_request_id_with_unsafe_characters_is_replaced(mlp_state, supplied):
+    client = TestClient(build_app(mlp_state, api_key=None))
+
+    response = client.get("/health", headers={"X-Request-Id": supplied.encode("latin-1")})
+
+    assert response.headers["x-request-id"] != supplied
+    assert len(response.headers["x-request-id"]) == 16
+
+
+def test_a_safe_request_id_is_kept(mlp_state):
+    client = TestClient(build_app(mlp_state, api_key=None))
+
+    response = client.get("/health", headers={"X-Request-Id": "trace.1:a_b-C"})
+
+    assert response.headers["x-request-id"] == "trace.1:a_b-C"
+
+
+def test_the_v1_path_without_a_slash_has_the_openai_error_shape(mlp_state):
+    client = TestClient(build_app(mlp_state, api_key=None))
+
+    body = client.get("/v1").json()
+
+    assert body["error"]["code"] == "not_found"

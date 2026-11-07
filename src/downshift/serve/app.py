@@ -6,6 +6,7 @@ import hmac
 import inspect
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -202,12 +203,16 @@ class PredictRoute(APIRoute):
                 raise _capacity_error(state)
             timeout = state.options.request_timeout
             deadline = time.monotonic() + timeout if timeout > 0 else None
+            limit: asyncio.Timeout | None = None
             try:
                 call = _predict(request, state, graph, is_embeddings, deadline)
                 if deadline is None:
                     return await call
-                return await asyncio.wait_for(call, timeout)
+                async with asyncio.timeout(timeout) as limit:
+                    return await call
             except TimeoutError:
+                if limit is None or not limit.expired():
+                    raise  # a timeout inside a backend or user code is not ours
                 raise ApiError(
                     503,
                     "request_timeout",
@@ -280,6 +285,10 @@ def require_serving(request: Request) -> ServingState:
     return current
 
 
+# A request ID from a client goes to the logs, a header and an error body: only safe characters.
+_REQUEST_ID = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+
+
 class RequestIdMiddleware:
     """Pure ASGI (BaseHTTPMiddleware would buffer each response). It takes the request ID from
     the `header` of the request (DOWNSHIFT_REQUEST_ID_HEADER, default X-Request-Id) or makes one, binds it to `request_id_var` for the log lines, and returns it. With
@@ -304,7 +313,10 @@ class RequestIdMiddleware:
             return
 
         start = time.perf_counter() if self.access_log or self.metrics is not None else 0.0
-        request_id = Headers(scope=scope).get(self.header) or uuid.uuid4().hex[:16]
+        supplied = Headers(scope=scope).get(self.header)
+        request_id = (
+            supplied if supplied and _REQUEST_ID.fullmatch(supplied) else uuid.uuid4().hex[:16]
+        )
         state = scope.setdefault("state", {})
         state["request_id"] = request_id
         status: int | None = None
@@ -515,6 +527,12 @@ def build_app(
         # This runs outside RequestIdMiddleware, which has already reset request_id_var and
         # cannot add its header here.
         request_id = getattr(request.state, "request_id", None)
+        if isinstance(exc, StarletteHTTPException):
+            # A user middleware sits outside the exception middleware of the routes.
+            response = await http_error_handler(request, exc)
+            if request_id:
+                response.headers[request_id_header] = request_id
+            return response
         token = request_id_var.set(request_id)
         try:
             logger.exception(

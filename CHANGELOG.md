@@ -52,6 +52,12 @@ All notable changes to this project are documented here. Format follows
 - With the result cache on, a request that ends late no longer frees a row that a newer request owns. A request that ends with an output without a row axis no longer makes the other requests wait for its rows. A request that is past `--request-timeout` no longer claims rows.
 - `/predict` with `"text": []` now gives `400` (`invalid_input`).
 - The token count in `usage` of `/v1/embeddings` now comes from the tokenizer. Before, a model with no `attention_mask` input gave the padded length, and the count changed with the longest row of the batch.
+- An `HTTPException` that your own `--middleware` raises now gives its own status and the code `http_error`. Before, it gave `500` (`internal_error`).
+- A `TimeoutError` inside a backend or your own code is no longer reported as `request_timeout` (`503`). Only the `--request-timeout` limit gives that code.
+- The server now keeps a request ID from a client only if it has 1 to 128 characters from `A-Z a-z 0-9 . _ : -`. If not, it makes a new ID.
+- If `DOWNSHIFT_API_KEY` is set to an empty value, it now turns the key off, even if the old name `DOWNSHIFT_SERVER_API_KEY` is set. Before, the old name was used.
+- `GET /v1` (with no slash) now gives the OpenAI error shape.
+- `/v1/embeddings` with `dimensions` no longer overflows when the model gives `float16` vectors.
 - `--request-timeout` now stops the request at the set time. Before, a running step could pass the limit, and the `503` came late.
 - The `--help` of `--workers` said that each worker exports the model. The parent exports and verifies one time, and each worker loads that result.
 - The docs agree with the code again. `docs/cli.md` lists `--axis-max`, `--export-cache-dir`, `--tokenizer-from`, `DOWNSHIFT_AXIS_MAX` and `DOWNSHIFT_EXPORT_CACHE_DIR`, and its steps to add a `serve` option are correct. `docs/serving.md` has the current signatures, `ServingState` fields and backend errors. `docs/python-api.md` says that `check()` never reads the export memo. `docs/production.md` says that each `--workers` worker gives `503` on `/ready` while it loads.

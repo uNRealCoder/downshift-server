@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from downshift.adapters.text import TextTooLongError
@@ -205,3 +206,32 @@ def test_every_error_code_is_tested_and_listed_in_the_docs():
 
     assert listed == set(ERROR_CODES)
     assert set(CASES) | {"http_error"} == set(ERROR_CODES)
+
+
+class RaiseHttp:
+    """A user middleware that refuses the request. It sits outside the exception middleware."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["path"] == "/health":
+            await self.app(scope, receive, send)
+            return
+        raise HTTPException(429, "slow down")
+
+
+def test_an_http_error_from_a_user_middleware_keeps_its_status(mlp_state):
+    client = _client_with_middleware(mlp_state)
+
+    response = client.post("/predict", json=GOOD)
+
+    assert response.status_code == 429
+    assert response.json()["code"] == "http_error"
+    assert response.headers["x-request-id"]
+
+
+def _client_with_middleware(state):
+    return TestClient(
+        build_app(state, middleware=["tests.test_errors:RaiseHttp"]), raise_server_exceptions=False
+    )

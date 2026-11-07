@@ -67,7 +67,8 @@ def route_path(scope: Scope) -> str:
 
 
 def is_openai_path(scope: Scope) -> bool:
-    return route_path(scope).startswith("/v1/")
+    path = route_path(scope)
+    return path == "/v1" or path.startswith("/v1/")
 
 
 def error_response(

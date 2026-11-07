@@ -294,3 +294,9 @@ def test_matryoshka_is_off_by_default_and_read_from_the_env(
 
     monkeypatch.setenv("DOWNSHIFT_MATRYOSHKA", "1")
     assert importlib.reload(settings).MATRYOSHKA is True
+
+
+def test_an_empty_new_api_key_wins_over_the_old_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DOWNSHIFT_API_KEY", "")
+    monkeypatch.setenv("DOWNSHIFT_SERVER_API_KEY", "old")
+    assert importlib.reload(settings).API_KEY == ""

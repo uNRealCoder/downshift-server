@@ -204,7 +204,8 @@ WORKERS = _env_int("DOWNSHIFT_WORKERS", 1)
 # None (unset) means no authentication, with a startup warning that says so.
 # DOWNSHIFT_SERVER_API_KEY is the old name. It works until the next minor release, and the new
 # name wins. build_app warns if the old name is set.
-API_KEY = os.environ.get("DOWNSHIFT_API_KEY") or os.environ.get("DOWNSHIFT_SERVER_API_KEY")
+# A new name that is set to "" wins: it turns the key off.
+API_KEY = os.environ.get("DOWNSHIFT_API_KEY", os.environ.get("DOWNSHIFT_SERVER_API_KEY"))
 
 # The header that carries the request ID: the server reads it from a request and sets it on
 # each response.
