@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from prometheus_client.parser import text_string_to_metric_families
 
+import downshift
 from downshift import settings
 from downshift.cli import render, runtime
 from downshift.loading import LoadSpec, load_model
@@ -119,6 +120,7 @@ def test_the_gauges_come_from_the_state(plain_state):
     info = [k for k in samples if k[0] == "downshift_model_info"]
     assert len(info) == 1
     labels = dict(info[0][1])
+    assert labels["downshift_version"] == downshift.__version__
     assert labels["backend"] == state.backend.name
     assert labels["verdict"] == "CLEAN"
     assert labels["family"] == state.verdict.model_family

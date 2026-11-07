@@ -94,7 +94,7 @@ Refer to "Metrics" in [`production.md`](production.md). Each series has the labe
 | `downshift_inflight` | gauge | none |
 | `downshift_queue_depth` | gauge | none |
 | `downshift_queue_limit` | gauge | none |
-| `downshift_model_info` | gauge | `version`, `verdict`, `backend`, `family` |
+| `downshift_model_info` | gauge | `downshift_version`, `verdict`, `backend`, `family` |
 | `downshift_boot_seconds` | gauge | `phase` |
 
 ## Command line

@@ -180,7 +180,7 @@ Each series has the label `worker`. With one process, its value is `0`. With `--
 | `downshift_rejected_total` | counter | `reason` | Requests that got a `503`: `capacity`, `timeout` or `not_ready`. |
 | `downshift_cache_rows_total` | counter | `result` | Rows that the result cache found (`hit`) or did not find (`miss`). Only with the cache on. |
 | `downshift_cache_requests_total` | counter | `result` | Predicts by the `X-Downshift-Cache` value: `hit`, `partial` or `miss`. |
-| `downshift_model_info` | gauge | `version`, `verdict`, `backend`, `family` | The value is always `1`. |
+| `downshift_model_info` | gauge | `downshift_version`, `verdict`, `backend`, `family` | The value is always `1`. |
 | `downshift_ready` | gauge | none | `1` when the model is ready. `0` while the model loads. |
 | `downshift_boot_seconds` | gauge | `phase` | Seconds of each boot phase. |
 

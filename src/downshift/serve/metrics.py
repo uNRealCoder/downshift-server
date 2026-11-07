@@ -170,7 +170,7 @@ def render(metrics: Metrics, state: ServingState | None) -> str:
         sample(
             "downshift_model_info",
             1,
-            version=_version(),
+            downshift_version=_version(),
             verdict=state.verdict.status,
             backend=state.backend.name,
             family=state.verdict.model_family,
