@@ -60,7 +60,10 @@ def test_predict_without_the_key_is_401_with_a_bearer_challenge(keyed):
 
     assert resp.status_code == 401
     assert resp.headers["www-authenticate"] == "Bearer"
-    assert resp.json() == {"detail": "Authorization header is not set or incorrect"}
+    assert resp.json() == {
+        "detail": "Authorization header is not set or incorrect",
+        "code": "unauthorized",
+    }
 
 
 @pytest.mark.parametrize("header", ["Bearer nope", "Bearer ", f"Basic {KEY}", KEY])

@@ -554,7 +554,7 @@ def test_ready_and_predict_503_until_the_loader_lands(mlp_state):
         ):
             assert resp.status_code == 503, resp.text
             assert resp.headers["retry-after"] == "2"
-            assert resp.json() == {"detail": "model is not ready"}
+            assert resp.json() == {"detail": "model is not ready", "code": "not_ready"}
 
         release.set()
         app.state.loader_thread.join(timeout=5)

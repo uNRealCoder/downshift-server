@@ -13,10 +13,12 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import asdict
 from typing import Any, cast
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from starlette.datastructures import Headers, MutableHeaders
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 import downshift
@@ -25,6 +27,14 @@ from downshift._imports import import_object
 from downshift.core.phase import CURRENT_PROGRESS, LoadProgress
 from downshift.logs import request_id_var
 from downshift.serve.engine import ServingState
+from downshift.serve.errors import (
+    ApiError,
+    api_error,
+    error_body,
+    error_response,
+    http_error_handler,
+    validation_error_handler,
+)
 from downshift.serve.options import ExecutionChoice
 from downshift.serve.predict import (
     BINARY_REQUEST_TYPES,
@@ -75,28 +85,28 @@ def _route_path(scope: Scope) -> str:
 
 
 def _body_too_large(observed: int, limit: int) -> JSONResponse:
-    return JSONResponse(
-        {
-            "detail": (
-                f"request body is {observed} bytes; the server limit is {limit} bytes "
-                "(--max-body-bytes)"
-            )
-        },
-        status_code=413,
+    return error_response(
+        413,
+        "body_too_large",
+        f"request body is {observed} bytes; the server limit is {limit} bytes (--max-body-bytes)",
     )
 
 
-def _not_ready_error() -> HTTPException:
-    return HTTPException(
-        503, "model is not ready", headers={"Retry-After": str(NOT_READY_RETRY_AFTER)}
+def _not_ready_error() -> ApiError:
+    return api_error(
+        503,
+        "not_ready",
+        "model is not ready",
+        headers={"Retry-After": str(NOT_READY_RETRY_AFTER)},
     )
 
 
-def _capacity_error(state: ServingState) -> HTTPException:
+def _capacity_error(state: ServingState) -> ApiError:
     running = min(state.in_flight, state.options.max_concurrency)
     queued = max(0, state.in_flight - state.options.max_concurrency)
-    return HTTPException(
+    return api_error(
         503,
+        "at_capacity",
         f"server is at capacity ({running} running, {queued} queued)",
         headers={"Retry-After": str(CAPACITY_RETRY_AFTER)},
     )
@@ -130,7 +140,7 @@ async def _predict(
     content_type = _content_type(request)
     binary = content_type in BINARY_REQUEST_TYPES
     if content_type and not binary and "json" not in content_type:
-        return JSONResponse({"detail": _UNSUPPORTED_MEDIA_TYPE}, status_code=415)
+        return error_response(415, "unsupported_media_type", _UNSUPPORTED_MEDIA_TYPE)
     limit = state.options.max_body_bytes
     content_length = request.headers.get("content-length")
     if content_length is not None and content_length.isdigit():
@@ -184,8 +194,10 @@ class PredictRoute(APIRoute):
                     timeout if timeout > 0 else None,
                 )
             except TimeoutError:
-                raise HTTPException(
-                    503, f"request took more than the {timeout:.1f}s --request-timeout"
+                raise api_error(
+                    503,
+                    "request_timeout",
+                    f"request took more than the {timeout:.1f}s --request-timeout",
                 ) from None
             finally:
                 state.release()
@@ -339,9 +351,10 @@ class ApiKeyMiddleware:
         if scheme.lower() != "bearer" or not hmac.compare_digest(
             token.encode("latin-1"), self._key_bytes
         ):
-            response = JSONResponse(
-                {"detail": "Authorization header is not set or incorrect"},
-                status_code=401,
+            response = error_response(
+                401,
+                "unauthorized",
+                "Authorization header is not set or incorrect",
                 headers={"WWW-Authenticate": "Bearer"},
             )
             await response(scope, receive, send)
@@ -434,6 +447,9 @@ def build_app(
     request_id_header = settings.REQUEST_ID_HEADER
     app.add_middleware(RequestIdMiddleware, access_log=access_log, header=request_id_header)
 
+    app.add_exception_handler(StarletteHTTPException, http_error_handler)  # type: ignore[arg-type]
+    app.add_exception_handler(RequestValidationError, validation_error_handler)  # type: ignore[arg-type]
+
     @app.exception_handler(Exception)
     async def _unhandled_exception(request: Request, exc: Exception) -> JSONResponse:
         # This runs outside RequestIdMiddleware, which has already reset request_id_var and
@@ -450,10 +466,11 @@ def build_app(
         finally:
             request_id_var.reset(token)
         return JSONResponse(
-            {
-                "detail": "inference failed on the server; see the server log",
-                "request_id": request_id,
-            },
+            error_body(
+                "internal_error",
+                "inference failed on the server; see the server log",
+                request_id=request_id,
+            ),
             status_code=500,
             headers={request_id_header: request_id} if request_id else None,
         )

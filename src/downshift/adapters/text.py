@@ -12,6 +12,10 @@ SOFTMAX = "softmax"
 SIGMOID = "sigmoid"
 
 
+class TextTooLongError(ValueError):
+    """A text row has more tokens than the model reads."""
+
+
 @dataclass
 class TextIO:
     tokenizer: Any
@@ -21,13 +25,13 @@ class TextIO:
 
     def encode(self, text: list[str]) -> dict[str, np.ndarray]:
         """The tokenizer outputs for a batch, padded to the longest row. A row longer than the
-        model reads is a ValueError: it is never cut."""
+        model reads is a TextTooLongError: it is never cut."""
         encoded = self.tokenizer(text)
         lengths = [len(ids) for ids in encoded["input_ids"]]
         over = {i: n for i, n in enumerate(lengths) if n > self.max_length}
         if over:
             rows = ", ".join(f"row {i}: {n}" for i, n in over.items())
-            raise ValueError(
+            raise TextTooLongError(
                 f"text longer than this model reads ({self.max_length} tokens, a limit from the "
                 f"model files) is refused and not cut. Token counts: {rows}. Send shorter "
                 "text, or split it into more rows"
