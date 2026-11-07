@@ -105,7 +105,7 @@ Below about 1 ms of inference, the HTTP stack is most of the latency. Only `--wo
 
 - **`--max-concurrency N`** (default 4) is the number of inferences at the same time in each worker. One inference does not usually fill all cores: all-MiniLM-L6-v2 (batch 8, 8 clients) gave 52 req/s at 1 and 134 req/s at 4. Each inference holds its own activation memory.
 - **`--max-queue N`** (default 64) is the number of predicts that can wait beyond `--max-concurrency`. The next one gets an immediate `503` with `Retry-After: 1`. It counts requests, not rows.
-- **`--request-timeout SECONDS`** (default 30) is how long an admitted predict can wait before its inference starts, also for a row that another request computes. After that, it gets a `503`. A running inference is never stopped.
+- **`--request-timeout SECONDS`** (default 30) is the time limit for the whole request, from its admission. The limit includes the body read, the queue, the inference and the encoding. If the request is not complete at the limit, the client gets a `503` with the code `request_timeout`, and the slot is free. The thread of an inference that already runs is not stopped. It ends by itself. `0` means no limit.
 
 ```
 Capacity    4 inferences at a time, 4 prep threads, 64 queued, 30 s timeout  (--max-concurrency, --prep-threads, --max-queue, --request-timeout)
@@ -157,7 +157,7 @@ Boot        6.4 s: load 0.3, export 2.8, verify 0.2, session 0.1, warmup 0.1
 
 ## Model name
 
-`GET /v1/models` lists one model. `POST /v1/embeddings` accepts only that name in `model`. Without `--served-model-name NAME` (or `DOWNSHIFT_SERVED_MODEL_NAME`), the name is the last part of the model path. For example, the model `./models/bge-small` has the name `bge-small`. Set the option if a client must use a fixed name that does not depend on the path.
+`GET /v1/models` lists one model. `POST /v1/embeddings` accepts only that name in `model`. Without `--served-model-name NAME` (or `DOWNSHIFT_SERVED_MODEL_NAME`), the name is the last part of the model path. For example, the model `./models/bge-small` has the name `bge-small`. For an import spec such as `pkg.mod:make_model`, the name is the whole spec. Set the option if a client must use a fixed name that does not depend on the path.
 
 ## Matryoshka cuts
 
@@ -186,7 +186,7 @@ Each series has the label `worker`. Its value is `0`, because `--metrics` needs 
 
 The histogram buckets are fixed, in seconds: 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5 and 10. The `queue` stage is `prep_wait`, `infer_wait` and `encode_wait` of the access log added together. The `prep` stage is `parse` and `prep` added together.
 
-A scrape reaches one worker only, so `--metrics` with `--workers N` (N above 1) is a usage error (exit code `4`). Use one worker for each container and scale with replicas.
+A scrape reaches one worker only, so `--metrics` with `--workers N` (N above 1) is a usage error (exit code `4`). Use one worker for each container. Scale with replicas.
 
 Scrape config:
 
@@ -207,14 +207,14 @@ groups:
   - name: downshift
     rules:
       - alert: DownshiftQueueFull
-        expr: downshift_queue_depth >= downshift_queue_limit
+        expr: downshift_queue_limit > 0 and downshift_queue_depth >= downshift_queue_limit
         for: 1m
         annotations:
           summary: The queue of {{ $labels.instance }} is full. New predicts get 503.
       - alert: DownshiftErrorRate
         expr: |
-          sum(rate(downshift_requests_total{code=~"5.."}[5m]))
-            / sum(rate(downshift_requests_total[5m])) > 0.01
+          sum(rate(downshift_requests_total{code=~"5..", route!~"/health|/ready"}[5m]))
+            / sum(rate(downshift_requests_total{route!~"/health|/ready"}[5m])) > 0.01
         for: 5m
         annotations:
           summary: More than 1% of the requests get a 5xx status.

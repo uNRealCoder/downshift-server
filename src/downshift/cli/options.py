@@ -221,8 +221,9 @@ RequestTimeoutOpt = Annotated[
     typer.Option(
         "--request-timeout",
         min=0,
-        help="The number of seconds that a predict can wait without a start. After this time, "
-        "it gets a 503 and no inference. 0 = no limit",
+        help="The time limit in seconds for a whole predict, from its admission. At the limit, "
+        "the client gets a 503 and the slot is free. A running inference is not stopped. "
+        "0 = no limit",
     ),
 ]
 SslCertfileOpt = Annotated[

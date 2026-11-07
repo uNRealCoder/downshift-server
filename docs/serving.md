@@ -142,7 +142,7 @@ inference pool  _infer: the backend call
 
 - `PredictRoute` serves the raw body itself, so FastAPI does not parse it. The functions `predict` and `predict_graph` exist only to document the bodies in OpenAPI. `_validate_json` makes the same `422` bodies as FastAPI.
 - The slot is admitted before the server reads the body, and released in `finally`.
-- `--request-timeout` is checked after the prep and again when the inference starts. Downshift never stops an inference that runs.
+- `PredictRoute` wraps the whole request in `asyncio.timeout(--request-timeout)`, from the admission. At the limit, the client gets a `503` `request_timeout` and the slot is free. The thread of an inference that already runs is not stopped. Downshift also checks the limit after the prep and when the inference starts.
 - The input checks (`_violation`) run before the inference: the vocabulary, the edge index, the rank and fixed axes, and the axis bounds. A shape error of the model therefore never reaches the client as a `500`.
 - `--execution inline` runs both hops on the event loop for a JSON body of up to 64 KiB with a `Content-Length` and no `text`.
 - `_run_in` carries the context variables (the request ID) into the pool thread and records `prep_wait` and `infer_wait` for `Server-Timing`.

@@ -156,7 +156,7 @@ downshift export my_pkg.models:build -o artifacts/ --name classifier
 | `--max-body-bytes INT` | `DOWNSHIFT_MAX_BODY_BYTES` | 32 MiB | The largest request body. A larger one gets a `413` before the server parses it. This is also the only limit on the size of a `text` request. |
 | `--max-concurrency INT` | `DOWNSHIFT_MAX_CONCURRENCY` | `4` | The inferences that run at the same time in each worker process. Each one holds its own activation memory. |
 | `--max-queue INT` | `DOWNSHIFT_MAX_QUEUE` | `64` | The predicts that can wait beyond `--max-concurrency`. After that, a new predict gets a fast `503`. |
-| `--request-timeout FLOAT` | `DOWNSHIFT_REQUEST_TIMEOUT` | `30` | The seconds that an admitted predict can wait before its inference starts. After that, it gets a `503`. `0` means no limit. |
+| `--request-timeout FLOAT` | `DOWNSHIFT_REQUEST_TIMEOUT` | `30` | The time limit in seconds for the whole request, from its admission. At the limit, the client gets a `503` and the slot is free. A running inference thread is not stopped. `0` means no limit. |
 | `--prep-threads INT` | `DOWNSHIFT_PREP_THREADS` | `min(4, CPUs)` | The threads in each worker process that parse and convert request bodies. |
 | `--execution threadpool\|inline` | `DOWNSHIFT_EXECUTION` | `threadpool` | `inline` runs a JSON body of up to 64 KiB (with a `Content-Length` and no `text`) on the event loop. Use it only for a model that infers in less than about 1 ms. |
 | `--result-cache-rows INT` | `DOWNSHIFT_RESULT_CACHE_ROWS` | `100`, or off | The rows that the result cache keeps in each worker. `0` turns it off. The default is on only for a model with independent rows. A number for another model is a usage error. Refer to [`production.md`](production.md#result-cache). |

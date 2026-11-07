@@ -83,7 +83,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(downshift_requests_total{code=~\"5..\"}[5m])) / sum(rate(downshift_requests_total[5m]))",
+          "expr": "sum(rate(downshift_requests_total{code=~\"5..\", route!~\"/health|/ready\"}[5m])) / sum(rate(downshift_requests_total{route!~\"/health|/ready\"}[5m]))",
           "legendFormat": "5xx",
           "datasource": {
             "type": "prometheus",

@@ -359,7 +359,7 @@ Status codes:
 | `500` | `{"detail": "inference failed on the server; see the server log", "code": "internal_error", "request_id": "..."}` | An unhandled exception on the server. The real error is only in the server log. |
 | `503` | `{"detail": "model is not ready", "code": "not_ready"}`, header `Retry-After: 2` | No `ServingState` exists yet. |
 | `503` | `{"detail": "server is at capacity (N running, M queued)", "code": "at_capacity"}`, header `Retry-After: 1` | `--max-concurrency + --max-queue` predicts are already admitted. |
-| `503` | `{"detail": "request waited X.Xs in queue, past the Y.Ys --request-timeout", "code": "request_timeout"}`, no `Retry-After` | The predict was admitted, but it waited longer than `--request-timeout` before the inference started. Downshift checks this after the body is prepared, and again when the inference starts. A request that waits for a row of another request (the result cache) gets the same `503` at the same limit. The text is `request waited for a row past the Y.Ys --request-timeout`. |
+| `503` | `{"detail": "request took more than the Y.Ys --request-timeout", "code": "request_timeout"}`, no `Retry-After` | The predict was admitted, but it was not complete at `--request-timeout` after its admission. The limit covers the whole request: the body read, the queue, the inference and the encoding. The slot is free at the limit. The thread of an inference that already runs is not stopped. A request that waits for a row of another request (the result cache) has the same limit. If the limit passes before the inference starts, the text can be `request waited X.Xs in queue, past the Y.Ys --request-timeout`. |
 
 If the server runs with `--server-timing`, a `200` response has this header: `Server-Timing: parse;dur=<ms>, prep_wait;dur=<ms>, prep;dur=<ms>, infer_wait;dur=<ms>, infer;dur=<ms>, encode;dur=<ms>` (see "Headers"). Every response, on every route and with every status code, has `X-Request-Id`. To use a different name, set `DOWNSHIFT_REQUEST_ID_HEADER`. If the client sent the header, downshift returns it. Otherwise, downshift makes an ID of 16 hexadecimal characters.
 
@@ -509,7 +509,7 @@ To get a safetensors response, send `Accept: application/vnd.safetensors`, or se
 | `Server-Timing` | Response (`/predict`, `/predict/graph` and `/v1/embeddings`, `200` only, only with `--server-timing`) | Off by default. The stages are listed below. Each one has `;dur=<ms>`. The access log line has the same split as `timings_ms`. |
 | `X-Downshift-Cache` | Response (`/predict`, only if the result cache is on) | To use a different name, set `DOWNSHIFT_CACHE_HEADER`. `hit`: the server computed no row for this request. `partial`: it computed some rows. `miss`: it computed all rows. |
 | `Cache-Control` | Request (`/predict`) | `no-cache`: the server does not read the result cache for this request. The server still stores the rows that it computes. The response says `miss`. |
-| `Retry-After` | Response (`503` only) | `2` for "not ready yet" (`/metadata` and the predict routes). `1` for "at capacity". The `503` for "queued past `--request-timeout`" does not have it. |
+| `Retry-After` | Response (`503` only) | `2` for "not ready yet" (`/metadata` and the predict routes). `1` for "at capacity". The `503` for "past `--request-timeout`" does not have it. |
 | `Content-Length` | Request (optional) | If it is present, downshift checks it against `--max-body-bytes` before it reads the body. Downshift reads a chunked body without it and checks it while it arrives. |
 
 The `Server-Timing` stages:

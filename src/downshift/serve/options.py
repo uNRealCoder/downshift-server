@@ -55,7 +55,7 @@ class ServeOptions:
     execution: ExecutionChoice = ExecutionChoice(settings.EXECUTION)
     prep_threads: int = settings.PREP_THREADS  # threads that parse and convert requests
     max_queue: int = settings.MAX_QUEUE  # admitted predicts that can wait beyond max_concurrency
-    request_timeout: float = settings.REQUEST_TIMEOUT  # queue seconds. 0 = none
+    request_timeout: float = settings.REQUEST_TIMEOUT  # seconds for the whole request. 0 = none
     # Rows in the result cache. None = the default, but only for a model with independent rows. 0 = off
     result_cache_rows: int | None = settings.RESULT_CACHE_ROWS
     server_timing: bool = settings.SERVER_TIMING  # add the Server-Timing header to predicts

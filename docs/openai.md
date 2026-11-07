@@ -63,7 +63,7 @@ The response is `{"object": "list", "data": [...], "model": "<name>", "usage": {
 
 ## Model name
 
-By default, the name is the last part of the model path. For example, `./models/bge-small` has the name `bge-small`. To set another name, start the server with `--served-model-name NAME` (or `DOWNSHIFT_SERVED_MODEL_NAME`). Use it if a client needs a fixed name that does not depend on the path, for example `text-embedding-3-small`.
+By default, the name is the last part of the model path. For example, `./models/bge-small` has the name `bge-small`. For an import spec such as `pkg.mod:make_model`, the name is the whole spec. To give clients a short name, set `--served-model-name`. To set another name, start the server with `--served-model-name NAME` (or `DOWNSHIFT_SERVED_MODEL_NAME`). Use it if a client needs a fixed name that does not depend on the path, for example `text-embedding-3-small`.
 
 ## Dimensions and --matryoshka
 
