@@ -18,7 +18,8 @@ from downshift.cli.runtime import ServeArgs
 from downshift.loading import LoadSpec, load_model
 from downshift.serve.app import build_app
 from downshift.serve.engine import prepare_serving
-from downshift.serve.openai import served_name
+from downshift.serve.errors import ApiError
+from downshift.serve.openai import _check_dimensions, _matryoshka_cut, served_name
 from downshift.serve.options import ServeOptions
 from tests.models import hf_repo
 
@@ -104,6 +105,18 @@ def test_served_model_name_replaces_the_name_and_survives_the_workers(state, rep
         log_level="warning",
     )
     assert ServeArgs.from_json(args.to_json()).options.served_model_name == "my-embedder"
+
+
+def test_matryoshka_survives_the_workers(state, repo):
+    args = ServeArgs(
+        load=LoadSpec(repo),
+        options=dataclasses.replace(state.options, matryoshka=True),
+        reference=None,
+        middleware=None,
+        log_level="warning",
+    )
+
+    assert ServeArgs.from_json(args.to_json()).options.matryoshka is True
 
 
 # --- /v1/embeddings -----------------------------------------------------------------------
@@ -236,6 +249,92 @@ def test_dimensions_are_not_supported_without_matryoshka(client, name):
     error = response.json()["error"]
     assert error["code"] == "dimensions_not_supported"
     assert "--matryoshka" in error["message"]
+
+
+@pytest.fixture(scope="module")
+def cut_client(state) -> TestClient:
+    return TestClient(build_app(_with(state, matryoshka=True), api_key=None))
+
+
+def test_dimensions_keep_the_first_values_and_scale_them_to_unit_length(cut_client, name):
+    texts = ["hello world", "the capital"]
+    full = _predict_vectors(cut_client, texts)
+
+    body = _embed(cut_client, name, texts, dimensions=8).json()
+
+    cut = np.asarray([row["embedding"] for row in body["data"]], dtype=np.float32)
+    expected = full[:, :8] / np.linalg.norm(full[:, :8], axis=1, keepdims=True)
+    assert cut.shape == (2, 8)
+    np.testing.assert_allclose(cut, expected, rtol=1e-5)
+    np.testing.assert_allclose(np.linalg.norm(cut, axis=1), 1.0, rtol=1e-5)
+
+
+def test_dimensions_work_with_base64(cut_client, name):
+    body = _embed(cut_client, name, "hello", dimensions=4, encoding_format="base64").json()
+
+    assert _decode(body["data"][0]["embedding"]).shape == (4,)
+
+
+def test_all_the_dimensions_are_a_valid_request(cut_client, name):
+    width = len(_embed(cut_client, name, "hello").json()["data"][0]["embedding"])
+
+    body = _embed(cut_client, name, "hello", dimensions=width).json()
+
+    assert len(body["data"][0]["embedding"]) == width
+
+
+def test_one_cache_entry_serves_all_sizes(state, name):
+    cached = TestClient(build_app(_with(state, matryoshka=True), api_key=None))
+    texts = ["cut cache hello", "cut cache world"]
+    for _ in range(2):  # a row is stored on its second sighting
+        _embed(cached, name, texts)
+
+    small = _embed(cached, name, texts, dimensions=4)
+    large = _embed(cached, name, texts, dimensions=16)
+
+    assert small.headers["x-downshift-cache"] == "hit"
+    assert large.headers["x-downshift-cache"] == "hit"
+    assert len(small.json()["data"][0]["embedding"]) == 4
+    assert len(large.json()["data"][0]["embedding"]) == 16
+
+
+@pytest.mark.parametrize("dimensions", [0, -1, 100000])
+def test_dimensions_out_of_range_are_a_400_with_the_range(cut_client, name, dimensions):
+    width = len(_embed(cut_client, name, "hello").json()["data"][0]["embedding"])
+
+    response = _embed(cut_client, name, "hello", dimensions=dimensions)
+
+    _shape(response, 400, "invalid_request_error", "invalid_input", param="dimensions")
+    assert f"1 to {width}" in response.json()["error"]["message"]
+
+
+def test_the_encoder_checks_the_range_if_the_width_is_not_known():
+    vectors = np.ones((1, 4), dtype=np.float32)
+
+    with pytest.raises(ApiError) as caught:
+        _matryoshka_cut(vectors, 9)
+    assert caught.value.code == "invalid_input"
+    with pytest.raises(ApiError):
+        _check_dimensions(0, None)
+    _check_dimensions(5, None)
+
+
+def test_a_zero_vector_stays_zero():
+    cut = _matryoshka_cut(np.zeros((1, 4), dtype=np.float32), 2)
+
+    assert cut.tolist() == [[0.0, 0.0]]
+
+
+def test_server_timing_is_on_the_embeddings_route_when_the_option_is_on(state, name):
+    timed = TestClient(build_app(_with(state, server_timing=True), api_key=None))
+
+    header = _embed(timed, name, "hello").headers["server-timing"]
+
+    assert "infer;dur=" in header
+    assert "encode;dur=" in header
+    assert (
+        "server-timing" not in _embed(TestClient(build_app(state, api_key=None)), name, "x").headers
+    )
 
 
 def test_an_empty_input_list_is_a_400(client, name):

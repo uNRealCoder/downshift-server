@@ -45,14 +45,21 @@ _STATUS_CODES = {404: "not_found", 405: "method_not_allowed"}
 
 class ApiError(HTTPException):
     code: str
+    param: str | None = None
 
 
 def api_error(
-    status: int, code: str, message: str, headers: Mapping[str, str] | None = None
+    status: int,
+    code: str,
+    message: str,
+    headers: Mapping[str, str] | None = None,
+    param: str | None = None,
 ) -> ApiError:
-    """The exception for a route: the error handler turns it into the error body."""
+    """The exception for a route: the error handler turns it into the error body. `param` is
+    the field at fault, for the OpenAI shape."""
     exc = ApiError(status, message, headers=headers)
     exc.code = code
+    exc.param = param
     return exc
 
 
@@ -101,7 +108,10 @@ def error_response(
 
 async def http_error_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
     code = getattr(exc, "code", None) or _STATUS_CODES.get(exc.status_code, "http_error")
-    return error_response(request.scope, exc.status_code, code, exc.detail, exc.headers)
+    param = getattr(exc, "param", None)
+    return error_response(
+        request.scope, exc.status_code, code, exc.detail, exc.headers, param=param
+    )
 
 
 async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:

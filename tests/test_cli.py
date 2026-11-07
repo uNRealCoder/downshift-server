@@ -811,3 +811,11 @@ def test_serve_args_round_trip_without_an_artifact_defaults_access_log_on():
     assert restored == args
     assert restored.artifact is None
     assert restored.access_log is True
+
+
+def test_serve_matryoshka_flag_reaches_the_options(monkeypatch):
+    _, captured = _serve_captured(monkeypatch)
+    assert captured["app"].state.serving.options.matryoshka is False
+
+    _, captured = _serve_captured(monkeypatch, "--matryoshka")
+    assert captured["app"].state.serving.options.matryoshka is True

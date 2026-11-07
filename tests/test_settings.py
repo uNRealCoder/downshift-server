@@ -249,3 +249,13 @@ def test_served_model_name_is_unset_by_default_and_read_from_the_env(
 
     monkeypatch.setenv("DOWNSHIFT_SERVED_MODEL_NAME", "my-model")
     assert importlib.reload(settings).SERVED_MODEL_NAME == "my-model"
+
+
+def test_matryoshka_is_off_by_default_and_read_from_the_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DOWNSHIFT_MATRYOSHKA", raising=False)
+    assert importlib.reload(settings).MATRYOSHKA is False
+
+    monkeypatch.setenv("DOWNSHIFT_MATRYOSHKA", "1")
+    assert importlib.reload(settings).MATRYOSHKA is True

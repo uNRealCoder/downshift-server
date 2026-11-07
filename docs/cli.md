@@ -167,6 +167,7 @@ downshift export my_pkg.models:build -o artifacts/ --name classifier
 | `--server-timing` / `--no-server-timing` | `DOWNSHIFT_SERVER_TIMING` | off | Adds the `Server-Timing` header (the milliseconds of each stage) to each predict response. Keep it off on a server that untrusted clients use: the timings show how the server works, and a fast cache hit shows that another client sent the same row. The access log has the timings in both cases. |
 | `--metrics` / `--no-metrics` | `DOWNSHIFT_METRICS` | off | Counts the requests and serves them as Prometheus text on `GET /metrics`. Each worker counts for itself. The API key rule of the other routes applies. Refer to "Metrics" in `docs/production.md`. |
 | `--served-model-name NAME` | `DOWNSHIFT_SERVED_MODEL_NAME` | the model source | The model name for `GET /v1/models` and `POST /v1/embeddings`. Without it, the name is the last part of the model path. Refer to "Model name" in `docs/production.md`. |
+| `--matryoshka` / `--no-matryoshka` | `DOWNSHIFT_MATRYOSHKA` | off | Tells downshift that the model was trained for Matryoshka cuts. `POST /v1/embeddings` then accepts `dimensions`. Refer to [`openai.md`](openai.md#dimensions-and---matryoshka). |
 | `--access-log` / `--no-access-log` | - | on | One log line for each request. |
 
 `serve` binds the port first. It then loads, exports, verifies and warms up on a background thread. `/ready` gives `503` until the model is ready. `serve` serves all four verdicts. It exits early only for a usage error (`4`) or a crash (`5`) before the server is ready. Downshift loads the TLS files before the model, so a bad TLS file stops `serve` with exit code `4`.
@@ -206,6 +207,7 @@ Downshift reads these variables one time, when `downshift` is imported. To chang
 | `DOWNSHIFT_SERVER_TIMING` | `0` | `--server-timing` (`1` or `0`, also `true`, `false`, `yes`, `no`, `on`, `off`) |
 | `DOWNSHIFT_METRICS` | `0` | `--metrics` (`1` or `0`, also `true`, `false`, `yes`, `no`, `on`, `off`) |
 | `DOWNSHIFT_SERVED_MODEL_NAME` | unset | `--served-model-name` |
+| `DOWNSHIFT_MATRYOSHKA` | `0` | `--matryoshka` (`1` or `0`, as for `DOWNSHIFT_METRICS`) |
 | `DOWNSHIFT_AXIS_MAX` | unset | `--axis-max` (`NAME=N,NAME=N`) |
 | `DOWNSHIFT_EXPORT_CACHE_DIR` | unset | `--export-cache-dir` |
 | `DOWNSHIFT_WORKERS` | `1` | `--workers` (CLI only) |

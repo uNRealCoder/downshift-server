@@ -215,6 +215,10 @@ METRICS = _env_bool("DOWNSHIFT_METRICS", False)
 # name of the model source (the last part of a path).
 SERVED_MODEL_NAME = os.environ.get("DOWNSHIFT_SERVED_MODEL_NAME") or None
 
+# Tell downshift that the model was trained for Matryoshka cuts. Then POST /v1/embeddings accepts
+# `dimensions`: it keeps the first values of each vector and scales the vector to unit length.
+MATRYOSHKA = _env_bool("DOWNSHIFT_MATRYOSHKA", False)
+
 # HTTPS. If SSL_CERTFILE is set, `serve` uses TLS. The key can be in the cert file, or in its
 # own file. The password of an encrypted key is an environment variable only, so that it does
 # not show in the process list.

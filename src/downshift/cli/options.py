@@ -317,6 +317,14 @@ ServedModelNameOpt = Annotated[
         "the model source (the last part of a path)",
     ),
 ]
+MatryoshkaOpt = Annotated[
+    bool,
+    typer.Option(
+        "--matryoshka/--no-matryoshka",
+        help="Tell downshift that the model was trained for Matryoshka cuts. POST "
+        "/v1/embeddings then accepts 'dimensions'. Default: off",
+    ),
+]
 AccessLogOpt = Annotated[
     bool,
     typer.Option(

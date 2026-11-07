@@ -279,6 +279,7 @@ class _Request:
     tensors: dict[str, np.ndarray] | None = None
     graphs: list[dict[str, Any]] | None = None
     encoding: OutputEncoding | RequestOutputEncoding | None = None
+    dimensions: int | None = None  # /v1/embeddings: keep the first values of each vector
 
 
 Parse = Callable[[], _Request]
@@ -398,6 +399,13 @@ def _encode_response(
             body["predictions"] = predictions
         response = NumpyJSONResponse(body)
     timings_ms["encode"] = round((time.perf_counter() - start) * 1000, 2)
+    return add_server_timing(state, response, timings_ms)
+
+
+def add_server_timing(
+    state: ServingState, response: Response, timings_ms: dict[str, float]
+) -> Response:
+    """Set the Server-Timing header of all stages if the server_timing option is on."""
     if not state.options.server_timing:
         return response
     stages = [f"{stage};dur={timings_ms.get(stage, 0.0):.2f}" for stage in STAGES]
@@ -873,6 +881,7 @@ async def run_predict(
 
 __all__ = [
     "NumpyJSONResponse",
+    "add_server_timing",
     "as_batch",
     "run_predict",
 ]
