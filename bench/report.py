@@ -28,10 +28,13 @@ DOWNSHIFT_NAMES = {
     "downshift_base64": " base64",
     "downshift_safetensors": " safetensors",
     "downshift_inline": " `--execution inline`",
+    "downshift_cache": " result cache on",
+    "downshift_metrics": " `--metrics`",
     "downshift_auto": "",
     "downshift_torch": " `--backend torch`",
     "downshift_auto_mc4": " `--max-concurrency 4`",
     "downshift_auto_inline": " `--execution inline`",
+    "downshift_auto_cache": " result cache on",
 }
 
 

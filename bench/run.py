@@ -55,8 +55,18 @@ DOWNSHIFT_VARIANTS = {
     "downshift_base64": ("base64", []),
     "downshift_safetensors": ("safetensors", []),
     "downshift_inline": ("json", ["--execution", "inline"]),
+    "downshift_cache": ("json", []),
+    "downshift_metrics": ("json", ["--metrics"]),
 }
-NEW_IN = {"downshift_safetensors": (0, 5), "downshift_inline": (0, 5)}
+NEW_IN = {
+    "downshift_safetensors": (0, 5),
+    "downshift_inline": (0, 5),
+    "downshift_cache": (0, 6),
+    "downshift_metrics": (1, 0),
+}
+# The harness sends the same body again and again, so a result cache would answer from memory.
+# Every variant but `downshift_cache` turns it off (from 0.6.0, where the option starts).
+CACHE_OFF = ["--result-cache-rows", "0"]
 # Inline execution runs the model on the event loop, which only pays off when compute is short;
 # it is measured on the small fixture tier only.
 INLINE_CASES = FIXTURE_CASES
@@ -499,6 +509,8 @@ def main() -> None:
             try:
                 if target:
                     encoding, extra = DOWNSHIFT_VARIANTS[variant]
+                    if variant != "downshift_cache" and version_tuple(version) >= (0, 6):
+                        extra = [*extra, *CACHE_OFF]
                     proc, port, ready_s = start_downshift(case_name, target, extra)
                 else:
                     encoding = "json"
