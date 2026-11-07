@@ -556,3 +556,6 @@ The list of codes does not change in 1.x. A new code needs a new major version.
 | `at_capacity` | 503 | All slots are in use. Try again after the Retry-After seconds. |
 | `request_timeout` | 503 | The request took more than --request-timeout. |
 | `internal_error` | 500 | The server failed. The server log has the cause. |
+| `model_not_found` | 404 | The model of the request is not the model that the server serves. |
+| `not_embedding_model` | 400 | The route is for a text embedding model, and the model is not one. |
+| `dimensions_not_supported` | 400 | The request has dimensions, and the server did not start with --matryoshka. |

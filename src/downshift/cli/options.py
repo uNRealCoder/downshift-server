@@ -308,6 +308,15 @@ MetricsOpt = Annotated[
         "worker counts for itself. The API key rule of the other routes applies",
     ),
 ]
+ServedModelNameOpt = Annotated[
+    str | None,
+    typer.Option(
+        "--served-model-name",
+        metavar="NAME",
+        help="The model name for GET /v1/models and POST /v1/embeddings. Default: the name of "
+        "the model source (the last part of a path)",
+    ),
+]
 AccessLogOpt = Annotated[
     bool,
     typer.Option(

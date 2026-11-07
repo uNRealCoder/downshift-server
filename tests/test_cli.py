@@ -744,6 +744,18 @@ def test_serve_server_timing_flag_reaches_the_options_and_the_workers(monkeypatc
     assert args.options.server_timing is True
 
 
+def test_serve_served_model_name_reaches_the_options_and_the_workers(monkeypatch):
+    _, captured = _serve_captured(monkeypatch)
+    assert captured["app"].state.serving.options.served_model_name is None
+
+    _, captured = _serve_captured(monkeypatch, "--served-model-name", "my-model")
+    assert captured["app"].state.serving.options.served_model_name == "my-model"
+
+    _serve_captured(monkeypatch, "--served-model-name", "my-model", "--workers", "2")
+    args = runtime.ServeArgs.from_json(os.environ[runtime._SERVE_ARGS_ENV])
+    assert args.options.served_model_name == "my-model"
+
+
 BOUNDS = {
     "input_ids": {0: DimBound("batch", 1, 4096), 1: DimBound("seq", 1, 510)},
     "attention_mask": {0: DimBound("batch", 1, 4096), 1: DimBound("seq", 1, 510)},

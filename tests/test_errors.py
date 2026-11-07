@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from downshift.adapters.text import TextTooLongError
 from downshift.serve.app import build_app
 from downshift.serve.errors import ERROR_CODES, http_error_handler
+from downshift.serve.openai import served_name
 
 GOOD = {"inputs": {"x": [[0.0] * 16]}}
 ST = "application/vnd.safetensors"
@@ -115,6 +116,27 @@ def _internal_error(state, monkeypatch):
     return _client(state, raise_server_exceptions=False).post("/predict", json=GOOD)
 
 
+def _embedder(state):
+    return _text_state(state, pooling="mean")
+
+
+def _model_not_found(state, monkeypatch):
+    body = {"model": "other", "input": "hello"}
+    return _client(_embedder(state)).post("/v1/embeddings", json=body)
+
+
+def _not_embedding_model(state, monkeypatch):
+    return _client(state).post("/v1/embeddings", json={"model": "m", "input": "hello"})
+
+
+def _dimensions_not_supported(state, monkeypatch):
+    embedder = _embedder(state)
+    body = {"model": served_name(embedder), "input": "hello", "dimensions": 8}
+    return _client(embedder).post("/v1/embeddings", json=body)
+
+
+OPENAI_CODES = {"model_not_found", "not_embedding_model", "dimensions_not_supported"}
+
 CASES = {
     "invalid_request": (422, _invalid_request),
     "invalid_input": (400, _invalid_input),
@@ -132,6 +154,9 @@ CASES = {
     "at_capacity": (503, _at_capacity),
     "request_timeout": (503, _request_timeout),
     "internal_error": (500, _internal_error),
+    "model_not_found": (404, _model_not_found),
+    "not_embedding_model": (400, _not_embedding_model),
+    "dimensions_not_supported": (400, _dimensions_not_supported),
 }
 
 
@@ -143,8 +168,12 @@ def test_a_bad_request_gets_its_status_and_code(code, mlp_state, monkeypatch):
 
     assert response.status_code == status, response.text
     body = response.json()
-    assert body["code"] == code
-    assert "detail" in body
+    if code in OPENAI_CODES:  # these cases use a /v1 path
+        assert body["error"]["code"] == code
+        assert "message" in body["error"]
+    else:
+        assert body["code"] == code
+        assert "detail" in body
 
 
 def test_the_500_keeps_request_id_and_the_401_keeps_its_challenge(mlp_state, monkeypatch):
@@ -166,7 +195,7 @@ def test_an_error_with_no_code_gets_one_from_its_status():
     from starlette.exceptions import HTTPException
 
     error = HTTPException(418, "teapot")
-    response = asyncio.run(http_error_handler(None, error))  # type: ignore[arg-type]
+    response = asyncio.run(http_error_handler(SimpleNamespace(scope={"path": "/x"}), error))  # type: ignore[arg-type]
 
     assert response.body == b'{"detail":"teapot","code":"http_error"}'
 

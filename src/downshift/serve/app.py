@@ -11,6 +11,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import asdict
+from functools import partial
 from typing import Any, cast
 
 from fastapi import Depends, FastAPI, Request, Response
@@ -30,12 +31,13 @@ from downshift.serve.engine import ServingState
 from downshift.serve.errors import (
     ApiError,
     api_error,
-    error_body,
     error_response,
     http_error_handler,
+    route_path,
     validation_error_handler,
 )
 from downshift.serve.metrics import CONTENT_TYPE, Metrics, render
+from downshift.serve.openai import embeddings_response, model_card, parse_embeddings, served_name
 from downshift.serve.options import ExecutionChoice
 from downshift.serve.predict import (
     BINARY_REQUEST_TYPES,
@@ -46,6 +48,7 @@ from downshift.serve.predict import (
 from downshift.serve.schemas import (
     BackendInfo,
     CacheInfo,
+    EmbeddingsRequest,
     GraphPredictRequest,
     HealthResponse,
     IndexResponse,
@@ -79,14 +82,9 @@ _UNSUPPORTED_MEDIA_TYPE = (
 )
 
 
-def _route_path(scope: Scope) -> str:
-    """The path without the mount prefix, so "/model/health" is still the /health probe."""
-    path: str = scope["path"]
-    return path.removeprefix(scope.get("root_path", ""))
-
-
-def _body_too_large(observed: int, limit: int) -> JSONResponse:
+def _body_too_large(request: Request, observed: int, limit: int) -> JSONResponse:
     return error_response(
+        request.scope,
         413,
         "body_too_large",
         f"request body is {observed} bytes; the server limit is {limit} bytes (--max-body-bytes)",
@@ -120,7 +118,7 @@ async def _read_body_limited(request: Request, limit: int) -> bytes | JSONRespon
     async for chunk in request.stream():
         total += len(chunk)
         if total > limit:
-            return _body_too_large(total, limit)
+            return _body_too_large(request, total, limit)
         chunks.append(chunk)
     return b"".join(chunks)
 
@@ -133,6 +131,7 @@ async def _predict(
     request: Request,
     state: ServingState,
     graph: bool,
+    embeddings: bool,
     admitted_at: float,
 ) -> Response:
     """An admitted predict: check the content type and --max-body-bytes (before reading, if
@@ -141,12 +140,12 @@ async def _predict(
     content_type = _content_type(request)
     binary = content_type in BINARY_REQUEST_TYPES
     if content_type and not binary and "json" not in content_type:
-        return error_response(415, "unsupported_media_type", _UNSUPPORTED_MEDIA_TYPE)
+        return error_response(request.scope, 415, "unsupported_media_type", _UNSUPPORTED_MEDIA_TYPE)
     limit = state.options.max_body_bytes
     content_length = request.headers.get("content-length")
     if content_length is not None and content_length.isdigit():
         if int(content_length) > limit:
-            return _body_too_large(int(content_length), limit)
+            return _body_too_large(request, int(content_length), limit)
         body = await request.body()
     else:
         read = await _read_body_limited(request, limit)
@@ -156,6 +155,13 @@ async def _predict(
 
     timings: dict[str, float] = {}
     request.state.timings_ms = timings
+    steps: dict[str, Any] = {}
+    if embeddings:
+        steps = {
+            "parse": partial(parse_embeddings, state, body, timings),
+            "encode": partial(embeddings_response, state, timings),
+            "with_tokens": True,
+        }
     return await run_predict(
         state,
         body,
@@ -169,18 +175,20 @@ async def _predict(
         timings_ms=timings,
         accept_safetensors=SAFETENSORS_MEDIA_TYPE in request.headers.get("accept", "").lower(),
         use_cache="no-cache" not in request.headers.get("cache-control", "").lower(),
+        **steps,
     )
 
 
 class PredictRoute(APIRoute):
-    """/predict and /predict/graph, served from the raw body: FastAPI does not parse it, and
-    run_predict does so off the event loop. A slot is admitted first, so an overloaded server
+    """/predict, /predict/graph and /v1/embeddings, served from the raw body: FastAPI does not
+    parse it, and run_predict does so off the event loop. A slot is admitted first, so an overloaded server
     answers 503 before it reads a byte. One --request-timeout limit covers the whole request,
     the body read included. A thread that already runs is not stopped. `finally` releases the
     slot on every exit."""
 
     def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
         graph = self.path == "/predict/graph"
+        embeddings = self.path == "/v1/embeddings"
 
         async def route_handler(request: Request) -> Response:
             state: ServingState | None = request.app.state.serving
@@ -191,7 +199,7 @@ class PredictRoute(APIRoute):
             timeout = state.options.request_timeout
             try:
                 return await asyncio.wait_for(
-                    _predict(request, state, graph, time.monotonic()),
+                    _predict(request, state, graph, embeddings, time.monotonic()),
                     timeout if timeout > 0 else None,
                 )
             except TimeoutError:
@@ -212,6 +220,11 @@ async def predict(req: PredictRequest | None = None) -> Response:
 
 
 async def predict_graph(req: GraphPredictRequest | None = None) -> Response:
+    """Never called (PredictRoute serves the route): documents the JSON body for OpenAPI."""
+    raise NotImplementedError
+
+
+async def embeddings(req: EmbeddingsRequest | None = None) -> Response:
     """Never called (PredictRoute serves the route): documents the JSON body for OpenAPI."""
     raise NotImplementedError
 
@@ -333,7 +346,7 @@ class RequestIdMiddleware:
     @staticmethod
     def _log(scope: Scope, status: int, duration_ms: float, state: dict[str, Any]) -> None:
         path = scope["path"]
-        if _route_path(scope) in _PROBE_PATHS:
+        if route_path(scope) in _PROBE_PATHS:
             level = logging.DEBUG
         elif status >= 400:
             level = logging.WARNING
@@ -365,7 +378,7 @@ class ApiKeyMiddleware:
         self._key_bytes = api_key.encode("utf-8") if api_key is not None else b""
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or self.api_key is None or _route_path(scope) in _PROBE_PATHS:
+        if scope["type"] != "http" or self.api_key is None or route_path(scope) in _PROBE_PATHS:
             await self.app(scope, receive, send)
             return
 
@@ -377,6 +390,7 @@ class ApiKeyMiddleware:
             token.encode("latin-1"), self._key_bytes
         ):
             response = error_response(
+                scope,
                 401,
                 "unauthorized",
                 "Authorization header is not set or incorrect",
@@ -502,14 +516,13 @@ def build_app(
             )
         finally:
             request_id_var.reset(token)
-        return JSONResponse(
-            error_body(
-                "internal_error",
-                "inference failed on the server; see the server log",
-                request_id=request_id,
-            ),
-            status_code=500,
-            headers={request_id_header: request_id} if request_id else None,
+        return error_response(
+            request.scope,
+            500,
+            "internal_error",
+            "inference failed on the server; see the server log",
+            {request_id_header: request_id} if request_id else None,
+            request_id=request_id,
         )
 
     @app.get("/", response_model=IndexResponse)
@@ -575,6 +588,27 @@ def build_app(
 
         return describe(current, f"{str(request.base_url).rstrip('/')}/predict")
 
+    @app.get("/version")
+    async def version() -> dict[str, str]:
+        return {"version": downshift.__version__}
+
+    @app.get("/v1/models")
+    async def list_models(current: ServingState = Depends(require_serving)) -> dict[str, Any]:
+        return {"object": "list", "data": [model_card(current)]}
+
+    @app.get("/v1/models/{model_id:path}")
+    async def get_model(
+        model_id: str, current: ServingState = Depends(require_serving)
+    ) -> dict[str, Any]:
+        if model_id != served_name(current):
+            raise api_error(
+                404,
+                "model_not_found",
+                f"model {model_id!r:.64} is not served. Use {served_name(current)!r} "
+                "(GET /v1/models)",
+            )
+        return model_card(current)
+
     if counters is not None:
 
         @app.get("/metrics", include_in_schema=False)
@@ -586,5 +620,12 @@ def build_app(
         app.router.add_api_route(
             path, endpoint, methods=["POST"], route_class_override=PredictRoute, **_PREDICT_ROUTE
         )
+    app.router.add_api_route(
+        "/v1/embeddings",
+        embeddings,
+        methods=["POST"],
+        route_class_override=PredictRoute,
+        response_class=NumpyJSONResponse,
+    )
 
     return app

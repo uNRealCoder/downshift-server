@@ -3,7 +3,7 @@
 import math
 import re
 from enum import StrEnum
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -502,3 +502,14 @@ def to_numpy(
         except ValueError as exc:
             raise ValueError(f"input {name!r}: {exc}") from exc
     return arr
+
+
+class EmbeddingsRequest(BaseModel):
+    """The body of POST /v1/embeddings, as the OpenAI API defines it. A field that is not listed
+    here is ignored, because OpenAI clients send extra fields. `user` is accepted and ignored."""
+
+    model: str
+    input: str | list[str]
+    encoding_format: Literal["float", "base64"] = "float"
+    dimensions: int | None = None
+    user: str | None = None

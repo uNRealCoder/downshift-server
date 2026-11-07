@@ -239,3 +239,13 @@ def test_cache_header_defaults_and_reads_the_env(monkeypatch: pytest.MonkeyPatch
     assert importlib.reload(settings).CACHE_HEADER == "X-Downshift-Cache"
     monkeypatch.setenv("DOWNSHIFT_CACHE_HEADER", "X-Result-Cache")
     assert importlib.reload(settings).CACHE_HEADER == "X-Result-Cache"
+
+
+def test_served_model_name_is_unset_by_default_and_read_from_the_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DOWNSHIFT_SERVED_MODEL_NAME", raising=False)
+    assert importlib.reload(settings).SERVED_MODEL_NAME is None
+
+    monkeypatch.setenv("DOWNSHIFT_SERVED_MODEL_NAME", "my-model")
+    assert importlib.reload(settings).SERVED_MODEL_NAME == "my-model"

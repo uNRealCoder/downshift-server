@@ -211,6 +211,10 @@ SERVER_TIMING = _env_bool("DOWNSHIFT_SERVER_TIMING", False)
 # Each worker counts for itself.
 METRICS = _env_bool("DOWNSHIFT_METRICS", False)
 
+# The model name that GET /v1/models shows and that POST /v1/embeddings requires. Unset: the
+# name of the model source (the last part of a path).
+SERVED_MODEL_NAME = os.environ.get("DOWNSHIFT_SERVED_MODEL_NAME") or None
+
 # HTTPS. If SSL_CERTFILE is set, `serve` uses TLS. The key can be in the cert file, or in its
 # own file. The password of an encrypted key is an environment variable only, so that it does
 # not show in the process list.

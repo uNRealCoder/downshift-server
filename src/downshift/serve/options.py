@@ -60,6 +60,7 @@ class ServeOptions:
     result_cache_rows: int | None = settings.RESULT_CACHE_ROWS
     server_timing: bool = settings.SERVER_TIMING  # add the Server-Timing header to predicts
     metrics: bool = settings.METRICS  # count requests and serve GET /metrics
+    served_model_name: str | None = settings.SERVED_MODEL_NAME  # None = from the model source
     atol: float | None = None  # None means "by the floating dtype of the model"
     rtol: float | None = None
     seed: int = 0  # makes the verification samples reproducible

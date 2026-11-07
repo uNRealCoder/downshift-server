@@ -576,6 +576,8 @@ def test_index_names_the_model_and_the_routes(mlp_client):
     assert "/schema" in body["next_step"]
     for route in body["routes"].values():
         method, path = route.split(" ")
+        if "{" in path:  # a template: /v1/models/{model_id:path}
+            continue
         assert mlp_client.request(method, path).status_code != 404, route
 
 

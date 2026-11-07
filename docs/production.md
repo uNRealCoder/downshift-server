@@ -155,6 +155,10 @@ Boot        6.4 s: load 0.3, export 2.8, verify 0.2, session 0.1, warmup 0.1
 
 `load` reads or imports the model. `export` is `torch.export` plus the ONNX translation. `verify` runs the samples through both backends. `session` builds the backend. `warmup` runs `--warmup N` inferences. The `boot` field of `/metadata` has the same numbers. With `--workers N`, the parent pays `export` and `verify` one time, and each worker pays its own `load`, `session` and `warmup`.
 
+## Model name
+
+`GET /v1/models` lists one model. `POST /v1/embeddings` accepts only that name in `model`. Without `--served-model-name NAME` (or `DOWNSHIFT_SERVED_MODEL_NAME`), the name is the last part of the model path. For example, the model `./models/bge-small` has the name `bge-small`. Set the option if a client must use a fixed name that does not depend on the path.
+
 ## Metrics
 
 To count the requests, start the server with `--metrics` (or `DOWNSHIFT_METRICS=1`). The server then serves the counts on `GET /metrics` as Prometheus text (format 0.0.4). If you do not set the option, the route does not exist (`404`), and the request path counts nothing. `/metrics` follows the API key rule of the other routes: send `Authorization: Bearer <key>`. The probes `/health` and `/ready` are the only routes without a key.
