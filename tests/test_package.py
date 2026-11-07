@@ -75,3 +75,10 @@ def test_serve_help_is_fast() -> None:
     elapsed = time.perf_counter() - start
     assert result.returncode == 0, result.stderr
     assert elapsed < HELP_BUDGET_SECONDS, elapsed
+
+
+def test_build_app_is_a_lazy_public_name() -> None:
+    from downshift import build_app
+    from downshift.serve.app import build_app as defined
+
+    assert build_app is defined

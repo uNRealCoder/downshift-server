@@ -10,6 +10,7 @@ This page describes every name in `downshift.__all__`: the functions that run th
 - `downshift.core.verify`
 - `downshift.adapters.base`
 - `downshift.serve`
+- `downshift.serve.app`
 
 It then caches the result in `globals()` of `downshift`. Each later access is a plain attribute lookup. There is no more call to `__getattr__`.
 
@@ -222,6 +223,23 @@ uvicorn.run(
 ```
 
 Use `ssl_ciphers=None`. With `None`, uvicorn keeps the cipher list of the Python standard library. The default of uvicorn (`"TLSv1"`) also enables NULL ciphers and anonymous ciphers. `downshift serve --ssl-certfile` uses the same settings. Refer to [HTTPS in production.md](production.md#https).
+
+### `build_app`
+
+```python
+def build_app(
+    state: ServingState | None = None,
+    *,
+    loader: Callable[[], ServingState] | None = None,
+    middleware: Sequence[str] = (),
+    api_key: str | None = settings.API_KEY,
+    access_log: bool = True,
+    metrics: bool = False,
+    worker: str = "0",
+) -> FastAPI
+```
+
+`build_app` builds the FastAPI app over a serving state that you made yourself, or over a `loader` that makes it. Give exactly one of `state` and `loader`. Most code uses `app_for`, which calls `build_app`. If you do not pass `api_key`, downshift uses `DOWNSHIFT_API_KEY`. Refer to "`build_app`" in [`serving.md`](serving.md) for the details.
 
 ## Types
 

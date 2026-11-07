@@ -20,7 +20,7 @@ Rules for request bodies:
 - If an axis is outside `bounds`, the server gives a `400` that names the axis and the range.
 - If the server gives `503` with `Retry-After`, wait for that number of seconds and send again.
 - If `DOWNSHIFT_API_KEY` is set on the server, send `Authorization: Bearer <key>`. `/health` and `/ready` do not need the key.
-- Each error body is `{"detail": "<text>", "code": "<code>"}`. Branch on `code`. The codes are: `invalid_request`, `invalid_input`, `missing_input`, `text_too_long`, `unknown_prompt`, `text_not_supported`, `not_graph_model`, `unauthorized`, `body_too_large`, `unsupported_media_type`, `not_found`, `method_not_allowed`, `http_error`, `not_ready`, `at_capacity`, `request_timeout`, `internal_error`. `docs/http-api.md` has the status and the meaning of each code.
+- Each error body is `{"detail": "<text>", "code": "<code>"}`. Branch on `code`. The codes are: `invalid_request`, `invalid_input`, `missing_input`, `text_too_long`, `unknown_prompt`, `text_not_supported`, `not_graph_model`, `unauthorized`, `body_too_large`, `unsupported_media_type`, `not_found`, `method_not_allowed`, `http_error`, `not_ready`, `at_capacity`, `request_timeout`, `model_not_found`, `not_embedding_model`, `dimensions_not_supported`, `internal_error`. `docs/http-api.md` has the status and the meaning of each code.
 - For a text model, `/schema` has `text_input`. Send `{"text": ["..."]}`. The server rejects text that is longer than the model accepts. It does not cut the text.
 
 ## Host a model

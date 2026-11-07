@@ -24,6 +24,7 @@ if TYPE_CHECKING:
         prepare_model,
     )
     from downshift.core.verify import NumericsReport, OnnxRuntimeError
+    from downshift.serve.app import build_app
 
 # A literal list, so ruff sees the TYPE_CHECKING imports as exported. Keep it in step with _LAZY.
 __all__ = [
@@ -33,6 +34,7 @@ __all__ = [
     "OnnxRuntimeError",
     "Prepared",
     "app_for",
+    "build_app",
     "build_verdict",
     "check",
     "export",
@@ -53,6 +55,7 @@ _LAZY = {
     "OnnxRuntimeError": ("downshift.core.verify", "OnnxRuntimeError"),
     "intake": ("downshift.core.verdict", "intake"),
     "app_for": ("downshift.serve", "app_for"),
+    "build_app": ("downshift.serve.app", "build_app"),
 }
 
 

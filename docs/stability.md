@@ -121,7 +121,7 @@ Refer to "Environment variables" in [`cli.md`](cli.md). These variables are froz
 
 ## Python API
 
-Refer to [`python-api.md`](python-api.md). The names in `downshift.__all__` are frozen, with their signatures: `Adapter`, `ExportVerdict`, `NumericsReport`, `OnnxRuntimeError`, `Prepared`, `app_for`, `build_verdict`, `check`, `export`, `intake`, `prepare_model` and `__version__`.
+Refer to [`python-api.md`](python-api.md). The names in `downshift.__all__` are frozen, with their signatures: `Adapter`, `ExportVerdict`, `NumericsReport`, `OnnxRuntimeError`, `Prepared`, `app_for`, `build_app`, `build_verdict`, `check`, `export`, `intake`, `prepare_model` and `__version__`.
 
 Code in other modules of `downshift` is internal, also if it has no leading underscore. `ServeOptions` and `ServingState` are internal. Refer to [`serving.md`](serving.md).
 
