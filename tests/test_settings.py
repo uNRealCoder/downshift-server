@@ -138,33 +138,22 @@ def test_prep_threads_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.PREP_THREADS == 7
 
 
-def test_api_key_new_name(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_api_key_new_name(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DOWNSHIFT_API_KEY", "new")
     monkeypatch.delenv("DOWNSHIFT_SERVER_API_KEY", raising=False)
     assert importlib.reload(settings).API_KEY == "new"
-    assert not caplog.records
 
 
-def test_api_key_old_name_works_and_warns_once(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_api_key_old_name_works(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DOWNSHIFT_API_KEY", raising=False)
     monkeypatch.setenv("DOWNSHIFT_SERVER_API_KEY", "old")
     assert importlib.reload(settings).API_KEY == "old"
-    assert len(caplog.records) == 1
-    assert "Set DOWNSHIFT_API_KEY instead" in caplog.records[0].getMessage()
 
 
-def test_api_key_new_name_wins_over_old_name(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_api_key_new_name_wins_over_old_name(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DOWNSHIFT_API_KEY", "new")
     monkeypatch.setenv("DOWNSHIFT_SERVER_API_KEY", "old")
     assert importlib.reload(settings).API_KEY == "new"
-    assert len(caplog.records) == 1
-    assert "uses DOWNSHIFT_API_KEY" in caplog.records[0].getMessage()
 
 
 @pytest.mark.parametrize("value", ["auto", "cpu", "cuda", "cuda:0", "cuda:12"])

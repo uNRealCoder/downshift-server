@@ -120,6 +120,28 @@ def test_a_key_set_does_not_warn(mlp_state, caplog):
     assert not [r for r in caplog.records if NOT_SET in r.getMessage()]
 
 
+@pytest.mark.parametrize(
+    ("new_name_set", "expected"),
+    [(False, "Set DOWNSHIFT_API_KEY instead"), (True, "uses DOWNSHIFT_API_KEY")],
+)
+def test_the_old_api_key_name_warns_at_build(
+    mlp_state, caplog, monkeypatch, new_name_set, expected
+):
+    monkeypatch.setenv("DOWNSHIFT_SERVER_API_KEY", "old")
+    if new_name_set:
+        monkeypatch.setenv("DOWNSHIFT_API_KEY", "new")
+    else:
+        monkeypatch.delenv("DOWNSHIFT_API_KEY", raising=False)
+    with caplog.at_level(logging.WARNING, logger="downshift.serve"):
+        build_app(mlp_state, api_key=KEY)
+
+    warned = [
+        r.getMessage() for r in caplog.records if "DOWNSHIFT_SERVER_API_KEY" in r.getMessage()
+    ]
+    assert len(warned) == 1
+    assert expected in warned[0]
+
+
 def test_the_probes_stay_exempt_when_the_app_is_mounted_under_a_prefix(mlp_state):
     root = FastAPI()
     root.mount("/model", build_app(mlp_state, api_key=KEY))

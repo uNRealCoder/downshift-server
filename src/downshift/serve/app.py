@@ -5,6 +5,7 @@ import contextvars
 import hmac
 import inspect
 import logging
+import os
 import threading
 import time
 import uuid
@@ -473,6 +474,15 @@ def build_app(
     if (state is None) == (loader is None):
         raise ValueError("build_app needs exactly one of state or loader")
 
+    if "DOWNSHIFT_SERVER_API_KEY" in os.environ:
+        logger.warning(
+            "DOWNSHIFT_SERVER_API_KEY is the old name and will stop working in a later release. "
+            + (
+                "Both names are set, so downshift uses DOWNSHIFT_API_KEY. Remove the old name."
+                if "DOWNSHIFT_API_KEY" in os.environ
+                else "Set DOWNSHIFT_API_KEY instead."
+            )
+        )
     api_key = api_key or None
     if api_key is None:
         logger.warning(
