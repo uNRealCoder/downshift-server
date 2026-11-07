@@ -323,6 +323,12 @@ def _fake_plan(cache, request, arrays, *, pending=None, claim=()):
     return predict._CachePlan(request, arrays, keys, found, None, owned)
 
 
+def _encoder(state):
+    return lambda outputs, request, tokens, layout: predict._encode_response(
+        state, outputs, request.encoding, {}, False, layout
+    )
+
+
 def test_a_request_that_leaves_during_the_prep_hop_releases_its_rows(monkeypatch):
     state = _state("clean_mlp")
     cache = state.result_cache
@@ -339,13 +345,13 @@ def test_a_request_that_leaves_during_the_prep_hop_releases_its_rows(monkeypatch
             predict._run_cached(
                 state,
                 cache,
-                b"",
+                lambda: request,
                 request,
-                binary=False,
+                _encoder(state),
+                with_tokens=False,
                 run_here=False,
                 admitted_at=time.monotonic(),
                 timings_ms={},
-                accept_safetensors=False,
             )
         )
         await asyncio.sleep(0.05)
@@ -427,13 +433,13 @@ def test_a_waiter_that_retries_can_get_a_whole_response(monkeypatch):
         return await predict._run_cached(
             state,
             cache,
-            b"",
+            lambda: request,
             request,
-            binary=False,
+            _encoder(state),
+            with_tokens=False,
             run_here=False,
             admitted_at=time.monotonic(),
             timings_ms={},
-            accept_safetensors=False,
         )
 
     assert asyncio.run(go()).status_code == 200

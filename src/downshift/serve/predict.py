@@ -281,6 +281,25 @@ class _Request:
     encoding: OutputEncoding | RequestOutputEncoding | None = None
 
 
+Parse = Callable[[], _Request]
+# (outputs, request, tokens, layout) -> the response. `tokens` is the count of tokens for each
+# row, only for a text request and only if run_predict was asked for it. `layout` is for a graph
+# batch.
+Encode = Callable[[dict[str, np.ndarray], _Request, list[int] | None, GraphLayout | None], Response]
+
+# The key of the token count in a cached text row. The encoders never see it as an output.
+TOKENS_KEY = "__tokens__"
+
+
+def _row_tokens(feeds: dict[str, np.ndarray]) -> list[int]:
+    """The tokens that are not padding, for each row of text feeds."""
+    mask = feeds.get("attention_mask")
+    if mask is not None:
+        return mask.reshape(mask.shape[0], -1).sum(axis=1).tolist()  # type: ignore[no-any-return]
+    ids = feeds["input_ids"] if "input_ids" in feeds else next(iter(feeds.values()))
+    return [ids.shape[1]] * ids.shape[0]
+
+
 def _input_error(exc: Exception) -> HTTPException:
     code = "text_too_long" if isinstance(exc, TextTooLongError) else "invalid_input"
     return api_error(400, code, str(exc))
@@ -659,22 +678,23 @@ async def _await_row(future: Future[Row]) -> Row:
 async def _run_cached(
     state: ServingState,
     cache: ResultCache,
-    body: bytes,
+    parse: Parse,
     parsed: _Request | None,
+    encode: Encode,
     *,
-    binary: bool,
+    with_tokens: bool,
     run_here: bool,
     admitted_at: float,
     timings_ms: dict[str, float],
-    accept_safetensors: bool,
     use_lookup: bool = True,
 ) -> Response:
     """run_predict with the result cache. The model sees only the missed rows. Hits, rows from
-    other requests and new rows are joined in request order and encoded on the prep pool."""
+    other requests and new rows are joined in request order and encoded on the prep pool. A
+    text row keeps its token count under TOKENS_KEY."""
     pool = None if run_here else state.prep_executor
 
     def prepare() -> _CachePlan:
-        request = parsed or _parse(state, body, False, binary, timings_ms)
+        request = parsed or parse()
         return _cache_prepare(state, cache, request, timings_ms, use_lookup)
 
     # If the client leaves during prep, the thread still finishes and claims rows: release them.
@@ -698,13 +718,14 @@ async def _run_cached(
             by_row = all(o.ndim and o.shape[0] == len(indexes) for o in outputs.values())
             if plan.passthrough or (not by_row and len(indexes) == len(plan.keys)):
                 # An empty batch, or outputs without a row axis: nothing to cache or join.
-                return _encode_response(
-                    state, outputs, plan.request.encoding, timings_ms, accept_safetensors
-                )
+                return encode(outputs, plan.request, None, None)
             if not by_row:
                 raise RuntimeError("an output of the model does not follow the batch size")
+            tokens = _row_tokens(feeds) if plan.request.text is not None else None
             for n, i in enumerate(indexes):
                 rows[i] = {name: out[n] for name, out in outputs.items()}
+                if tokens is not None:
+                    rows[i][TOKENS_KEY] = np.asarray(tokens[n])
                 cache.complete(plan.keys[i], rows[i])
             return None
 
@@ -748,11 +769,12 @@ async def _run_cached(
         raise
 
     def finish() -> Response:
-        names = list(rows[0])
+        names = [n for n in rows[0] if n != TOKENS_KEY]
         arrays = {n: np.stack([rows[i][n] for i in range(len(plan.keys))]) for n in names}
-        return _encode_response(
-            state, arrays, plan.request.encoding, timings_ms, accept_safetensors
-        )
+        tokens = None
+        if with_tokens and plan.request.text is not None:
+            tokens = [int(rows[i][TOKENS_KEY]) for i in range(len(plan.keys))]
+        return encode(arrays, plan.request, tokens, None)
 
     response: Response = await _run_in(pool, "encode_wait", timings_ms, finish)
     computed = len(plan.keys) - served
@@ -773,6 +795,9 @@ async def run_predict(
     timings_ms: dict[str, float],
     accept_safetensors: bool,
     use_cache: bool = True,
+    parse: Parse | None = None,
+    encode: Encode | None = None,
+    with_tokens: bool = False,
 ) -> Response:
     """One admitted predict, from its raw body, in two hops: parse and prepare on the prep
     pool, then infer and encode on an inference thread. The event loop does neither, so
@@ -781,30 +806,52 @@ async def run_predict(
     `binary` is a safetensors body. `inline` (--execution inline, a small JSON body) does all
     of it on the event loop, except tokenization. `timings_ms` collects the milliseconds of
     each stage for the access log and the optional Server-Timing header.
+
+    `parse` (default: decode `body` as a /predict body) builds the _Request, and `encode`
+    (default: the /predict response) builds the response. /v1/embeddings sets both and has the
+    same admission, pools, timeout, cache and row checks. `with_tokens` gives `encode` the token
+    count of each text row.
     """
-    parsed = _parse(state, body, graph, binary, timings_ms) if inline else None
+    if parse is None:
+
+        def parse() -> _Request:
+            return _parse(state, body, graph, binary, timings_ms)
+
+    if encode is None:
+
+        def encode(
+            outputs: dict[str, np.ndarray],
+            request: _Request,
+            tokens: list[int] | None,
+            layout: GraphLayout | None,
+        ) -> Response:
+            return _encode_response(
+                state, outputs, request.encoding, timings_ms, accept_safetensors, layout
+            )
+
+    parsed = parse() if inline else None
     run_here = parsed is not None and parsed.text is None
     if state.result_cache is not None and not graph:
         return await _run_cached(
             state,
             state.result_cache,
-            body,
+            parse,
             parsed,
-            binary=binary,
+            encode,
+            with_tokens=with_tokens,
             run_here=run_here,
             admitted_at=admitted_at,
             timings_ms=timings_ms,
-            accept_safetensors=accept_safetensors,
             use_lookup=use_cache,
         )
 
-    def prepare() -> tuple[Any, dict[str, np.ndarray], GraphLayout | None]:
-        request = parsed or _parse(state, body, graph, binary, timings_ms)
+    def prepare() -> tuple[_Request, dict[str, np.ndarray], GraphLayout | None]:
+        request = parsed or parse()
         feeds, prep_ms, layout = _prepare_feeds(state, request)
         timings_ms["prep"] = round(prep_ms, 2)
-        return request.encoding, feeds, layout
+        return request, feeds, layout
 
-    encoding, feeds, layout = await _run_in(
+    request, feeds, layout = await _run_in(
         None if run_here else state.prep_executor, "prep_wait", timings_ms, prepare
     )
 
@@ -815,7 +862,8 @@ async def run_predict(
         _check_timeout(state, admitted_at)
         outputs, infer_ms = _infer(state, feeds)
         timings_ms["infer"] = round(infer_ms, 2)
-        return _encode_response(state, outputs, encoding, timings_ms, accept_safetensors, layout)
+        tokens = _row_tokens(feeds) if with_tokens and request.text is not None else None
+        return encode(outputs, request, tokens, layout)
 
     response: Response = await _run_in(
         None if run_here else state.executor, "infer_wait", timings_ms, infer_and_encode
