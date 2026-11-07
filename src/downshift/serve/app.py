@@ -7,6 +7,7 @@ import inspect
 import logging
 import os
 import re
+import signal
 import threading
 import time
 import uuid
@@ -435,6 +436,31 @@ def load_middleware(app: FastAPI, specs: Sequence[str]) -> None:
             )
 
 
+def _flag_stopping_on_signal(app: FastAPI) -> None:
+    """Set app.state.stopping when a stop signal comes, then run the handler of uvicorn.
+
+    uvicorn runs the lifespan shutdown only after the connections drain. /ready must turn 503
+    before that, so the load balancer stops new requests. This works in each `--workers`
+    process too. uvicorn installs its handlers before the lifespan starts. Only the main
+    thread can set a handler: in any other thread (a test client) this does nothing.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        return
+    from uvicorn.server import HANDLED_SIGNALS
+
+    def wrap(previous: Callable[[int, Any], Any]) -> Callable[[int, Any], None]:
+        def handler(sig: int, frame: Any) -> None:
+            app.state.stopping = True
+            previous(sig, frame)
+
+        return handler
+
+    for sig in HANDLED_SIGNALS:
+        previous = signal.getsignal(sig)
+        if callable(previous):
+            signal.signal(sig, wrap(previous))
+
+
 def _loader_lifespan(
     loader: Callable[[], ServingState],
 ) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
@@ -445,6 +471,7 @@ def _loader_lifespan(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         progress = LoadProgress()
         app.state.load_progress = progress
+        _flag_stopping_on_signal(app)
 
         def run() -> None:
             # In the thread's own Context, report() calls deep in core reach `progress`.
@@ -507,6 +534,7 @@ def build_app(
         lifespan=_loader_lifespan(loader) if loader is not None else None,
     )
     app.state.serving = state
+    app.state.stopping = False
     # The last middleware added is the outermost. User middleware sits next to the routes and
     # sees only authenticated traffic. The request ID wraps everything, the 401s included.
     load_middleware(app, middleware)
@@ -569,6 +597,8 @@ def build_app(
 
     @app.get("/ready", response_model=ReadyResponse)
     async def ready(request: Request) -> JSONResponse:
+        if request.app.state.stopping:
+            return JSONResponse({"ready": False, "phase": "stopping"}, status_code=503)
         current: ServingState | None = request.app.state.serving
         if current is None:
             progress: LoadProgress | None = getattr(request.app.state, "load_progress", None)

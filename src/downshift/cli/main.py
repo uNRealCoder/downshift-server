@@ -29,6 +29,7 @@ from downshift.cli.options import (
     DynamicOpt,
     ExecutionOpt,
     ExportCacheDirOpt,
+    ForwardedAllowIpsOpt,
     InputsOpt,
     InterOpThreadsOpt,
     IntraOpThreadsOpt,
@@ -50,6 +51,7 @@ from downshift.cli.options import (
     ReferenceOpt,
     RequestTimeoutOpt,
     ResultCacheRowsOpt,
+    RootPathOpt,
     RtolOpt,
     SamplesOpt,
     SeedOpt,
@@ -58,6 +60,7 @@ from downshift.cli.options import (
     SslCertfileOpt,
     SslKeyfileOpt,
     Tf32Opt,
+    TimeoutGracefulShutdownOpt,
     TokenizerFromOpt,
     UnsafeLoadOpt,
     VaryOpt,
@@ -393,6 +396,9 @@ def serve_cmd(
     export_cache_dir: ExportCacheDirOpt = settings.EXPORT_CACHE_DIR,
     ssl_certfile: SslCertfileOpt = settings.SSL_CERTFILE,
     ssl_keyfile: SslKeyfileOpt = settings.SSL_KEYFILE,
+    root_path: RootPathOpt = settings.ROOT_PATH,
+    forwarded_allow_ips: ForwardedAllowIpsOpt = settings.FORWARDED_ALLOW_IPS,
+    timeout_graceful_shutdown: TimeoutGracefulShutdownOpt = settings.TIMEOUT_GRACEFUL_SHUTDOWN,
     atol: AtolOpt = None,
     rtol: RtolOpt = None,
     seed: SeedOpt = 0,
@@ -425,8 +431,12 @@ def serve_cmd(
             log_level=log_level.value,
             log_config=None,
             access_log=False,
+            root_path=root_path,
+            timeout_graceful_shutdown=timeout_graceful_shutdown or None,
             **tls,
         )
+        if forwarded_allow_ips is not None:
+            uvicorn_kwargs["forwarded_allow_ips"] = forwarded_allow_ips
         if export_cache_dir:
             from downshift.core.export_cache import check_dir
 

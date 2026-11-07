@@ -19,7 +19,7 @@ import downshift
 from downshift.loading import LoadedModel, LoadSpec, load_model
 from downshift.serve import app_for
 from downshift.serve import predict as serve_predict
-from downshift.serve.app import build_app
+from downshift.serve.app import _flag_stopping_on_signal, build_app
 from downshift.serve.engine import ServeOptions, prepare_serving
 from downshift.serve.options import ExecutionChoice
 from downshift.serve.schemas import OutputEncoding
@@ -974,3 +974,58 @@ def test_metadata_shows_the_serving_numerics(mlp_state, monkeypatch):
         body = client.get("/metadata").json()["serving_numerics"]
     assert body["provider"] == "CUDAExecutionProvider"
     assert body["ok"] is True and body["tf32"] is False and body["min_cosine"] is None
+
+
+def test_ready_is_503_stopping_after_the_flag_is_set(mlp_state):
+    app = build_app(mlp_state)
+    with TestClient(app) as client:
+        assert client.get("/ready").status_code == 200
+        app.state.stopping = True
+        ready = client.get("/ready")
+        assert ready.status_code == 503
+        assert ready.json() == {"ready": False, "phase": "stopping"}
+        assert client.post("/predict", json=MLP_INPUT).status_code == 200
+
+
+def test_a_stop_signal_sets_the_flag_and_runs_the_handler_of_uvicorn(mlp_state):
+    import signal
+
+    app = build_app(mlp_state)
+    calls = []
+
+    def uvicorn_handler(sig, frame):
+        calls.append(sig)
+
+    saved = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        signal.signal(signal.SIGINT, uvicorn_handler)
+        signal.signal(signal.SIGTERM, uvicorn_handler)
+        _flag_stopping_on_signal(app)
+        assert app.state.stopping is False
+        signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+        assert app.state.stopping is True
+        assert calls == [signal.SIGTERM]
+        app.state.stopping = False
+        signal.getsignal(signal.SIGINT)(signal.SIGINT, None)
+        assert app.state.stopping is True
+    finally:
+        for sig, handler in saved.items():
+            signal.signal(sig, handler)
+
+
+def test_the_stop_hook_does_nothing_off_the_main_thread(mlp_state):
+    import signal
+
+    app = build_app(mlp_state)
+    before = signal.getsignal(signal.SIGTERM)
+    thread = threading.Thread(target=_flag_stopping_on_signal, args=(app,))
+    thread.start()
+    thread.join()
+    assert signal.getsignal(signal.SIGTERM) is before
+
+
+def test_schema_and_index_include_the_root_path(mlp_state):
+    app = build_app(mlp_state)
+    with TestClient(app, root_path="/models/bert") as client:
+        assert "/models/bert/predict " in client.get("/schema").json()["example_curl"]
+        assert client.get("/").json()["routes"]["schema"] == "GET /models/bert/schema"

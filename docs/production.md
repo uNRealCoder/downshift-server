@@ -45,10 +45,31 @@ Downshift uses the TLS settings of `ssl.create_default_context`: TLS 1.2 or late
 
 Downshift does not renew certificates, does not do ACME requests or client certificates, and does not redirect HTTP to HTTPS. It reads the files one time, so restart it after a renewal. If a proxy terminates TLS, do not give `--ssl-certfile`. Keep downshift on plain HTTP on `127.0.0.1` or a private network.
 
+## Behind a proxy
+
+If a reverse proxy sends requests to downshift, tell downshift what the proxy does:
+
+- **Root path.** If the proxy removes a path prefix (it sends `/models/bert/predict` to downshift as `/predict`), give `--root-path /models/bert`. The links of `GET /` and the example URL and `curl` of `GET /schema` then include the prefix.
+- **Forwarded IPs.** Downshift trusts `X-Forwarded-For` and `X-Forwarded-Proto` only from `127.0.0.1`. If the proxy has another address, give `--forwarded-allow-ips 10.0.0.5` (comma-separated IPs, or `*` if only the proxy can reach the port). The example URL of `GET /schema` then uses `https` when the proxy gets the request on HTTPS, and the access log has the IP of the client.
+- **HTTPS at the proxy.** Let the proxy end TLS. Do not give `--ssl-certfile`. Keep downshift on plain HTTP on a private network.
+
+## Shut down
+
+On `SIGTERM` (or `SIGINT`), the server does these steps:
+
+1. `/ready` gives `503` with `{"ready": false, "phase": "stopping"}` at once. The load balancer sends no new requests.
+2. The server stops new connections. A request on an open connection still runs, `/predict` too.
+3. The server waits up to `--timeout-graceful-shutdown SECONDS` (default `30`) for the running requests. `0` means wait without a limit.
+4. The server stops.
+
+With `--workers N`, each worker does the same steps for itself.
+
+In Kubernetes, set `terminationGracePeriodSeconds` above `--timeout-graceful-shutdown`. Also set it above `--request-timeout`, so a slow request can finish. If the grace period is shorter, the kubelet sends `SIGKILL` and the running requests fail.
+
 ## `/health` and `/ready`
 
 - **`/health`** is the liveness probe. It gives `200` when the process is up, also while the model loads. It runs on the event loop and never waits for predicts. Use it to decide "restart this container".
-- **`/ready`** gives `503` with `{"ready": false, "phase": "export"}` until the model is loaded, exported, verified and warmed up. It then gives `200` and does not change back. `phase` is `load`, `export`, `verify`, `session` or `warmup`. Use it to decide "send traffic to this pod".
+- **`/ready`** gives `503` with `{"ready": false, "phase": "export"}` until the model is loaded, exported, verified and warmed up. It then gives `200`. It gives `503` again with `"phase": "stopping"` when the server shuts down (refer to "Shut down"). `phase` is `load`, `export`, `verify`, `session` or `warmup`. Use it to decide "send traffic to this pod".
 
 With one worker, `serve` binds the port before it loads anything. `/ready`, `/metadata`, `/schema` and the predict routes give `503` while a background thread runs the gate. If the load fails, the process exits with the code that `check` gives for the same error. A supervisor sees a failed start, not a server that gives `503` forever.
 

@@ -243,6 +243,34 @@ SslKeyfileOpt = Annotated[
         "this option is not necessary. For an encrypted key, set DOWNSHIFT_SSL_KEYFILE_PASSWORD",
     ),
 ]
+RootPathOpt = Annotated[
+    str,
+    typer.Option(
+        "--root-path",
+        metavar="PATH",
+        help="The path prefix that your proxy strips, for example /models/bert. The links of "
+        "GET / and the example URL of GET /schema then include it",
+    ),
+]
+ForwardedAllowIpsOpt = Annotated[
+    str | None,
+    typer.Option(
+        "--forwarded-allow-ips",
+        metavar="IPS",
+        help="The proxies (comma-separated IPs, or *) whose X-Forwarded-For and "
+        "X-Forwarded-Proto headers to trust. Default: 127.0.0.1",
+    ),
+]
+TimeoutGracefulShutdownOpt = Annotated[
+    int,
+    typer.Option(
+        "--timeout-graceful-shutdown",
+        metavar="SECONDS",
+        min=0,
+        help="On SIGTERM, the server stops new connections, waits up to SECONDS for the "
+        "running requests, then stops. /ready gives 503 at once. 0 = wait without a limit",
+    ),
+]
 AtolOpt = Annotated[
     float | None,
     typer.Option("--atol", help="Override the absolute tolerance. Default: by output dtype"),

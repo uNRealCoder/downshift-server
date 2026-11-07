@@ -80,7 +80,9 @@ This route returns `200` with `{"ready": true}` after the model is loaded, expor
 - While the model loads, the body is `{"ready": false, "phase": "export"}`. `phase` is the step of the loader: `load`, `export`, `verify`, `session` or `warmup`. These are also the keys of `boot` in `/metadata` and the names in the `Boot` row of the banner.
 - A `ServingState` that is not warmed up gives `{"ready": false}`. The current boot paths never serve such a state.
 
-A ready server answers `{"ready": true}`. `/ready` does not change back to `503` until a restart.
+- After the server gets `SIGTERM` or `SIGINT`, the body is `{"ready": false, "phase": "stopping"}`. A load balancer then stops new requests while the running requests finish. Refer to "Shut down" in [production.md](production.md#shut-down).
+
+A ready server answers `{"ready": true}`. `/ready` changes to `503` only when the server stops.
 
 ```bash
 curl -s -i localhost:8000/ready

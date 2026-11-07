@@ -41,7 +41,7 @@ Refer to [`http-api.md`](http-api.md) for the bodies, the status codes and the w
 |---|---|
 | `GET /` | Fields: `service`, `version`, `ready`, `model`, `routes`, `next_step`. |
 | `GET /health` | Field: `status`. |
-| `GET /ready` | Fields: `ready`, and `phase` while the model loads. The status is `200` or `503`. |
+| `GET /ready` | Fields: `ready`, and `phase` while the model loads. The status is `200` or `503`. `phase` also has the value `stopping` (added in 1.0): the server got `SIGTERM` or `SIGINT`. Add new `phase` values only as additions in 1.x. |
 | `GET /metadata` | The fields of `MetadataResponse` in `serve/schemas.py`. |
 | `GET /schema` | The fields of `SchemaResponse` in `serve/schemas.py`. |
 | `GET /version` | Field: `version`. |
@@ -120,6 +120,7 @@ Refer to "Environment variables" in [`cli.md`](cli.md). These variables are froz
 - GPU: `DOWNSHIFT_TF32`.
 - Request and response: `DOWNSHIFT_OUTPUT_ENCODING`, `DOWNSHIFT_RESULT_CACHE_ROWS`, `DOWNSHIFT_SERVER_TIMING`, `DOWNSHIFT_METRICS`, `DOWNSHIFT_SERVED_MODEL_NAME`, `DOWNSHIFT_MATRYOSHKA`.
 - Security: `DOWNSHIFT_API_KEY`, `DOWNSHIFT_SSL_CERTFILE`, `DOWNSHIFT_SSL_KEYFILE`, `DOWNSHIFT_SSL_KEYFILE_PASSWORD`.
+- Proxy and shutdown: `DOWNSHIFT_ROOT_PATH`, `DOWNSHIFT_FORWARDED_ALLOW_IPS`, `DOWNSHIFT_TIMEOUT_GRACEFUL_SHUTDOWN`.
 - Export cache: `DOWNSHIFT_EXPORT_CACHE_DIR`.
 - Deprecated, removed in 1.1 at the earliest: `DOWNSHIFT_SERVER_API_KEY`. It is the old name of `DOWNSHIFT_API_KEY`. If only the old name is set, downshift uses it and logs one warning. If both are set, `DOWNSHIFT_API_KEY` wins.
 

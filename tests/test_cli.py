@@ -252,6 +252,9 @@ def _fake_uvicorn_server(monkeypatch, captured: dict) -> None:
             ssl_certfile=config.ssl_certfile,
             ssl_keyfile=config.ssl_keyfile,
             ssl_ciphers=config.ssl_ciphers,
+            root_path=config.root_path,
+            forwarded_allow_ips=config.forwarded_allow_ips,
+            timeout_graceful_shutdown=config.timeout_graceful_shutdown,
         )
 
     def fake_run(self) -> None:
@@ -301,6 +304,39 @@ def test_serve_with_a_certificate_serves_https(monkeypatch, workers, tls_files):
     # also enables NULL and anonymous ciphers.
     assert captured["ssl_ciphers"] is None
     assert "https://127.0.0.1:" in result.output
+
+
+@pytest.mark.parametrize("workers", ["1", "2"])  # uvicorn.Server, then uvicorn.run
+def test_serve_passes_the_proxy_and_shutdown_options_to_uvicorn(monkeypatch, workers):
+    _, captured = _serve_captured(
+        monkeypatch,
+        "--workers",
+        workers,
+        "--root-path",
+        "/models/bert",
+        "--forwarded-allow-ips",
+        "10.0.0.1,10.0.0.2",
+        "--timeout-graceful-shutdown",
+        "45",
+    )
+    assert captured["root_path"] == "/models/bert"
+    assert captured["forwarded_allow_ips"] == "10.0.0.1,10.0.0.2"
+    assert captured["timeout_graceful_shutdown"] == 45
+
+
+@pytest.mark.parametrize("workers", ["1", "2"])
+def test_serve_defaults_for_the_proxy_and_shutdown_options(monkeypatch, workers):
+    monkeypatch.delenv("FORWARDED_ALLOW_IPS", raising=False)
+    _, captured = _serve_captured(monkeypatch, "--workers", workers)
+    assert captured["root_path"] == ""
+    assert captured["timeout_graceful_shutdown"] == 30
+    # Not given: uvicorn keeps its own default.
+    assert captured.get("forwarded_allow_ips", "127.0.0.1") == "127.0.0.1"
+
+
+def test_serve_timeout_graceful_shutdown_zero_waits_without_a_limit(monkeypatch):
+    _, captured = _serve_captured(monkeypatch, "--timeout-graceful-shutdown", "0")
+    assert captured["timeout_graceful_shutdown"] is None
 
 
 def test_serve_without_a_certificate_serves_http(monkeypatch):

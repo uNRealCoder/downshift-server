@@ -167,6 +167,9 @@ downshift export my_pkg.models:build -o artifacts/ --name classifier
 | `--export-cache-dir DIR` | `DOWNSHIFT_EXPORT_CACHE_DIR` | none | As for `export`. A repeat boot of the same model skips the export and the verification. |
 | `--ssl-certfile PATH` | `DOWNSHIFT_SSL_CERTFILE` | none | A PEM certificate or chain. If you give it, the server uses HTTPS. |
 | `--ssl-keyfile PATH` | `DOWNSHIFT_SSL_KEYFILE` | none | The PEM private key. Not necessary if the certificate file contains the key. For an encrypted key, set `DOWNSHIFT_SSL_KEYFILE_PASSWORD`. |
+| `--root-path PATH` | `DOWNSHIFT_ROOT_PATH` | `""` | The path prefix that your proxy strips, for example `/models/bert`. The links of `GET /` and the example URL of `GET /schema` then include it. Refer to "Behind a proxy" in `docs/production.md`. |
+| `--forwarded-allow-ips IPS` | `DOWNSHIFT_FORWARDED_ALLOW_IPS` | `127.0.0.1` | The proxies (comma-separated IPs, or `*`) whose `X-Forwarded-For` and `X-Forwarded-Proto` headers downshift trusts. |
+| `--timeout-graceful-shutdown SECONDS` | `DOWNSHIFT_TIMEOUT_GRACEFUL_SHUTDOWN` | `30` | On `SIGTERM`, the server stops new connections, waits up to `SECONDS` for the running requests, then stops. `/ready` gives `503` at once. `0` means wait without a limit. Refer to "Shut down" in `docs/production.md`. |
 | `--server-timing` / `--no-server-timing` | `DOWNSHIFT_SERVER_TIMING` | off | Adds the `Server-Timing` header (the milliseconds of each stage) to each predict response. Keep it off on a server that untrusted clients use: the timings show how the server works, and a fast cache hit shows that another client sent the same row. The access log has the timings in both cases. |
 | `--metrics` / `--no-metrics` | `DOWNSHIFT_METRICS` | off | Counts the requests and serves them as Prometheus text on `GET /metrics`. It needs one worker (`--workers 1`). The API key rule of the other routes applies. Refer to "Metrics" in `docs/production.md`. |
 | `--served-model-name NAME` | `DOWNSHIFT_SERVED_MODEL_NAME` | the model source | The model name for `GET /v1/models` and `POST /v1/embeddings`. Without it, the name is the last part of the model path. Refer to "Model name" in `docs/production.md`. |
@@ -217,6 +220,7 @@ Downshift reads these variables one time, when `downshift` is imported. To chang
 | `DOWNSHIFT_EXPORT_CACHE_DIR` | unset | `--export-cache-dir` |
 | `DOWNSHIFT_WORKERS` | `1` | `--workers` (CLI only) |
 | `DOWNSHIFT_SSL_CERTFILE`, `DOWNSHIFT_SSL_KEYFILE` | unset | `--ssl-certfile`, `--ssl-keyfile` (CLI only) |
+| `DOWNSHIFT_ROOT_PATH`, `DOWNSHIFT_FORWARDED_ALLOW_IPS`, `DOWNSHIFT_TIMEOUT_GRACEFUL_SHUTDOWN` | `""`, unset (`127.0.0.1`), `30` | `--root-path`, `--forwarded-allow-ips`, `--timeout-graceful-shutdown` (CLI only) |
 | `DOWNSHIFT_SSL_KEYFILE_PASSWORD` | unset | The password of an encrypted key. There is no flag, because a flag shows in the process list. |
 | `DOWNSHIFT_API_KEY` | unset | Requires `Authorization: Bearer <key>` on each route except `/health` and `/ready`. There is no flag, because the key is a secret. |
 | `DOWNSHIFT_REQUEST_ID_HEADER` | `X-Request-Id` | The name of the request-ID header. The server reads the ID from this request header and sets it on each response. Use letters, digits and `-` only. An empty value means the default. There is no flag. |
@@ -244,6 +248,7 @@ A bad value (for example `DOWNSHIFT_PORT=abc`) stops the process at start with a
 2. Add a field to `ServeOptions` in `serve/options.py`. Take the default from `settings.py`.
 3. Add an `Annotated` option type to `cli/options.py`.
 4. Add a parameter to `serve_cmd` in `cli/main.py`, and pass it to `ServeOptions(...)`.
+   An option for uvicorn (like `--ssl-certfile`, `--root-path`, `--forwarded-allow-ips` and `--timeout-graceful-shutdown`) has no `ServeOptions` field. Put it in `uvicorn_kwargs` in `serve_cmd`. The kwargs reach `uvicorn.run` and so each worker.
 5. If the field is an enum, convert it in `ServeArgs.from_json` (`cli/runtime.py`). `--workers N` sends `ServeOptions` to each worker as JSON.
 6. Add a row to the `serve` table and to "Environment variables" on this page, and describe the option in [`production.md`](production.md).
 7. Add a test, and record the option in `CHANGELOG.md`.

@@ -417,7 +417,7 @@ class IndexResponse(BaseModel):
 
 class ReadyResponse(BaseModel):
     ready: bool
-    # The loader's phase while not ready. None when ready or without a loader.
+    # The loader's phase while not ready, or "stopping" after SIGTERM. None when ready.
     phase: str | None = None
 
 

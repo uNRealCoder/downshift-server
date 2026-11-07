@@ -321,3 +321,20 @@ def test_the_tf32_tolerance_is_read_from_the_env(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setenv("DOWNSHIFT_TOL_TF32_ATOL", "0.5")
     assert importlib.reload(settings).TOLERANCE_TF32 == (0.5, 1e-2)
+
+
+def test_proxy_and_shutdown_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("ROOT_PATH", "FORWARDED_ALLOW_IPS", "TIMEOUT_GRACEFUL_SHUTDOWN"):
+        monkeypatch.delenv(f"DOWNSHIFT_{name}", raising=False)
+    mod = importlib.reload(settings)
+    assert (mod.ROOT_PATH, mod.FORWARDED_ALLOW_IPS, mod.TIMEOUT_GRACEFUL_SHUTDOWN) == ("", None, 30)
+
+    monkeypatch.setenv("DOWNSHIFT_ROOT_PATH", "/models/bert")
+    monkeypatch.setenv("DOWNSHIFT_FORWARDED_ALLOW_IPS", "*")
+    monkeypatch.setenv("DOWNSHIFT_TIMEOUT_GRACEFUL_SHUTDOWN", "0")
+    mod = importlib.reload(settings)
+    assert (mod.ROOT_PATH, mod.FORWARDED_ALLOW_IPS, mod.TIMEOUT_GRACEFUL_SHUTDOWN) == (
+        "/models/bert",
+        "*",
+        0,
+    )

@@ -242,6 +242,18 @@ SSL_CERTFILE = os.environ.get("DOWNSHIFT_SSL_CERTFILE") or None
 SSL_KEYFILE = os.environ.get("DOWNSHIFT_SSL_KEYFILE") or None
 SSL_KEYFILE_PASSWORD = os.environ.get("DOWNSHIFT_SSL_KEYFILE_PASSWORD") or None
 
+# The path prefix that a reverse proxy strips before it sends a request to downshift. The links
+# in GET / and the example URL in GET /schema then include it. "" = no prefix.
+ROOT_PATH = os.environ.get("DOWNSHIFT_ROOT_PATH", "")
+
+# The proxies (comma-separated IPs, or "*") whose X-Forwarded-For and X-Forwarded-Proto headers
+# downshift trusts. None (unset) = the default of uvicorn, 127.0.0.1.
+FORWARDED_ALLOW_IPS = os.environ.get("DOWNSHIFT_FORWARDED_ALLOW_IPS") or None
+
+# On SIGTERM, the seconds that the server waits for the running requests before it stops.
+# 0 = wait without a limit.
+TIMEOUT_GRACEFUL_SHUTDOWN = _env_int("DOWNSHIFT_TIMEOUT_GRACEFUL_SHUTDOWN", 30)
+
 # (atol, rtol) for the narrowest float dtype in the numerics verification. You can loosen one
 # value and not change the others. Example: DOWNSHIFT_TOL_FLOAT16_ATOL=0.05 for an fp16 model
 # with more noise.
