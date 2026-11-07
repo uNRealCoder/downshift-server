@@ -190,8 +190,8 @@ RESULT_CACHE_ROWS: int | None = (
     else None
 )
 
-# The number of seconds that an admitted predict can wait without a start. After this time, it
-# gets a 503 and no inference. 0 means no limit.
+# The time limit in seconds for a whole predict, from its admission. At the limit, the client
+# gets a 503 and the slot is free. A running inference is not stopped. 0 means no limit.
 DEFAULT_REQUEST_TIMEOUT = 30.0
 REQUEST_TIMEOUT = _env_float("DOWNSHIFT_REQUEST_TIMEOUT", DEFAULT_REQUEST_TIMEOUT)
 
@@ -202,7 +202,7 @@ WORKERS = _env_int("DOWNSHIFT_WORKERS", 1)
 
 # If it is set, every route except /health and /ready needs "Authorization: Bearer <this value>".
 # None (unset) means no authentication, with a startup warning that says so.
-# DOWNSHIFT_SERVER_API_KEY is the old name. It works until the next minor release, and the new
+# DOWNSHIFT_SERVER_API_KEY is the old name. It works until 1.1 at the earliest, and the new
 # name wins. build_app warns if the old name is set.
 # A new name that is set to "" wins: it turns the key off.
 API_KEY = os.environ.get("DOWNSHIFT_API_KEY", os.environ.get("DOWNSHIFT_SERVER_API_KEY"))

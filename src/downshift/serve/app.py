@@ -486,7 +486,7 @@ def build_app(
 
     if "DOWNSHIFT_SERVER_API_KEY" in os.environ:
         logger.warning(
-            "DOWNSHIFT_SERVER_API_KEY is the old name and will stop working in a later release. "
+            "DOWNSHIFT_SERVER_API_KEY is the old name and stops working in 1.1 at the earliest. "
             + (
                 "Both names are set, so downshift uses DOWNSHIFT_API_KEY. Remove the old name."
                 if "DOWNSHIFT_API_KEY" in os.environ

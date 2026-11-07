@@ -26,12 +26,12 @@ These changes are not breaking:
 
 ## The deprecation rule
 
-A deprecated item stays for one minor release before removal. In that release:
+A deprecated item stays for one minor release before removal. The item is removed in the next minor release at the earliest. In the release that deprecates it:
 
 - The server writes one warning to the log when it sees the item.
 - `CHANGELOG.md` has an entry that names the item and the replacement.
 
-Downshift removes the item in the next major release.
+Downshift removes the item in the next minor release or later. A removal that breaks a frozen item needs a new major version.
 
 ## HTTP routes
 
@@ -55,13 +55,17 @@ The JSON wire formats and the safetensors wire format are part of the contract. 
 
 | Header | Name can change | Notes |
 |---|---|---|
-| Request ID | Yes: `DOWNSHIFT_REQUEST_ID_HEADER` (default `X-Request-Id`) | Read from the request. Set on each response. |
-| Result cache | Yes: `DOWNSHIFT_CACHE_HEADER` (default `X-Downshift-Cache`) | The values are `hit`, `partial` and `miss`. |
-| `Server-Timing` | No | Only with `--server-timing`. The stage names are listed in `http-api.md`. |
+| Request ID | Yes (experimental): `DOWNSHIFT_REQUEST_ID_HEADER` (default `X-Request-Id`) | Read from the request. Set on each response. The variable is experimental. The default name is frozen. |
+| Result cache | Yes (experimental): `DOWNSHIFT_CACHE_HEADER` (default `X-Downshift-Cache`) | The values are `hit`, `partial` and `miss`. The variable is experimental. The default name is frozen. |
+| `Server-Timing` | No | Only with `--server-timing`. The header is frozen. The stage names are experimental. |
 | `Retry-After` | No | On a `503` for "not ready" and "at capacity". |
 | `WWW-Authenticate` | No | On a `401`. |
 | `Authorization` | No | `Bearer <key>`, if `DOWNSHIFT_API_KEY` is set. |
 | `Cache-Control` | No | `no-cache` on a request skips the lookup in the result cache. |
+
+## Result cache
+
+The result cache is on when the row check finds the rows independent. The row check uses two rows, so it cannot prove that a small effect is absent. On a server with more than one tenant, a hit is faster than a miss, and a client can see the difference. To turn the cache off, set `--result-cache-rows 0`. Refer to [Result cache](production.md#result-cache).
 
 ## OpenAI routes
 
@@ -80,7 +84,7 @@ There are two error body shapes:
 
 ## Metrics
 
-Refer to "Metrics" in [`production.md`](production.md). Each series has the label `worker`. These names and labels are frozen:
+Refer to "Metrics" in [`production.md`](production.md). Each series has the label `worker`. The label is frozen. Its value is experimental. These names and labels are frozen:
 
 | Name | Type | Labels |
 |---|---|---|
@@ -102,7 +106,7 @@ Refer to "Metrics" in [`production.md`](production.md). Each series has the labe
 Refer to [`cli.md`](cli.md) for every option.
 
 - The commands are `check`, `export` and `serve`. The option `--version` and the command `python -m downshift` are frozen too.
-- The long names of the options (for example `--max-queue`) are frozen. The short names `-k` and `-o` are frozen.
+- The long names of the options (for example `--max-queue`) are frozen. The short names `-k` and `-o` are frozen. The options `--execution`, `--axis-max` and `--middleware` are experimental.
 - The exit codes of `check` and `export` are `0` CLEAN, `1` FAILED, `2` DEGRADED, `3` UNVERIFIED, `4` usage error and `5` crash. `serve` exits with `4` or `5` only before the server is ready.
 - The output of `check --json` and `export --json` is the verdict. Its fields follow the rules of a response body above.
 - The text of the boot banner and of the reports (not `--json`) is not frozen.
@@ -112,12 +116,11 @@ Refer to [`cli.md`](cli.md) for every option.
 Refer to "Environment variables" in [`cli.md`](cli.md). These variables are frozen, with their types and defaults:
 
 - Server: `DOWNSHIFT_HOST`, `DOWNSHIFT_PORT`, `DOWNSHIFT_WORKERS`, `DOWNSHIFT_DEVICE`, `DOWNSHIFT_BACKEND`, `DOWNSHIFT_WARMUP`, `DOWNSHIFT_SAMPLES`.
-- Threads and limits: `DOWNSHIFT_INTRA_OP_THREADS`, `DOWNSHIFT_INTER_OP_THREADS`, `DOWNSHIFT_PREP_THREADS`, `DOWNSHIFT_MAX_INPUT_BYTES`, `DOWNSHIFT_MAX_BODY_BYTES`, `DOWNSHIFT_MAX_CONCURRENCY`, `DOWNSHIFT_MAX_QUEUE`, `DOWNSHIFT_REQUEST_TIMEOUT`, `DOWNSHIFT_EXECUTION`.
-- Request and response: `DOWNSHIFT_OUTPUT_ENCODING`, `DOWNSHIFT_AXIS_MAX`, `DOWNSHIFT_RESULT_CACHE_ROWS`, `DOWNSHIFT_SERVER_TIMING`, `DOWNSHIFT_METRICS`, `DOWNSHIFT_SERVED_MODEL_NAME`, `DOWNSHIFT_MATRYOSHKA`, `DOWNSHIFT_REQUEST_ID_HEADER`, `DOWNSHIFT_CACHE_HEADER`.
+- Threads and limits: `DOWNSHIFT_INTRA_OP_THREADS`, `DOWNSHIFT_INTER_OP_THREADS`, `DOWNSHIFT_PREP_THREADS`, `DOWNSHIFT_MAX_INPUT_BYTES`, `DOWNSHIFT_MAX_BODY_BYTES`, `DOWNSHIFT_MAX_CONCURRENCY`, `DOWNSHIFT_MAX_QUEUE`, `DOWNSHIFT_REQUEST_TIMEOUT`.
+- Request and response: `DOWNSHIFT_OUTPUT_ENCODING`, `DOWNSHIFT_RESULT_CACHE_ROWS`, `DOWNSHIFT_SERVER_TIMING`, `DOWNSHIFT_METRICS`, `DOWNSHIFT_SERVED_MODEL_NAME`, `DOWNSHIFT_MATRYOSHKA`.
 - Security: `DOWNSHIFT_API_KEY`, `DOWNSHIFT_SSL_CERTFILE`, `DOWNSHIFT_SSL_KEYFILE`, `DOWNSHIFT_SSL_KEYFILE_PASSWORD`.
 - Export cache: `DOWNSHIFT_EXPORT_CACHE_DIR`.
-- Deprecated, removed in a later minor release: `DOWNSHIFT_SERVER_API_KEY`. It is the old name of `DOWNSHIFT_API_KEY`. If only the old name is set, downshift uses it and logs one warning. If both are set, `DOWNSHIFT_API_KEY` wins.
-- Tolerances: `DOWNSHIFT_TOL_FLOAT32_ATOL`, `DOWNSHIFT_TOL_FLOAT32_RTOL`, `DOWNSHIFT_TOL_FLOAT64_ATOL`, `DOWNSHIFT_TOL_FLOAT64_RTOL`, `DOWNSHIFT_TOL_FLOAT16_ATOL`, `DOWNSHIFT_TOL_FLOAT16_RTOL`, `DOWNSHIFT_TOL_BFLOAT16_ATOL`, `DOWNSHIFT_TOL_BFLOAT16_RTOL`.
+- Deprecated, removed in 1.1 at the earliest: `DOWNSHIFT_SERVER_API_KEY`. It is the old name of `DOWNSHIFT_API_KEY`. If only the old name is set, downshift uses it and logs one warning. If both are set, `DOWNSHIFT_API_KEY` wins.
 
 ## Python API
 
@@ -125,7 +128,20 @@ Refer to [`python-api.md`](python-api.md). The names in `downshift.__all__` are 
 
 Code in other modules of `downshift` is internal, also if it has no leading underscore. `ServeOptions` and `ServingState` are internal. Refer to [`serving.md`](serving.md).
 
-The `Adapter` protocol is frozen: the attribute `name`, and the methods `matches`, `example_inputs` and `prepare`. So are the fields of `Prepared`. Refer to [`adapters.md`](adapters.md).
+The names `Adapter` and `Prepared` are frozen. The protocol and the fields are experimental. Refer to "Experimental" below and to [`adapters.md`](adapters.md).
+
+## Experimental
+
+The items in this section can change in a 1.x minor release. A change has a note in `CHANGELOG.md`. They are not part of the breaking-change rule above. They are listed here so that you know which items to pin.
+
+- The `Adapter` protocol (the attribute `name`, and the methods `matches`, `example_inputs` and `prepare`) and the fields of `Prepared`. Refer to [`adapters.md`](adapters.md).
+- The tolerance variables: `DOWNSHIFT_TOL_FLOAT32_ATOL`, `DOWNSHIFT_TOL_FLOAT32_RTOL`, `DOWNSHIFT_TOL_FLOAT64_ATOL`, `DOWNSHIFT_TOL_FLOAT64_RTOL`, `DOWNSHIFT_TOL_FLOAT16_ATOL`, `DOWNSHIFT_TOL_FLOAT16_RTOL`, `DOWNSHIFT_TOL_BFLOAT16_ATOL`, `DOWNSHIFT_TOL_BFLOAT16_RTOL`.
+- `--execution` and `DOWNSHIFT_EXECUTION`.
+- `--axis-max` and `DOWNSHIFT_AXIS_MAX`.
+- `--middleware`.
+- The variables that set a header name: `DOWNSHIFT_CACHE_HEADER` and `DOWNSHIFT_REQUEST_ID_HEADER`.
+- The stage names of `Server-Timing`.
+- The value of the metrics label `worker`.
 
 ## Files
 
