@@ -45,6 +45,7 @@ dev = [
     "mypy>=1.0",
     "httpx>=0.24",  # FastAPI TestClient
     "safetensors>=0.4",  # reference reader/writer for the binary wire format tests
+    "prometheus-client>=0.20",  # parses the /metrics text in the tests
 ]
 gnn = [
     "torch-geometric>=2.5",
