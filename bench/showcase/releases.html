@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Releases | downshift benchmarks</title>
+<style>
+:root{--bg:#f7f6f2;--card:#ffffff;--text:#1d1d1b;--muted:#55554f;--line:#d6d4ca;--soft:#efede6;--accent:#1f5fa8;--ok:#1d6b3f;--warn:#8a5a00;--bad:#a12626;--s1:#1f5fa8;--s2:#b5500f;--s3:#1f7a46;--s4:#7a4fa0;--s5:#5f5f58;--s6:#8a6a00}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#14161a;--card:#1c1f24;--text:#e9e8e3;--muted:#a9a9a1;--line:#383c43;--soft:#242830;--accent:#7db3f0;--ok:#6fcf9a;--warn:#e0b45a;--bad:#f08a8a;--s1:#7db3f0;--s2:#f0a070;--s3:#6fcf9a;--s4:#c3a0e6;--s5:#b5b5ad;--s6:#e0c060}}
+:root[data-theme="dark"]{--bg:#14161a;--card:#1c1f24;--text:#e9e8e3;--muted:#a9a9a1;--line:#383c43;--soft:#242830;--accent:#7db3f0;--ok:#6fcf9a;--warn:#e0b45a;--bad:#f08a8a;--s1:#7db3f0;--s2:#f0a070;--s3:#6fcf9a;--s4:#c3a0e6;--s5:#b5b5ad;--s6:#e0c060}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:860px;margin:0 auto;padding:0 16px 56px}
+a{color:var(--accent)}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88em;background:var(--soft);padding:.05em .3em;border-radius:3px;overflow-wrap:anywhere}
+pre{background:var(--soft);border:1px solid var(--line);border-radius:6px;padding:10px 12px;overflow-x:auto;font-size:.85em;line-height:1.45}
+pre code{background:none;padding:0;overflow-wrap:normal}
+nav.top{border-bottom:1px solid var(--line);background:var(--card)}
+nav.top .wrap{padding-bottom:0}
+nav.top ul{list-style:none;margin:0;padding:8px 0;display:flex;flex-wrap:wrap;gap:2px 14px;font-size:.88rem}
+nav.top a{text-decoration:none}
+nav.top a[aria-current="page"]{font-weight:700;text-decoration:underline}
+header.page{padding:28px 0 8px}
+h1{font-size:1.75rem;line-height:1.2;margin:0 0 8px}
+h2{font-size:1.3rem;margin:34px 0 8px;line-height:1.25;border-top:1px solid var(--line);padding-top:18px}
+h3{font-size:1.05rem;margin:22px 0 6px}
+.lead{font-size:1.1rem;color:var(--text);margin:0 0 6px}
+.meta{color:var(--muted);font-size:.88rem}
+p,li{max-width:70ch}
+ul,ol{padding-left:1.3em}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:16px 0}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.tile .v{font-size:1.45rem;font-weight:700;line-height:1.2;overflow-wrap:anywhere}
+.tile .l{font-size:.88rem}
+.tile .s{font-size:.78rem;color:var(--muted);margin-top:4px;overflow-wrap:anywhere}
+.note{border:1px solid var(--line);border-left:4px solid var(--warn);background:var(--card);border-radius:6px;padding:8px 12px;margin:14px 0;font-size:.93rem}
+.note.info{border-left-color:var(--accent)}
+.note.bad{border-left-color:var(--bad)}
+.note b.k{display:inline-block;margin-right:.4em}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px;margin:14px 0}
+.card h3{margin-top:0}
+figure{margin:14px 0;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px}
+figure svg{display:block;width:100%;max-width:560px;height:auto;margin:0 auto}
+figcaption{font-size:.85rem;color:var(--muted);margin-top:6px}
+.tw{overflow-x:auto;margin:10px 0;border:1px solid var(--line);border-radius:6px;background:var(--card)}
+table{border-collapse:collapse;width:100%;font-size:.84rem}
+caption{caption-side:top;text-align:left;font-weight:600;padding:8px 8px 4px}
+th,td{padding:4px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:var(--soft);font-weight:600}
+td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
+tr:last-child td{border-bottom:0}
+.chip{display:inline-block;padding:0 .5em;border-radius:4px;border:1px solid currentColor;font-size:.78rem;font-weight:700;letter-spacing:.02em;white-space:nowrap}
+.chip.clean{color:var(--ok)}
+.chip.degraded{color:var(--warn)}
+.chip.failed{color:var(--bad)}
+.chip.unverified{color:var(--s4)}
+.legend{list-style:none;padding:0;margin:6px 0 0;display:flex;flex-wrap:wrap;gap:4px 14px;font-size:.8rem}
+.legend li{display:flex;align-items:center;gap:6px}
+.legend svg{width:34px;height:12px;flex:none}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin:14px 0}
+.cards a.pg{display:block;text-decoration:none;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.cards a.pg:hover,.cards a.pg:focus{border-color:var(--accent)}
+.cards a.pg b{color:var(--accent);display:block}
+.cards a.pg span{font-size:.88rem;color:var(--muted)}
+footer{margin-top:40px;padding-top:12px;border-top:1px solid var(--line);font-size:.82rem;color:var(--muted)}
+/* chart text */
+svg text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:var(--text)}
+svg .ax{font-size:10.5px;fill:var(--muted)}
+svg .lb{font-size:11px}
+svg .hd{font-size:11px;font-weight:700}
+svg .vl{font-size:10.5px;font-variant-numeric:tabular-nums}
+svg .gl{stroke:var(--line);stroke-width:1}
+svg .axl{stroke:var(--muted);stroke-width:1}
+svg .ref{stroke:var(--text);stroke-width:1;stroke-dasharray:4 3}
+svg .box{fill:var(--card);stroke:var(--text);stroke-width:1.2}
+svg .boxs{fill:var(--soft);stroke:var(--muted);stroke-width:1}
+svg .arr{stroke:var(--text);stroke-width:1.4;fill:none}
+svg .arrh{fill:var(--text)}
+svg .bn{stroke:var(--s5);stroke-width:1}
+svg .bo{fill:var(--s2)}
+svg .bw{fill:var(--s1)}
+svg .bv{fill:var(--s3)}
+svg .hollow{fill:var(--card)}
+svg .solid{fill:currentColor}
+svg .mk{stroke:currentColor;stroke-width:1.6}
+svg .ln{fill:none;stroke:currentColor;stroke-width:2}
+svg .seg{stroke:var(--card);stroke-width:1}
+.sw{display:inline-block;width:12px;height:12px;vertical-align:-1px;margin-right:6px;border:1px solid var(--text)}
+@media print{
+  nav.top{display:none}
+  body{background:#fff;color:#000;font-size:11pt}
+  .wrap{max-width:none;padding:0}
+  figure,.card,.tile,.tw{break-inside:avoid}
+}
+</style>
+</head>
+<body>
+<nav class="top" aria-label="Pages"><div class="wrap"><ul><li><a href="index.html">Overview</a></li><li><a href="throughput.html">Throughput</a></li><li><a href="time-breakdown.html">Time per request</a></li><li><a href="torch-vs-ort.html">Torch vs ORT</a></li><li><a href="wire-formats.html">Wire formats</a></li><li><a href="result-cache.html">Result cache</a></li><li><a href="correctness.html">Correctness</a></li><li><a href="compatibility.html">Compatibility</a></li><li><a href="boot-time.html">Boot time</a></li><li><a href="scaling.html">Workers</a></li><li><a href="releases.html" aria-current="page">Releases</a></li><li><a href="SUMMARY.html">One page</a></li></ul></div></nav>
+<main class="wrap">
+<header class="page"><h1>Release to release</h1><p class="lead">Did the peak throughput change between releases? Each comparison is inside one run, so the machine state is the same for both versions.</p><p class="meta">Run A: 2026-10-04T22:32:59 (0.4.0 and 0.5.0). Run B: 2026-11-07T22:59:00 (0.5.1 and 1.0.0rc1). Both on win32, 16 logical CPUs.</p></header>
+<div class="note bad"><b class="k">Rule.</b>Do not compare numbers between run A and run B. The hand-rolled servers are faster in run B too, so the machine state is not the same. The reports say this. Compare the versions inside one run only.</div>
+<h2 id="question">The question</h2>
+<p>Each release changes the serving code. This page shows the change in peak requests per second, batch 1, JSON bodies, cache off, for each pair of versions that ran in the same session.</p>
+<h2 id="method">Method</h2>
+<ul><li>Run A: <code>bench/results/v0.5.0/</code> (8 models). Run B: <code>bench/results/v1.0.0/</code> (4 models). Same harness, same commands. See the throughput page for the method.</li><li>Peak is the best requests/s over concurrency 1 to 64, from <code>chart_runs.csv</code>.</li><li>The 0.4.0 run of September 2026 (<code>bench/results_v0.4.0.json</code>, behind the launch post) is a separate run with an older harness. This page does not use it. Its files stay unchanged.</li></ul>
+<h2 id="a">Results: 0.4.0 to 0.5.0 (run A)</h2>
+<figure><svg viewBox="0 0 400 188" role="img" aria-label="Change in peak requests per second, 0.5.0 against 0.4.0"><title>Change in peak requests per second, 0.5.0 against 0.4.0</title><desc>One bar for each model.</desc><defs><pattern id="hat33" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" style="fill:var(--card)"/><line x1="0" y1="0" x2="0" y2="6" style="stroke:var(--s5);stroke-width:3"/></pattern></defs><text class="lb" x="126" y="17" text-anchor="end">clean_mlp</text><rect class="bw" x="132" y="6" width="199.1" height="14"><title>clean_mlp: +19%</title></rect><text class="vl" x="335.1" y="17">+19%</text><text class="lb" x="126" y="39" text-anchor="end">dynamic_batch_cnn</text><rect class="bw" x="132" y="28" width="206.0" height="14"><title>dynamic_batch_cnn: +20%</title></rect><text class="vl" x="342.0" y="39">+20%</text><text class="lb" x="126" y="61" text-anchor="end">gnn_gcn</text><rect class="bw" x="132" y="50" width="105.0" height="14"><title>gnn_gcn: +10%</title></rect><text class="vl" x="241.0" y="61">+10%</text><text class="lb" x="126" y="83" text-anchor="end">tiny_bert</text><rect class="bw" x="132" y="72" width="109.9" height="14"><title>tiny_bert: +10%</title></rect><text class="vl" x="245.9" y="83">+10%</text><text class="lb" x="126" y="105" text-anchor="end">scatter_include_s..</text><rect class="bw" x="132" y="94" width="152.0" height="14"><title>scatter_include_s..: +14%</title></rect><text class="vl" x="288.0" y="105">+14%</text><text class="lb" x="126" y="127" text-anchor="end">mlp_large</text><rect class="bw" x="132" y="116" width="179.7" height="14"><title>mlp_large: +17%</title></rect><text class="vl" x="315.7" y="127">+17%</text><text class="lb" x="126" y="149" text-anchor="end">cnn_large</text><rect class="bw" x="132" y="138" width="125.9" height="14"><title>cnn_large: +12%</title></rect><text class="vl" x="261.9" y="149">+12%</text><text class="lb" x="126" y="171" text-anchor="end">bert_small</text><rect class="bw" x="132" y="160" width="41.0" height="14"><title>bert_small: +4%</title></rect><text class="vl" x="177.0" y="171">+4%</text></svg><figcaption>Run A: change in peak requests/s from 0.4.0 to 0.5.0, batch 1, JSON.</figcaption></figure>
+<div class="tw" tabindex="0" role="region" aria-label="Run A: peak requests/s, batch 1"><table><caption>Run A: peak requests/s, batch 1</caption><thead><tr><th scope="col">model</th><th scope="col" class="r">0.4.0 peak rps</th><th scope="col" class="r">0.5.0 peak rps</th><th scope="col" class="r">change</th></tr></thead><tbody><tr><td>clean_mlp</td><td class="r">866</td><td class="r">1030</td><td class="r">+19.0%</td></tr><tr><td>dynamic_batch_cnn</td><td class="r">862</td><td class="r">1031</td><td class="r">+19.6%</td></tr><tr><td>gnn_gcn</td><td class="r">810</td><td class="r">891</td><td class="r">+10.0%</td></tr><tr><td>tiny_bert</td><td class="r">820</td><td class="r">906</td><td class="r">+10.5%</td></tr><tr><td>scatter_include_self_false</td><td class="r">940</td><td class="r">1076</td><td class="r">+14.5%</td></tr><tr><td>mlp_large</td><td class="r">696</td><td class="r">815</td><td class="r">+17.1%</td></tr><tr><td>cnn_large</td><td class="r">657</td><td class="r">736</td><td class="r">+12.0%</td></tr><tr><td>bert_small</td><td class="r">102</td><td class="r">106</td><td class="r">+3.9%</td></tr></tbody></table></div>
+<h2 id="b">Results: 0.5.1 to 1.0.0rc1 (run B)</h2>
+<figure><svg viewBox="0 0 400 100" role="img" aria-label="Size of the change in peak requests per second, 1.0.0rc1 against 0.5.1"><title>Size of the change in peak requests per second, 1.0.0rc1 against 0.5.1</title><desc>Bars show the size of the change. The signs are in the table.</desc><defs><pattern id="hat34" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" style="fill:var(--card)"/><line x1="0" y1="0" x2="0" y2="6" style="stroke:var(--s5);stroke-width:3"/></pattern></defs><text class="lb" x="126" y="17" text-anchor="end">clean_mlp</text><rect class="bw" x="132" y="6" width="4.7" height="14"><title>clean_mlp: 0%</title></rect><text class="vl" x="140.7" y="17">0%</text><text class="lb" x="126" y="39" text-anchor="end">tiny_bert</text><rect class="bw" x="132" y="28" width="97.4" height="14"><title>tiny_bert: 10%</title></rect><text class="vl" x="233.4" y="39">10%</text><text class="lb" x="126" y="61" text-anchor="end">mlp_large</text><rect class="bw" x="132" y="50" width="206.0" height="14"><title>mlp_large: 21%</title></rect><text class="vl" x="342.0" y="61">21%</text><text class="lb" x="126" y="83" text-anchor="end">scatter_include_s..</text><rect class="bw" x="132" y="72" width="38.2" height="14"><title>scatter_include_s..: 4%</title></rect><text class="vl" x="174.2" y="83">4%</text></svg><figcaption>Run B: size of the change in peak requests/s, 1.0.0rc1 against 0.5.1. Bars show the size only. The sign is in the table.</figcaption></figure>
+<div class="tw" tabindex="0" role="region" aria-label="Run B: peak requests/s, batch 1"><table><caption>Run B: peak requests/s, batch 1</caption><thead><tr><th scope="col">model</th><th scope="col" class="r">0.5.1 peak rps</th><th scope="col" class="r">1.0.0rc1 peak rps</th><th scope="col" class="r">change</th><th scope="col">note</th></tr></thead><tbody><tr><td>clean_mlp</td><td class="r">1421</td><td class="r">1428</td><td class="r">+0.5%</td><td></td></tr><tr><td>tiny_bert</td><td class="r">1183</td><td class="r">1067</td><td class="r">-9.8%</td><td></td></tr><tr><td>mlp_large</td><td class="r">965</td><td class="r">765</td><td class="r">-20.7%</td><td>main pass was slow; re-run in the throughput page</td></tr><tr><td>scatter_include_self_false</td><td class="r">1443</td><td class="r">1387</td><td class="r">-3.8%</td><td></td></tr></tbody></table></div>
+<p>In run A, 0.5.0 is faster than 0.4.0 on all eight models. In run B, 1.0.0rc1 and 0.5.1 are close, and 1.0.0rc1 adds the result cache and <code>--metrics</code>.</p>
+<h2 id="limits">What this shows and does not show</h2>
+<h3>Shows</h3>
+<ul><li>0.5.0 against 0.4.0: peak throughput rose on all 8 models, from +4% to +20% in the same session.</li><li>1.0.0rc1 against 0.5.1: no gain, and no clear loss except the slow first pass of <code>mlp_large</code>.</li></ul>
+<h3>Does not show</h3>
+<ul><li>The final 1.0.0 release. Run B is of <code>1.0.0rc1</code>.</li><li>Any release after 1.0.0rc1.</li><li>0.5.1 against 0.5.0 (never in the same session).</li><li>One machine. One run. One 3 s window for each point (5 s for MiniLM). The file holds no repeats, so the size of run-to-run noise is not measured.</li></ul>
+<h2 id="sources">Sources</h2><ul><li><a href="../results/v0.5.0/chart_runs.csv"><code>bench/results/v0.5.0/chart_runs.csv</code></a></li><li><a href="../results/v0.5.0/results.json"><code>bench/results/v0.5.0/results.json</code></a></li><li><a href="../results/v0.5.0/REPORT.md"><code>bench/results/v0.5.0/REPORT.md</code></a></li><li><a href="../results/v1.0.0/chart_runs.csv"><code>bench/results/v1.0.0/chart_runs.csv</code></a></li><li><a href="../README.md"><code>bench/README.md</code></a></li></ul>
+<footer>
+<p>Made by <code>bench/showcase/build_showcase.py</code> from files in <code>bench/</code>. The script changes no source file.
+Project: <a href="https://github.com/uNRealCoder/downshift-server">https://github.com/uNRealCoder/downshift-server</a>.</p>
+</footer>
+</main>
+</body>
+</html>

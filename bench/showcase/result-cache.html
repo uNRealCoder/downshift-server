@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>The result cache | downshift benchmarks</title>
+<style>
+:root{--bg:#f7f6f2;--card:#ffffff;--text:#1d1d1b;--muted:#55554f;--line:#d6d4ca;--soft:#efede6;--accent:#1f5fa8;--ok:#1d6b3f;--warn:#8a5a00;--bad:#a12626;--s1:#1f5fa8;--s2:#b5500f;--s3:#1f7a46;--s4:#7a4fa0;--s5:#5f5f58;--s6:#8a6a00}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#14161a;--card:#1c1f24;--text:#e9e8e3;--muted:#a9a9a1;--line:#383c43;--soft:#242830;--accent:#7db3f0;--ok:#6fcf9a;--warn:#e0b45a;--bad:#f08a8a;--s1:#7db3f0;--s2:#f0a070;--s3:#6fcf9a;--s4:#c3a0e6;--s5:#b5b5ad;--s6:#e0c060}}
+:root[data-theme="dark"]{--bg:#14161a;--card:#1c1f24;--text:#e9e8e3;--muted:#a9a9a1;--line:#383c43;--soft:#242830;--accent:#7db3f0;--ok:#6fcf9a;--warn:#e0b45a;--bad:#f08a8a;--s1:#7db3f0;--s2:#f0a070;--s3:#6fcf9a;--s4:#c3a0e6;--s5:#b5b5ad;--s6:#e0c060}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:860px;margin:0 auto;padding:0 16px 56px}
+a{color:var(--accent)}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88em;background:var(--soft);padding:.05em .3em;border-radius:3px;overflow-wrap:anywhere}
+pre{background:var(--soft);border:1px solid var(--line);border-radius:6px;padding:10px 12px;overflow-x:auto;font-size:.85em;line-height:1.45}
+pre code{background:none;padding:0;overflow-wrap:normal}
+nav.top{border-bottom:1px solid var(--line);background:var(--card)}
+nav.top .wrap{padding-bottom:0}
+nav.top ul{list-style:none;margin:0;padding:8px 0;display:flex;flex-wrap:wrap;gap:2px 14px;font-size:.88rem}
+nav.top a{text-decoration:none}
+nav.top a[aria-current="page"]{font-weight:700;text-decoration:underline}
+header.page{padding:28px 0 8px}
+h1{font-size:1.75rem;line-height:1.2;margin:0 0 8px}
+h2{font-size:1.3rem;margin:34px 0 8px;line-height:1.25;border-top:1px solid var(--line);padding-top:18px}
+h3{font-size:1.05rem;margin:22px 0 6px}
+.lead{font-size:1.1rem;color:var(--text);margin:0 0 6px}
+.meta{color:var(--muted);font-size:.88rem}
+p,li{max-width:70ch}
+ul,ol{padding-left:1.3em}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:16px 0}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.tile .v{font-size:1.45rem;font-weight:700;line-height:1.2;overflow-wrap:anywhere}
+.tile .l{font-size:.88rem}
+.tile .s{font-size:.78rem;color:var(--muted);margin-top:4px;overflow-wrap:anywhere}
+.note{border:1px solid var(--line);border-left:4px solid var(--warn);background:var(--card);border-radius:6px;padding:8px 12px;margin:14px 0;font-size:.93rem}
+.note.info{border-left-color:var(--accent)}
+.note.bad{border-left-color:var(--bad)}
+.note b.k{display:inline-block;margin-right:.4em}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px;margin:14px 0}
+.card h3{margin-top:0}
+figure{margin:14px 0;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px}
+figure svg{display:block;width:100%;max-width:560px;height:auto;margin:0 auto}
+figcaption{font-size:.85rem;color:var(--muted);margin-top:6px}
+.tw{overflow-x:auto;margin:10px 0;border:1px solid var(--line);border-radius:6px;background:var(--card)}
+table{border-collapse:collapse;width:100%;font-size:.84rem}
+caption{caption-side:top;text-align:left;font-weight:600;padding:8px 8px 4px}
+th,td{padding:4px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:var(--soft);font-weight:600}
+td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
+tr:last-child td{border-bottom:0}
+.chip{display:inline-block;padding:0 .5em;border-radius:4px;border:1px solid currentColor;font-size:.78rem;font-weight:700;letter-spacing:.02em;white-space:nowrap}
+.chip.clean{color:var(--ok)}
+.chip.degraded{color:var(--warn)}
+.chip.failed{color:var(--bad)}
+.chip.unverified{color:var(--s4)}
+.legend{list-style:none;padding:0;margin:6px 0 0;display:flex;flex-wrap:wrap;gap:4px 14px;font-size:.8rem}
+.legend li{display:flex;align-items:center;gap:6px}
+.legend svg{width:34px;height:12px;flex:none}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin:14px 0}
+.cards a.pg{display:block;text-decoration:none;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.cards a.pg:hover,.cards a.pg:focus{border-color:var(--accent)}
+.cards a.pg b{color:var(--accent);display:block}
+.cards a.pg span{font-size:.88rem;color:var(--muted)}
+footer{margin-top:40px;padding-top:12px;border-top:1px solid var(--line);font-size:.82rem;color:var(--muted)}
+/* chart text */
+svg text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:var(--text)}
+svg .ax{font-size:10.5px;fill:var(--muted)}
+svg .lb{font-size:11px}
+svg .hd{font-size:11px;font-weight:700}
+svg .vl{font-size:10.5px;font-variant-numeric:tabular-nums}
+svg .gl{stroke:var(--line);stroke-width:1}
+svg .axl{stroke:var(--muted);stroke-width:1}
+svg .ref{stroke:var(--text);stroke-width:1;stroke-dasharray:4 3}
+svg .box{fill:var(--card);stroke:var(--text);stroke-width:1.2}
+svg .boxs{fill:var(--soft);stroke:var(--muted);stroke-width:1}
+svg .arr{stroke:var(--text);stroke-width:1.4;fill:none}
+svg .arrh{fill:var(--text)}
+svg .bn{stroke:var(--s5);stroke-width:1}
+svg .bo{fill:var(--s2)}
+svg .bw{fill:var(--s1)}
+svg .bv{fill:var(--s3)}
+svg .hollow{fill:var(--card)}
+svg .solid{fill:currentColor}
+svg .mk{stroke:currentColor;stroke-width:1.6}
+svg .ln{fill:none;stroke:currentColor;stroke-width:2}
+svg .seg{stroke:var(--card);stroke-width:1}
+.sw{display:inline-block;width:12px;height:12px;vertical-align:-1px;margin-right:6px;border:1px solid var(--text)}
+@media print{
+  nav.top{display:none}
+  body{background:#fff;color:#000;font-size:11pt}
+  .wrap{max-width:none;padding:0}
+  figure,.card,.tile,.tw{break-inside:avoid}
+}
+</style>
+</head>
+<body>
+<nav class="top" aria-label="Pages"><div class="wrap"><ul><li><a href="index.html">Overview</a></li><li><a href="throughput.html">Throughput</a></li><li><a href="time-breakdown.html">Time per request</a></li><li><a href="torch-vs-ort.html">Torch vs ORT</a></li><li><a href="wire-formats.html">Wire formats</a></li><li><a href="result-cache.html" aria-current="page">Result cache</a></li><li><a href="correctness.html">Correctness</a></li><li><a href="compatibility.html">Compatibility</a></li><li><a href="boot-time.html">Boot time</a></li><li><a href="scaling.html">Workers</a></li><li><a href="releases.html">Releases</a></li><li><a href="SUMMARY.html">One page</a></li></ul></div></nav>
+<main class="wrap">
+<header class="page"><h1>The result cache</h1><p class="lead">How much faster is a request that the cache has seen before, and what does the cache cost a request that it has not seen?</p><p class="meta">Two data sets. A load run of 1.0.0rc1 (2026-11-07T22:59:00) and an in-process check of 0.6.0 (2026-10-14 23:46:17).</p></header>
+<div class="tiles"><div class="tile"><div class="v">0.255 vs 4.62 ms</div><div class="l">MiniLM, a query seen before: server time, cache hit vs no cache</div><div class="s">median of 60 repeats (v0.6.0 check)</div></div><div class="tile"><div class="v">3.65%</div><div class="l">MiniLM, unique queries: median server time with cache on, against cache off</div><div class="s">4.975 vs 4.8 ms</div></div><div class="tile"><div class="v">1911 vs 486</div><div class="l">MiniLM, one repeated sentence, c=8, rps: cache on vs off</div><div class="s">Best case: every request is a hit</div></div></div>
+<h2 id="question">The question</h2>
+<p>From 1.0.0, downshift can keep the output of a row and answer a repeated row from memory. It does this only if the row check found the rows of the model independent. This page shows the gain for a repeated request and the cost for a new request.</p>
+<h2 id="method">Method</h2>
+<ul><li><b>Load run (1.0.0rc1).</b> The variant <code>downshift_cache</code> of <code>bench.run</code> and <code>bench.hf_models</code> uses the default cache. All other 1.0.0rc1 variants add <code>--result-cache-rows 0</code>. The harness sends the same body every time. So after the first request, every request is a hit. This is the best case.</li><li><b>Acceptance check (0.6.0).</b> <code>python -m bench.cache_accept --out bench/results/v0.6.0/cache_acceptance.json</code>. It serves all-MiniLM-L6-v2 in the same process with a test client, with the cache on and off. It reads the sum of the stages in the <code>Server-Timing</code> header, so the client time does not count. It is not part of CI.</li><li>The check has three parts: (a) a query seen before must take under 1 ms; (b) a batch of 32 rows with 30 known rows must run the model on 2 rows; (c) unique queries must cost no more than 5% plus 0.2 ms over a server with the cache off.</li></ul>
+<h2 id="load">Results: load run</h2>
+<div class="tw" tabindex="0" role="region" aria-label="Fixtures, batch 1: 1.0.0rc1 with the cache off and on (same body in every request)"><table><caption>Fixtures, batch 1: 1.0.0rc1 with the cache off and on (same body in every request)</caption><thead><tr><th scope="col">model</th><th scope="col" class="r">peak rps cache off</th><th scope="col" class="r">peak rps cache on</th><th scope="col" class="r">change</th><th scope="col" class="r">p50 ms c=1 off</th><th scope="col" class="r">p50 ms c=1 on</th></tr></thead><tbody><tr><td>clean_mlp</td><td class="r">1428</td><td class="r">1824</td><td class="r">+27.8%</td><td class="r">0.77</td><td class="r">0.69</td></tr><tr><td>tiny_bert</td><td class="r">1067</td><td class="r">914</td><td class="r">-14.3%</td><td class="r">1.16</td><td class="r">1.14</td></tr><tr><td>mlp_large</td><td class="r">765</td><td class="r">1742</td><td class="r">+127.7%</td><td class="r">2.17</td><td class="r">0.80</td></tr><tr><td>scatter_include_self_false</td><td class="r">1387</td><td class="r">1364</td><td class="r">-1.7%</td><td class="r">0.76</td><td class="r">0.89</td></tr></tbody></table></div>
+<figure><svg viewBox="0 0 400 210" role="img" aria-label="MiniLM requests per second at c=8, cache off and on"><title>MiniLM requests per second at c=8, cache off and on</title><desc>Three payloads, two bars each. Values are in the table.</desc><defs><pattern id="hat18" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" style="fill:var(--card)"/><line x1="0" y1="0" x2="0" y2="6" style="stroke:var(--s5);stroke-width:3"/></pattern></defs><text class="hd" x="4" y="21">MiniLM, one sentence, requests/s at c=8</text><text class="lb" x="84" y="39" text-anchor="end">cache off</text><rect class="bw" x="90" y="28" width="63.0" height="14"><title>cache off: 486</title></rect><text class="vl" x="157.0" y="39">486</text><text class="lb" x="84" y="61" text-anchor="end">cache on</text><rect class="bv" x="90" y="50" width="248.0" height="14"><title>cache on: 1911</title></rect><text class="vl" x="342.0" y="61">1911</text><text class="hd" x="4" y="87">MiniLM, eight sentences, requests/s at c=8</text><text class="lb" x="84" y="105" text-anchor="end">cache off</text><rect class="bw" x="90" y="94" width="20.5" height="14"><title>cache off: 158</title></rect><text class="vl" x="114.5" y="105">158</text><text class="lb" x="84" y="127" text-anchor="end">cache on</text><rect class="bv" x="90" y="116" width="211.1" height="14"><title>cache on: 1627</title></rect><text class="vl" x="305.1" y="127">1627</text><text class="hd" x="4" y="153">MiniLM, about 180 tokens, requests/s at c=8</text><text class="lb" x="84" y="171" text-anchor="end">cache off</text><rect class="bw" x="90" y="160" width="11.5" height="14"><title>cache off: 89</title></rect><text class="vl" x="105.5" y="171">89</text><text class="lb" x="84" y="193" text-anchor="end">cache on</text><rect class="bv" x="90" y="182" width="240.2" height="14"><title>cache on: 1851</title></rect><text class="vl" x="334.2" y="193">1851</text></svg><ul class="legend"><li><svg viewBox="0 0 34 12" aria-hidden="true"><rect class="bw" x="1" y="1" width="30" height="10"/></svg>cache off</li><li><svg viewBox="0 0 34 12" aria-hidden="true"><rect class="bv" x="1" y="1" width="30" height="10"/></svg>cache on</li></ul><figcaption>all-MiniLM-L6-v2, c=8. Every request repeats one body.</figcaption></figure>
+<div class="tw" tabindex="0" role="region" aria-label="all-MiniLM-L6-v2: cache off against cache on"><table><caption>all-MiniLM-L6-v2: cache off against cache on</caption><thead><tr><th scope="col">payload</th><th scope="col" class="r">rps c=1 off</th><th scope="col" class="r">rps c=1 on</th><th scope="col" class="r">rps c=8 off</th><th scope="col" class="r">rps c=8 on</th><th scope="col" class="r">p50 ms c=1 off</th><th scope="col" class="r">p50 ms c=1 on</th><th scope="col" class="r">worst /health p99 ms off</th><th scope="col" class="r">worst /health p99 ms on</th></tr></thead><tbody><tr><td>short_b1</td><td class="r">185</td><td class="r">1456</td><td class="r">486</td><td class="r">1911</td><td class="r">4.9</td><td class="r">0.6</td><td class="r">27</td><td class="r">194</td></tr><tr><td>short_b8</td><td class="r">54</td><td class="r">1222</td><td class="r">158</td><td class="r">1627</td><td class="r">17.4</td><td class="r">0.7</td><td class="r">22</td><td class="r">18</td></tr><tr><td>long_b1</td><td class="r">34</td><td class="r">1534</td><td class="r">89</td><td class="r">1851</td><td class="r">28.4</td><td class="r">0.6</td><td class="r">22</td><td class="r">159</td></tr></tbody></table></div>
+<p>With the cache on, the server answers up to about 1900 requests per second (one sentence, c=8). The <code>/health</code> probe, that runs every 50 ms in the same window, sees a higher p99 in the cache-on run than in the cache-off run. The cause is not in the data. The load generator and the server share the machine.</p>
+<h3>Where the cache does nothing</h3>
+<p><code>tiny_bert</code> has dependent rows and <code>scatter_include_self_false</code> has no row check (the numerics check failed). The default cache is off for both. Their cache-on rows are an ordinary run. They differ from the default rows only by run-to-run noise, as the report says. The difference for <code>tiny_bert</code> in the table is a -14.3% change in peak. The size of the noise is not measured, because the file holds no repeats.</p>
+<h2 id="accept">Results: acceptance check (0.6.0)</h2>
+<div class="tw" tabindex="0" role="region" aria-label="Cache acceptance, all-MiniLM-L6-v2, 60 repeats, 2026-10-14 23:46:17"><table><caption>Cache acceptance, all-MiniLM-L6-v2, 60 repeats, 2026-10-14 23:46:17</caption><thead><tr><th scope="col">check</th><th scope="col">measured</th><th scope="col">rule</th><th scope="col">result</th></tr></thead><tbody><tr><td>a. query seen before: server time</td><td>hit median 0.255 ms (max 0.42 ms); no cache 4.62 ms</td><td>hit median under 1 ms</td><td>pass</td></tr><tr><td>b. batch of 32 with 30 known rows</td><td>rows in the model call: [2]</td><td>model runs on 2 rows</td><td>pass</td></tr><tr><td>c. unique queries: server time</td><td>cache on 4.975 ms; cache off 4.8 ms (+3.6%)</td><td>on &lt;= 1.05 x off + 0.2 ms</td><td>pass</td></tr></tbody></table></div>
+<p>A hit takes 18 times less server time than a miss (0.255 against 4.62 ms). A request that always misses takes 4.975 ms with the cache on and 4.8 ms with it off.</p>
+<h2 id="limits">What this shows and does not show</h2>
+<h3>Shows</h3>
+<ul><li>A repeated query is answered in about a quarter of a millisecond of server time, against about 4.6 ms for the model.</li><li>On a batch with known rows, the model runs on the new rows only (2 of 32).</li><li>A new query costs 0.175 ms more at the median (3.6%) in the one check that was run.</li></ul>
+<h3>Does not show</h3>
+<ul><li>A normal workload. The load run repeats one body. A real hit rate is not measured.</li><li>The hardware of the 0.6.0 check. The file stores no machine, CPU or package version. It also stores no spread: only medians, one maximum and the repeat count.</li><li>The check ran on 0.6.0, not on 1.0.0rc1. It was not run again for 1.0.0.</li><li>The timing difference between a hit and a miss is visible to a client. The README says that on a server with more than one tenant, a client can see the difference. This is a property of the design, and the data does not measure it.</li><li>Only MiniLM was checked in-process. The cache for graph models is not measured.</li></ul>
+<h2 id="sources">Sources</h2><ul><li><a href="../results/v1.0.0/chart_runs.csv"><code>bench/results/v1.0.0/chart_runs.csv</code></a></li><li><a href="../results/v0.6.0/cache_acceptance.json"><code>bench/results/v0.6.0/cache_acceptance.json</code></a></li><li><a href="../cache_accept.py"><code>bench/cache_accept.py</code></a></li><li><a href="../results/v1.0.0/REPORT.md"><code>bench/results/v1.0.0/REPORT.md</code></a></li></ul>
+<footer>
+<p>Made by <code>bench/showcase/build_showcase.py</code> from files in <code>bench/</code>. The script changes no source file.
+Project: <a href="https://github.com/uNRealCoder/downshift-server">https://github.com/uNRealCoder/downshift-server</a>.</p>
+</footer>
+</main>
+</body>
+</html>

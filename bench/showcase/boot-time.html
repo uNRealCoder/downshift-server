@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Boot time | downshift benchmarks</title>
+<style>
+:root{--bg:#f7f6f2;--card:#ffffff;--text:#1d1d1b;--muted:#55554f;--line:#d6d4ca;--soft:#efede6;--accent:#1f5fa8;--ok:#1d6b3f;--warn:#8a5a00;--bad:#a12626;--s1:#1f5fa8;--s2:#b5500f;--s3:#1f7a46;--s4:#7a4fa0;--s5:#5f5f58;--s6:#8a6a00}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#14161a;--card:#1c1f24;--text:#e9e8e3;--muted:#a9a9a1;--line:#383c43;--soft:#242830;--accent:#7db3f0;--ok:#6fcf9a;--warn:#e0b45a;--bad:#f08a8a;--s1:#7db3f0;--s2:#f0a070;--s3:#6fcf9a;--s4:#c3a0e6;--s5:#b5b5ad;--s6:#e0c060}}
+:root[data-theme="dark"]{--bg:#14161a;--card:#1c1f24;--text:#e9e8e3;--muted:#a9a9a1;--line:#383c43;--soft:#242830;--accent:#7db3f0;--ok:#6fcf9a;--warn:#e0b45a;--bad:#f08a8a;--s1:#7db3f0;--s2:#f0a070;--s3:#6fcf9a;--s4:#c3a0e6;--s5:#b5b5ad;--s6:#e0c060}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:860px;margin:0 auto;padding:0 16px 56px}
+a{color:var(--accent)}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88em;background:var(--soft);padding:.05em .3em;border-radius:3px;overflow-wrap:anywhere}
+pre{background:var(--soft);border:1px solid var(--line);border-radius:6px;padding:10px 12px;overflow-x:auto;font-size:.85em;line-height:1.45}
+pre code{background:none;padding:0;overflow-wrap:normal}
+nav.top{border-bottom:1px solid var(--line);background:var(--card)}
+nav.top .wrap{padding-bottom:0}
+nav.top ul{list-style:none;margin:0;padding:8px 0;display:flex;flex-wrap:wrap;gap:2px 14px;font-size:.88rem}
+nav.top a{text-decoration:none}
+nav.top a[aria-current="page"]{font-weight:700;text-decoration:underline}
+header.page{padding:28px 0 8px}
+h1{font-size:1.75rem;line-height:1.2;margin:0 0 8px}
+h2{font-size:1.3rem;margin:34px 0 8px;line-height:1.25;border-top:1px solid var(--line);padding-top:18px}
+h3{font-size:1.05rem;margin:22px 0 6px}
+.lead{font-size:1.1rem;color:var(--text);margin:0 0 6px}
+.meta{color:var(--muted);font-size:.88rem}
+p,li{max-width:70ch}
+ul,ol{padding-left:1.3em}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:16px 0}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.tile .v{font-size:1.45rem;font-weight:700;line-height:1.2;overflow-wrap:anywhere}
+.tile .l{font-size:.88rem}
+.tile .s{font-size:.78rem;color:var(--muted);margin-top:4px;overflow-wrap:anywhere}
+.note{border:1px solid var(--line);border-left:4px solid var(--warn);background:var(--card);border-radius:6px;padding:8px 12px;margin:14px 0;font-size:.93rem}
+.note.info{border-left-color:var(--accent)}
+.note.bad{border-left-color:var(--bad)}
+.note b.k{display:inline-block;margin-right:.4em}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px;margin:14px 0}
+.card h3{margin-top:0}
+figure{margin:14px 0;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px}
+figure svg{display:block;width:100%;max-width:560px;height:auto;margin:0 auto}
+figcaption{font-size:.85rem;color:var(--muted);margin-top:6px}
+.tw{overflow-x:auto;margin:10px 0;border:1px solid var(--line);border-radius:6px;background:var(--card)}
+table{border-collapse:collapse;width:100%;font-size:.84rem}
+caption{caption-side:top;text-align:left;font-weight:600;padding:8px 8px 4px}
+th,td{padding:4px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:var(--soft);font-weight:600}
+td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
+tr:last-child td{border-bottom:0}
+.chip{display:inline-block;padding:0 .5em;border-radius:4px;border:1px solid currentColor;font-size:.78rem;font-weight:700;letter-spacing:.02em;white-space:nowrap}
+.chip.clean{color:var(--ok)}
+.chip.degraded{color:var(--warn)}
+.chip.failed{color:var(--bad)}
+.chip.unverified{color:var(--s4)}
+.legend{list-style:none;padding:0;margin:6px 0 0;display:flex;flex-wrap:wrap;gap:4px 14px;font-size:.8rem}
+.legend li{display:flex;align-items:center;gap:6px}
+.legend svg{width:34px;height:12px;flex:none}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin:14px 0}
+.cards a.pg{display:block;text-decoration:none;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.cards a.pg:hover,.cards a.pg:focus{border-color:var(--accent)}
+.cards a.pg b{color:var(--accent);display:block}
+.cards a.pg span{font-size:.88rem;color:var(--muted)}
+footer{margin-top:40px;padding-top:12px;border-top:1px solid var(--line);font-size:.82rem;color:var(--muted)}
+/* chart text */
+svg text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:var(--text)}
+svg .ax{font-size:10.5px;fill:var(--muted)}
+svg .lb{font-size:11px}
+svg .hd{font-size:11px;font-weight:700}
+svg .vl{font-size:10.5px;font-variant-numeric:tabular-nums}
+svg .gl{stroke:var(--line);stroke-width:1}
+svg .axl{stroke:var(--muted);stroke-width:1}
+svg .ref{stroke:var(--text);stroke-width:1;stroke-dasharray:4 3}
+svg .box{fill:var(--card);stroke:var(--text);stroke-width:1.2}
+svg .boxs{fill:var(--soft);stroke:var(--muted);stroke-width:1}
+svg .arr{stroke:var(--text);stroke-width:1.4;fill:none}
+svg .arrh{fill:var(--text)}
+svg .bn{stroke:var(--s5);stroke-width:1}
+svg .bo{fill:var(--s2)}
+svg .bw{fill:var(--s1)}
+svg .bv{fill:var(--s3)}
+svg .hollow{fill:var(--card)}
+svg .solid{fill:currentColor}
+svg .mk{stroke:currentColor;stroke-width:1.6}
+svg .ln{fill:none;stroke:currentColor;stroke-width:2}
+svg .seg{stroke:var(--card);stroke-width:1}
+.sw{display:inline-block;width:12px;height:12px;vertical-align:-1px;margin-right:6px;border:1px solid var(--text)}
+@media print{
+  nav.top{display:none}
+  body{background:#fff;color:#000;font-size:11pt}
+  .wrap{max-width:none;padding:0}
+  figure,.card,.tile,.tw{break-inside:avoid}
+}
+</style>
+</head>
+<body>
+<nav class="top" aria-label="Pages"><div class="wrap"><ul><li><a href="index.html">Overview</a></li><li><a href="throughput.html">Throughput</a></li><li><a href="time-breakdown.html">Time per request</a></li><li><a href="torch-vs-ort.html">Torch vs ORT</a></li><li><a href="wire-formats.html">Wire formats</a></li><li><a href="result-cache.html">Result cache</a></li><li><a href="correctness.html">Correctness</a></li><li><a href="compatibility.html">Compatibility</a></li><li><a href="boot-time.html" aria-current="page">Boot time</a></li><li><a href="scaling.html">Workers</a></li><li><a href="releases.html">Releases</a></li><li><a href="SUMMARY.html">One page</a></li></ul></div></nav>
+<main class="wrap">
+<header class="page"><h1>Boot time: what the gate costs before the first request</h1><p class="lead">How many seconds from process start to a ready server?</p><p class="meta">Run 2026-11-07T22:59:00. win32, 16 logical CPUs, Python 3.12.10, torch 2.14.0+cpu, onnxruntime 1.30.0. downshift 1.0.0rc1 from the checkout, 0.5.1 from PyPI. The folder is named <code>v1.0.0</code>.</p></header>
+<div class="tiles"><div class="tile"><div class="v">19.2 vs 11.8 s</div><div class="l">MiniLM: downshift 1.0.0rc1 vs hand-rolled FastAPI + transformers</div><div class="s">time to the first 200 answer</div></div><div class="tile"><div class="v">12.3 s</div><div class="l">MiniLM: downshift with --backend torch</div><div class="s">same server, ORT backend not used</div></div><div class="tile"><div class="v">8.1 vs 3.8 s</div><div class="l">clean_mlp: downshift vs hand-rolled torch</div><div class="s">a tiny model</div></div></div>
+<h2 id="question">The question</h2>
+<p>The gate runs before the first request. It exports the model and runs 8 samples. This work takes time. This page shows how much, as the harness measured it.</p>
+<h2 id="method">Method</h2>
+<ul><li><code>ready_s</code> is the time from the start of the server process to the first 200 answer. downshift answers on <code>/ready</code>. The hand-rolled servers answer on <code>/health</code> (<code>bench/hf_models.py</code>). The ends are not the same event.</li><li>Each value is one measurement for one start. The CSV repeats it on every row of a server. The file has no repeats.</li><li><code>wall_s</code> of <code>downshift check</code> on MiniLM comes from <code>results_hf.json</code>.</li></ul>
+<h2 id="results">Results</h2>
+<figure><svg viewBox="0 0 400 144" role="img" aria-label="Seconds to ready, clean_mlp"><title>Seconds to ready, clean_mlp</title><desc>One bar for each server.</desc><defs><pattern id="hat25" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" style="fill:var(--card)"/><line x1="0" y1="0" x2="0" y2="6" style="stroke:var(--s5);stroke-width:3"/></pattern></defs><text class="hd" x="4" y="21">clean_mlp</text><text class="lb" x="134" y="39" text-anchor="end">FastAPI + torch</text><rect class="bn" x="140" y="28" width="90.0" height="14" style="fill:url(#hat25)"><title>FastAPI + torch: 3.8 s</title></rect><text class="vl" x="234.0" y="39">3.8 s</text><text class="lb" x="134" y="61" text-anchor="end">FastAPI + ORT</text><rect class="bn" x="140" y="50" width="184.6" height="14" style="fill:url(#hat25)"><title>FastAPI + ORT: 7.8 s</title></rect><text class="vl" x="328.6" y="61">7.8 s</text><text class="lb" x="134" y="83" text-anchor="end">torch, async def</text><rect class="bn" x="140" y="72" width="90.0" height="14" style="fill:url(#hat25)"><title>torch, async def: 3.8 s</title></rect><text class="vl" x="234.0" y="83">3.8 s</text><text class="lb" x="134" y="105" text-anchor="end">downshift 0.5.1</text><rect class="bo" x="140" y="94" width="198.0" height="14"><title>downshift 0.5.1: 8.4 s</title></rect><text class="vl" x="342.0" y="105">8.4 s</text><text class="lb" x="134" y="127" text-anchor="end">downshift 1.0.0rc1</text><rect class="bw" x="140" y="116" width="189.8" height="14"><title>downshift 1.0.0rc1: 8.1 s</title></rect><text class="vl" x="333.8" y="127">8.1 s</text></svg><figcaption>clean_mlp: seconds from process start to ready. Shorter is better.</figcaption></figure>
+<figure><svg viewBox="0 0 400 144" role="img" aria-label="Seconds to ready, tiny_bert"><title>Seconds to ready, tiny_bert</title><desc>One bar for each server.</desc><defs><pattern id="hat26" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" style="fill:var(--card)"/><line x1="0" y1="0" x2="0" y2="6" style="stroke:var(--s5);stroke-width:3"/></pattern></defs><text class="hd" x="4" y="21">tiny_bert</text><text class="lb" x="134" y="39" text-anchor="end">FastAPI + torch</text><rect class="bn" x="140" y="28" width="140.8" height="14" style="fill:url(#hat26)"><title>FastAPI + torch: 12.9 s</title></rect><text class="vl" x="284.8" y="39">12.9 s</text><text class="lb" x="134" y="61" text-anchor="end">FastAPI + ORT</text><rect class="bn" x="140" y="50" width="198.0" height="14" style="fill:url(#hat26)"><title>FastAPI + ORT: 18.1 s</title></rect><text class="vl" x="342.0" y="61">18.1 s</text><text class="lb" x="134" y="83" text-anchor="end">torch, async def</text><rect class="bn" x="140" y="72" width="140.7" height="14" style="fill:url(#hat26)"><title>torch, async def: 12.9 s</title></rect><text class="vl" x="284.7" y="83">12.9 s</text><text class="lb" x="134" y="105" text-anchor="end">downshift 0.5.1</text><rect class="bo" x="140" y="94" width="190.8" height="14"><title>downshift 0.5.1: 17.4 s</title></rect><text class="vl" x="334.8" y="105">17.4 s</text><text class="lb" x="134" y="127" text-anchor="end">downshift 1.0.0rc1</text><rect class="bw" x="140" y="116" width="190.9" height="14"><title>downshift 1.0.0rc1: 17.4 s</title></rect><text class="vl" x="334.9" y="127">17.4 s</text></svg><figcaption>tiny_bert: seconds from process start to ready. Shorter is better.</figcaption></figure>
+<figure><svg viewBox="0 0 400 144" role="img" aria-label="Seconds to ready, mlp_large"><title>Seconds to ready, mlp_large</title><desc>One bar for each server.</desc><defs><pattern id="hat27" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" style="fill:var(--card)"/><line x1="0" y1="0" x2="0" y2="6" style="stroke:var(--s5);stroke-width:3"/></pattern></defs><text class="hd" x="4" y="21">mlp_large</text><text class="lb" x="134" y="39" text-anchor="end">FastAPI + torch</text><rect class="bn" x="140" y="28" width="101.2" height="14" style="fill:url(#hat27)"><title>FastAPI + torch: 4.5 s</title></rect><text class="vl" x="245.2" y="39">4.5 s</text><text class="lb" x="134" y="61" text-anchor="end">FastAPI + ORT</text><rect class="bn" x="140" y="50" width="174.4" height="14" style="fill:url(#hat27)"><title>FastAPI + ORT: 7.8 s</title></rect><text class="vl" x="318.4" y="61">7.8 s</text><text class="lb" x="134" y="83" text-anchor="end">torch, async def</text><rect class="bn" x="140" y="72" width="85.2" height="14" style="fill:url(#hat27)"><title>torch, async def: 3.8 s</title></rect><text class="vl" x="229.2" y="83">3.8 s</text><text class="lb" x="134" y="105" text-anchor="end">downshift 0.5.1</text><rect class="bo" x="140" y="94" width="173.2" height="14"><title>downshift 0.5.1: 7.8 s</title></rect><text class="vl" x="317.2" y="105">7.8 s</text><text class="lb" x="134" y="127" text-anchor="end">downshift 1.0.0rc1</text><rect class="bw" x="140" y="116" width="198.0" height="14"><title>downshift 1.0.0rc1: 8.9 s</title></rect><text class="vl" x="342.0" y="127">8.9 s</text></svg><figcaption>mlp_large: seconds from process start to ready. Shorter is better.</figcaption></figure>
+<figure><svg viewBox="0 0 400 144" role="img" aria-label="Seconds to ready, scatter_include_self_false"><title>Seconds to ready, scatter_include_self_false</title><desc>One bar for each server.</desc><defs><pattern id="hat28" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" style="fill:var(--card)"/><line x1="0" y1="0" x2="0" y2="6" style="stroke:var(--s5);stroke-width:3"/></pattern></defs><text class="hd" x="4" y="21">scatter_include_self_false</text><text class="lb" x="134" y="39" text-anchor="end">FastAPI + torch</text><rect class="bn" x="140" y="28" width="100.3" height="14" style="fill:url(#hat28)"><title>FastAPI + torch: 3.8 s</title></rect><text class="vl" x="244.3" y="39">3.8 s</text><text class="lb" x="134" y="61" text-anchor="end">FastAPI + ORT</text><rect class="bn" x="140" y="50" width="191.7" height="14" style="fill:url(#hat28)"><title>FastAPI + ORT: 7.3 s</title></rect><text class="vl" x="335.7" y="61">7.3 s</text><text class="lb" x="134" y="83" text-anchor="end">torch, async def</text><rect class="bn" x="140" y="72" width="100.3" height="14" style="fill:url(#hat28)"><title>torch, async def: 3.8 s</title></rect><text class="vl" x="244.3" y="83">3.8 s</text><text class="lb" x="134" y="105" text-anchor="end">downshift 0.5.1</text><rect class="bo" x="140" y="94" width="198.0" height="14"><title>downshift 0.5.1: 7.5 s</title></rect><text class="vl" x="342.0" y="105">7.5 s</text><text class="lb" x="134" y="127" text-anchor="end">downshift 1.0.0rc1</text><rect class="bw" x="140" y="116" width="190.6" height="14"><title>downshift 1.0.0rc1: 7.3 s</title></rect><text class="vl" x="334.6" y="127">7.3 s</text></svg><figcaption>scatter_include_self_false: seconds from process start to ready. Shorter is better.</figcaption></figure>
+<figure><svg viewBox="0 0 400 166" role="img" aria-label="Seconds to ready, all-MiniLM-L6-v2"><title>Seconds to ready, all-MiniLM-L6-v2</title><desc>One bar for each server.</desc><defs><pattern id="hat29" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" style="fill:var(--card)"/><line x1="0" y1="0" x2="0" y2="6" style="stroke:var(--s5);stroke-width:3"/></pattern></defs><text class="hd" x="4" y="21">all-MiniLM-L6-v2</text><text class="lb" x="134" y="39" text-anchor="end">downshift 0.5.1</text><rect class="bo" x="140" y="28" width="190.7" height="14"><title>downshift 0.5.1: 18.5 s</title></rect><text class="vl" x="334.7" y="39">18.5 s</text><text class="lb" x="134" y="61" text-anchor="end">downshift 1.0.0rc1</text><rect class="bw" x="140" y="50" width="198.0" height="14"><title>downshift 1.0.0rc1: 19.2 s</title></rect><text class="vl" x="342.0" y="61">19.2 s</text><text class="lb" x="134" y="83" text-anchor="end">FastAPI + transformers</text><rect class="bn" x="140" y="72" width="121.9" height="14" style="fill:url(#hat29)"><title>FastAPI + transformers: 11.8 s</title></rect><text class="vl" x="265.9" y="83">11.8 s</text><text class="lb" x="134" y="105" text-anchor="end">transformers, async</text><rect class="bn" x="140" y="94" width="121.5" height="14" style="fill:url(#hat29)"><title>transformers, async: 11.8 s</title></rect><text class="vl" x="265.5" y="105">11.8 s</text><text class="lb" x="134" y="127" text-anchor="end">0.5.1 --backend torch</text><rect class="bo" x="140" y="116" width="125.9" height="14"><title>0.5.1 --backend torch: 12.2 s</title></rect><text class="vl" x="269.9" y="127">12.2 s</text><text class="lb" x="134" y="149" text-anchor="end">1.0.0rc1 --backend torch</text><rect class="bv" x="140" y="138" width="127.2" height="14"><title>1.0.0rc1 --backend torch: 12.3 s</title></rect><text class="vl" x="271.2" y="149">12.3 s</text></svg><figcaption>all-MiniLM-L6-v2: seconds from process start to ready. Shorter is better.</figcaption></figure>
+<div class="tw" tabindex="0" role="region" aria-label="Seconds to ready, fixtures"><table><caption>Seconds to ready, fixtures</caption><thead><tr><th scope="col">model</th><th scope="col" class="r">FastAPI + torch</th><th scope="col" class="r">FastAPI + ORT</th><th scope="col" class="r">torch, async def</th><th scope="col" class="r">downshift 0.5.1</th><th scope="col" class="r">downshift 1.0.0rc1</th></tr></thead><tbody><tr><td>clean_mlp</td><td class="r">3.8</td><td class="r">7.8</td><td class="r">3.8</td><td class="r">8.4</td><td class="r">8.1</td></tr><tr><td>tiny_bert</td><td class="r">12.9</td><td class="r">18.1</td><td class="r">12.9</td><td class="r">17.4</td><td class="r">17.4</td></tr><tr><td>mlp_large</td><td class="r">4.5</td><td class="r">7.8</td><td class="r">3.8</td><td class="r">7.8</td><td class="r">8.9</td></tr><tr><td>scatter_include_self_false</td><td class="r">3.8</td><td class="r">7.3</td><td class="r">3.8</td><td class="r">7.5</td><td class="r">7.3</td></tr></tbody></table></div>
+<div class="tw" tabindex="0" role="region" aria-label="Seconds to ready, MiniLM"><table><caption>Seconds to ready, MiniLM</caption><thead><tr><th scope="col">server (all-MiniLM-L6-v2)</th><th scope="col" class="r">ready s</th></tr></thead><tbody><tr><td>naive FastAPI + transformers</td><td class="r">11.8</td></tr><tr><td>naive transformers, async def</td><td class="r">11.8</td></tr><tr><td>downshift 0.5.1</td><td class="r">18.5</td></tr><tr><td>downshift 0.5.1 --backend torch</td><td class="r">12.2</td></tr><tr><td>downshift 1.0.0rc1</td><td class="r">19.2</td></tr><tr><td>downshift 1.0.0rc1 --backend torch</td><td class="r">12.3</td></tr></tbody></table></div>
+<p><code>downshift check</code> on MiniLM took 19.11 s for 1.0.0rc1 and 18.47 s for 0.5.1 (exit code 0 in both).</p>
+<h2 id="limits">What this shows and does not show</h2>
+<h3>Shows</h3>
+<ul><li>On MiniLM, downshift is ready in 19.2 s. The hand-rolled server is ready in 11.8 s. The difference is 7.4 s.</li><li>With <code>--backend torch</code>, downshift is ready in 12.3 s.</li><li>On the four fixtures, downshift takes 3.4 to 4.6 s more than the hand-rolled torch server.</li></ul>
+<h3>Does not show</h3>
+<ul><li>How the boot time divides between load, export, verify and warm-up. The stored <code>check</code> report has no timing split. The README example shows such a split for one model.</li><li>Whether the 6.9 s gap between the default and <code>--backend torch</code> is the export and the check alone. The data does not say.</li><li>The effect of the export cache (<code>--export-cache-dir</code>). It is not measured here.</li><li>The boot time on Linux, or on another CPU. One machine. One run. One 3 s window for each point (5 s for MiniLM). The file holds no repeats, so the size of run-to-run noise is not measured.</li></ul>
+<h2 id="sources">Sources</h2><ul><li><a href="../results/v1.0.0/chart_runs.csv"><code>bench/results/v1.0.0/chart_runs.csv</code></a></li><li><a href="../results/v1.0.0/results_hf.json"><code>bench/results/v1.0.0/results_hf.json</code></a></li><li><a href="../hf_models.py"><code>bench/hf_models.py</code></a></li><li><a href="../run.py"><code>bench/run.py</code></a></li></ul>
+<footer>
+<p>Made by <code>bench/showcase/build_showcase.py</code> from files in <code>bench/</code>. The script changes no source file.
+Project: <a href="https://github.com/uNRealCoder/downshift-server">https://github.com/uNRealCoder/downshift-server</a>.</p>
+</footer>
+</main>
+</body>
+</html>

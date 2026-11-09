@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Correctness | downshift benchmarks</title>
+<style>
+:root{--bg:#f7f6f2;--card:#ffffff;--text:#1d1d1b;--muted:#55554f;--line:#d6d4ca;--soft:#efede6;--accent:#1f5fa8;--ok:#1d6b3f;--warn:#8a5a00;--bad:#a12626;--s1:#1f5fa8;--s2:#b5500f;--s3:#1f7a46;--s4:#7a4fa0;--s5:#5f5f58;--s6:#8a6a00}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#14161a;--card:#1c1f24;--text:#e9e8e3;--muted:#a9a9a1;--line:#383c43;--soft:#242830;--accent:#7db3f0;--ok:#6fcf9a;--warn:#e0b45a;--bad:#f08a8a;--s1:#7db3f0;--s2:#f0a070;--s3:#6fcf9a;--s4:#c3a0e6;--s5:#b5b5ad;--s6:#e0c060}}
+:root[data-theme="dark"]{--bg:#14161a;--card:#1c1f24;--text:#e9e8e3;--muted:#a9a9a1;--line:#383c43;--soft:#242830;--accent:#7db3f0;--ok:#6fcf9a;--warn:#e0b45a;--bad:#f08a8a;--s1:#7db3f0;--s2:#f0a070;--s3:#6fcf9a;--s4:#c3a0e6;--s5:#b5b5ad;--s6:#e0c060}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:860px;margin:0 auto;padding:0 16px 56px}
+a{color:var(--accent)}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88em;background:var(--soft);padding:.05em .3em;border-radius:3px;overflow-wrap:anywhere}
+pre{background:var(--soft);border:1px solid var(--line);border-radius:6px;padding:10px 12px;overflow-x:auto;font-size:.85em;line-height:1.45}
+pre code{background:none;padding:0;overflow-wrap:normal}
+nav.top{border-bottom:1px solid var(--line);background:var(--card)}
+nav.top .wrap{padding-bottom:0}
+nav.top ul{list-style:none;margin:0;padding:8px 0;display:flex;flex-wrap:wrap;gap:2px 14px;font-size:.88rem}
+nav.top a{text-decoration:none}
+nav.top a[aria-current="page"]{font-weight:700;text-decoration:underline}
+header.page{padding:28px 0 8px}
+h1{font-size:1.75rem;line-height:1.2;margin:0 0 8px}
+h2{font-size:1.3rem;margin:34px 0 8px;line-height:1.25;border-top:1px solid var(--line);padding-top:18px}
+h3{font-size:1.05rem;margin:22px 0 6px}
+.lead{font-size:1.1rem;color:var(--text);margin:0 0 6px}
+.meta{color:var(--muted);font-size:.88rem}
+p,li{max-width:70ch}
+ul,ol{padding-left:1.3em}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:16px 0}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.tile .v{font-size:1.45rem;font-weight:700;line-height:1.2;overflow-wrap:anywhere}
+.tile .l{font-size:.88rem}
+.tile .s{font-size:.78rem;color:var(--muted);margin-top:4px;overflow-wrap:anywhere}
+.note{border:1px solid var(--line);border-left:4px solid var(--warn);background:var(--card);border-radius:6px;padding:8px 12px;margin:14px 0;font-size:.93rem}
+.note.info{border-left-color:var(--accent)}
+.note.bad{border-left-color:var(--bad)}
+.note b.k{display:inline-block;margin-right:.4em}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px;margin:14px 0}
+.card h3{margin-top:0}
+figure{margin:14px 0;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px}
+figure svg{display:block;width:100%;max-width:560px;height:auto;margin:0 auto}
+figcaption{font-size:.85rem;color:var(--muted);margin-top:6px}
+.tw{overflow-x:auto;margin:10px 0;border:1px solid var(--line);border-radius:6px;background:var(--card)}
+table{border-collapse:collapse;width:100%;font-size:.84rem}
+caption{caption-side:top;text-align:left;font-weight:600;padding:8px 8px 4px}
+th,td{padding:4px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:var(--soft);font-weight:600}
+td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
+tr:last-child td{border-bottom:0}
+.chip{display:inline-block;padding:0 .5em;border-radius:4px;border:1px solid currentColor;font-size:.78rem;font-weight:700;letter-spacing:.02em;white-space:nowrap}
+.chip.clean{color:var(--ok)}
+.chip.degraded{color:var(--warn)}
+.chip.failed{color:var(--bad)}
+.chip.unverified{color:var(--s4)}
+.legend{list-style:none;padding:0;margin:6px 0 0;display:flex;flex-wrap:wrap;gap:4px 14px;font-size:.8rem}
+.legend li{display:flex;align-items:center;gap:6px}
+.legend svg{width:34px;height:12px;flex:none}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin:14px 0}
+.cards a.pg{display:block;text-decoration:none;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.cards a.pg:hover,.cards a.pg:focus{border-color:var(--accent)}
+.cards a.pg b{color:var(--accent);display:block}
+.cards a.pg span{font-size:.88rem;color:var(--muted)}
+footer{margin-top:40px;padding-top:12px;border-top:1px solid var(--line);font-size:.82rem;color:var(--muted)}
+/* chart text */
+svg text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:var(--text)}
+svg .ax{font-size:10.5px;fill:var(--muted)}
+svg .lb{font-size:11px}
+svg .hd{font-size:11px;font-weight:700}
+svg .vl{font-size:10.5px;font-variant-numeric:tabular-nums}
+svg .gl{stroke:var(--line);stroke-width:1}
+svg .axl{stroke:var(--muted);stroke-width:1}
+svg .ref{stroke:var(--text);stroke-width:1;stroke-dasharray:4 3}
+svg .box{fill:var(--card);stroke:var(--text);stroke-width:1.2}
+svg .boxs{fill:var(--soft);stroke:var(--muted);stroke-width:1}
+svg .arr{stroke:var(--text);stroke-width:1.4;fill:none}
+svg .arrh{fill:var(--text)}
+svg .bn{stroke:var(--s5);stroke-width:1}
+svg .bo{fill:var(--s2)}
+svg .bw{fill:var(--s1)}
+svg .bv{fill:var(--s3)}
+svg .hollow{fill:var(--card)}
+svg .solid{fill:currentColor}
+svg .mk{stroke:currentColor;stroke-width:1.6}
+svg .ln{fill:none;stroke:currentColor;stroke-width:2}
+svg .seg{stroke:var(--card);stroke-width:1}
+.sw{display:inline-block;width:12px;height:12px;vertical-align:-1px;margin-right:6px;border:1px solid var(--text)}
+@media print{
+  nav.top{display:none}
+  body{background:#fff;color:#000;font-size:11pt}
+  .wrap{max-width:none;padding:0}
+  figure,.card,.tile,.tw{break-inside:avoid}
+}
+</style>
+</head>
+<body>
+<nav class="top" aria-label="Pages"><div class="wrap"><ul><li><a href="index.html">Overview</a></li><li><a href="throughput.html">Throughput</a></li><li><a href="time-breakdown.html">Time per request</a></li><li><a href="torch-vs-ort.html">Torch vs ORT</a></li><li><a href="wire-formats.html">Wire formats</a></li><li><a href="result-cache.html">Result cache</a></li><li><a href="correctness.html" aria-current="page">Correctness</a></li><li><a href="compatibility.html">Compatibility</a></li><li><a href="boot-time.html">Boot time</a></li><li><a href="scaling.html">Workers</a></li><li><a href="releases.html">Releases</a></li><li><a href="SUMMARY.html">One page</a></li></ul></div></nav>
+<main class="wrap">
+<header class="page"><h1>Correctness under load</h1><p class="lead">Do the servers return the right numbers? Every response in the load run was compared with eager PyTorch.</p><p class="meta">Run 2026-11-07T22:59:00. win32, 16 logical CPUs, Python 3.12.10, torch 2.14.0+cpu, onnxruntime 1.30.0. downshift 1.0.0rc1 from the checkout, 0.5.1 from PyPI. The folder is named <code>v1.0.0</code>.</p></header>
+<div class="tiles"><div class="tile"><div class="v">1.2e+00 vs 2.8e-08</div><div class="l">scatter_include_self_false: worst error, hand-rolled ORT vs downshift 1.0.0rc1</div><div class="s">downshift serves this model with torch</div></div><div class="tile"><div class="v">0</div><div class="l">failed requests across every load window</div><div class="s">fixtures and MiniLM</div></div><div class="tile"><div class="v">DEGRADED</div><div class="l">verdict for scatter_include_self_false</div><div class="s">exported via strict=False but numerics diverge on 6/8 samples (max abs err 1.59e+00)</div></div></div>
+<h2 id="question">The question</h2>
+<p>A fast server with a wrong answer is not a win. The harness checks the answer of every server for every model, so a wrong row shows up next to its speed.</p>
+<h2 id="method">Method</h2>
+<ul><li>All processes build the same model from seed 1234 (<code>bench/cases.py</code>). The reference output is eager PyTorch.</li><li><code>max_abs_err</code> is the worst element-wise absolute error against the reference. The table shows the worst value over all rows of a server (every batch and concurrency).</li><li>The verdict is made by <code>downshift check</code> logic at the start of each downshift server. Tolerance: atol 1e-4, rtol 1e-3 for float32. A sample passes when <code>abs(got - expected) &lt;= atol + rtol * abs(expected)</code> (<code>docs/cli.md</code>).</li><li>For MiniLM, every answer is compared with <code>downshift --backend torch</code>, and the file stores the minimum cosine similarity.</li></ul>
+<h2 id="results">Results</h2>
+<div class="tw" tabindex="0" role="region" aria-label="Verdicts of the four models (the check at server start)"><table><caption>Verdicts of the four models (the check at server start)</caption><thead><tr><th scope="col">model</th><th scope="col">family</th><th scope="col">verdict</th><th scope="col">backend</th><th scope="col" class="r">max abs error at check</th><th scope="col">reason</th></tr></thead><tbody><tr><td>clean_mlp</td><td>generic</td><td><span class="chip clean">CLEAN</span></td><td>onnxruntime</td><td class="r">3.7e-08</td><td>exported via strict=False; numerics ok across 8 samples (max abs err 3.73e-08)</td></tr><tr><td>tiny_bert</td><td>hf</td><td><span class="chip clean">CLEAN</span></td><td>onnxruntime</td><td class="r">4.8e-07</td><td>exported via strict=False; numerics ok across 8 samples (max abs err 4.77e-07)</td></tr><tr><td>mlp_large</td><td>generic</td><td><span class="chip clean">CLEAN</span></td><td>onnxruntime</td><td class="r">2.1e-07</td><td>exported via strict=False; numerics ok across 8 samples (max abs err 2.09e-07)</td></tr><tr><td>scatter_include_self_false</td><td>generic</td><td><span class="chip degraded">DEGRADED</span></td><td>torch</td><td class="r">1.6e+00</td><td>exported via strict=False but numerics diverge on 6/8 samples (max abs err 1.59e+00)</td></tr></tbody></table></div>
+<figure><svg viewBox="0 0 400 122" role="img" aria-label="Worst error on scatter_include_self_false"><title>Worst error on scatter_include_self_false</title><desc>Linear bars. Only the hand-rolled ONNX Runtime server has a large error.</desc><defs><pattern id="hat21" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" style="fill:var(--card)"/><line x1="0" y1="0" x2="0" y2="6" style="stroke:var(--s5);stroke-width:3"/></pattern></defs><text class="lb" x="126" y="17" text-anchor="end">FastAPI + torch</text><rect class="bn" x="132" y="6" width="1.5" height="14" style="fill:url(#hat21)"><title>FastAPI + torch: 0.0e+00</title></rect><text class="vl" x="137.5" y="17">0.0e+00</text><text class="lb" x="126" y="39" text-anchor="end">FastAPI + ORT</text><rect class="bn" x="132" y="28" width="164.9" height="14" style="fill:url(#hat21)"><title>FastAPI + ORT: 1.2e+00</title></rect><text class="vl" x="300.9" y="39">1.2e+00</text><text class="lb" x="126" y="61" text-anchor="end">torch, async def</text><rect class="bn" x="132" y="50" width="1.5" height="14" style="fill:url(#hat21)"><title>torch, async def: 0.0e+00</title></rect><text class="vl" x="137.5" y="61">0.0e+00</text><text class="lb" x="126" y="83" text-anchor="end">downshift 0.5.1</text><rect class="bo" x="132" y="72" width="1.5" height="14"><title>downshift 0.5.1: 2.8e-08</title></rect><text class="vl" x="137.5" y="83">2.8e-08</text><text class="lb" x="126" y="105" text-anchor="end">downshift 1.0.0rc1</text><rect class="bw" x="132" y="94" width="1.5" height="14"><title>downshift 1.0.0rc1: 2.8e-08</title></rect><text class="vl" x="137.5" y="105">2.8e-08</text></svg><ul class="legend"><li><svg viewBox="0 0 34 12" aria-hidden="true"><defs><pattern id="lg22" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" style="fill:var(--card)"/><line x1="0" y1="0" x2="0" y2="6" style="stroke:var(--s5);stroke-width:3"/></pattern></defs><rect class="bn" x="1" y="1" width="30" height="10" style="fill:url(#lg22)"/></svg>hand-rolled</li><li><svg viewBox="0 0 34 12" aria-hidden="true"><rect class="bo" x="1" y="1" width="30" height="10"/></svg>downshift 0.5.1</li><li><svg viewBox="0 0 34 12" aria-hidden="true"><rect class="bw" x="1" y="1" width="30" height="10"/></svg>downshift 1.0.0rc1</li></ul><figcaption>scatter_include_self_false: worst absolute error against eager PyTorch (linear scale, 0 to 1.5). Only the bar for FastAPI + ORT is visible.</figcaption></figure>
+<div class="tw" tabindex="0" role="region" aria-label="Worst max abs error against eager PyTorch over all rows of a server"><table><caption>Worst max abs error against eager PyTorch over all rows of a server</caption><thead><tr><th scope="col">server</th><th scope="col" class="r">clean_mlp</th><th scope="col" class="r">tiny_bert</th><th scope="col" class="r">mlp_large</th><th scope="col" class="r">scatter_include_self_false</th></tr></thead><tbody><tr><td>naive FastAPI + torch</td><td class="r">0.0e+00</td><td class="r">0.0e+00</td><td class="r">0.0e+00</td><td class="r">0.0e+00</td></tr><tr><td>naive FastAPI + ONNX Runtime</td><td class="r">6.0e-08</td><td class="r">4.8e-07</td><td class="r">2.5e-07</td><td class="r">1.2e+00</td></tr><tr><td>naive torch, async def</td><td class="r">0.0e+00</td><td class="r">0.0e+00</td><td class="r">0.0e+00</td><td class="r">0.0e+00</td></tr><tr><td>downshift 0.5.1</td><td class="r">6.4e-08</td><td class="r">5.8e-07</td><td class="r">2.6e-07</td><td class="r">2.8e-08</td></tr><tr><td>downshift 0.5.1 safetensors</td><td class="r">6.0e-08</td><td class="r">4.8e-07</td><td class="r">2.5e-07</td><td class="r">0.0e+00</td></tr><tr><td>downshift 1.0.0rc1</td><td class="r">6.4e-08</td><td class="r">5.8e-07</td><td class="r">2.6e-07</td><td class="r">2.8e-08</td></tr><tr><td>downshift 1.0.0rc1 safetensors</td><td class="r">6.0e-08</td><td class="r">4.8e-07</td><td class="r">2.5e-07</td><td class="r">0.0e+00</td></tr><tr><td>downshift 1.0.0rc1 result cache on</td><td class="r">6.4e-08</td><td class="r">5.8e-07</td><td class="r">2.6e-07</td><td class="r">2.8e-08</td></tr><tr><td>downshift 1.0.0rc1 --metrics</td><td class="r">6.4e-08</td><td class="r">5.8e-07</td><td class="r">2.6e-07</td><td class="r">2.8e-08</td></tr></tbody></table></div>
+<p>On the three CLEAN models, every server stays below 1e-5. On the DEGRADED model, the hand-rolled ONNX Runtime server is off by about 1.2. downshift runs the gate, finds 6 of 8 samples wrong, and serves torch. The gate output for this model is shown in the repo README.</p>
+<div class="tw" tabindex="0" role="region" aria-label="MiniLM, short_b8: agreement with downshift_torch@1.0.0rc1"><table><caption>MiniLM, short_b8: agreement with downshift_torch@1.0.0rc1</caption><thead><tr><th scope="col">server</th><th scope="col" class="r">max abs err</th><th scope="col" class="r">min cosine</th></tr></thead><tbody><tr><td>naive_sync</td><td class="r">7.2e-09</td><td class="r">1.0000000</td></tr><tr><td>naive_async</td><td class="r">7.2e-09</td><td class="r">1.0000000</td></tr><tr><td>downshift_auto@1.0.0rc1</td><td class="r">1.3e-07</td><td class="r">1.0000000</td></tr><tr><td>downshift_auto_cache@1.0.0rc1</td><td class="r">1.3e-07</td><td class="r">1.0000000</td></tr><tr><td>downshift_torch@1.0.0rc1</td><td class="r">0.0e+00</td><td class="r">1.0000000</td></tr><tr><td>downshift_auto@0.5.1</td><td class="r">1.3e-07</td><td class="r">1.0000000</td></tr><tr><td>downshift_torch@0.5.1</td><td class="r">0.0e+00</td><td class="r">1.0000000</td></tr></tbody></table></div>
+<h2 id="limits">What this shows and does not show</h2>
+<h3>Shows</h3>
+<ul><li>The gate prevented a wrong answer on the one DEGRADED model in the run, and the cost in speed is the torch speed for that model.</li><li>On the CLEAN models, the ORT answers differ from torch by less than 1e-5 under load.</li><li>No request failed.</li></ul>
+<h3>Does not show</h3>
+<ul><li>How often a real model is DEGRADED. The run has one DEGRADED model, and the authors chose it to show the hazard. The compatibility page lists more.</li><li>The error on inputs that the harness did not send. Each row of the table compares one request of that shape.</li><li>Weights are random and seeded, not trained. Real trained models are in the compatibility page.</li><li>One machine. One run. One 3 s window for each point (5 s for MiniLM). The file holds no repeats, so the size of run-to-run noise is not measured.</li></ul>
+<h2 id="sources">Sources</h2><ul><li><a href="../results/v1.0.0/results.json"><code>bench/results/v1.0.0/results.json</code></a></li><li><a href="../results/v1.0.0/chart_runs.csv"><code>bench/results/v1.0.0/chart_runs.csv</code></a></li><li><a href="../results/v1.0.0/results_hf.json"><code>bench/results/v1.0.0/results_hf.json</code></a></li><li><a href="../cases.py"><code>bench/cases.py</code></a></li></ul>
+<footer>
+<p>Made by <code>bench/showcase/build_showcase.py</code> from files in <code>bench/</code>. The script changes no source file.
+Project: <a href="https://github.com/uNRealCoder/downshift-server">https://github.com/uNRealCoder/downshift-server</a>.</p>
+</footer>
+</main>
+</body>
+</html>

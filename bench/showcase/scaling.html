@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Workers | downshift benchmarks</title>
+<style>
+:root{--bg:#f7f6f2;--card:#ffffff;--text:#1d1d1b;--muted:#55554f;--line:#d6d4ca;--soft:#efede6;--accent:#1f5fa8;--ok:#1d6b3f;--warn:#8a5a00;--bad:#a12626;--s1:#1f5fa8;--s2:#b5500f;--s3:#1f7a46;--s4:#7a4fa0;--s5:#5f5f58;--s6:#8a6a00}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#14161a;--card:#1c1f24;--text:#e9e8e3;--muted:#a9a9a1;--line:#383c43;--soft:#242830;--accent:#7db3f0;--ok:#6fcf9a;--warn:#e0b45a;--bad:#f08a8a;--s1:#7db3f0;--s2:#f0a070;--s3:#6fcf9a;--s4:#c3a0e6;--s5:#b5b5ad;--s6:#e0c060}}
+:root[data-theme="dark"]{--bg:#14161a;--card:#1c1f24;--text:#e9e8e3;--muted:#a9a9a1;--line:#383c43;--soft:#242830;--accent:#7db3f0;--ok:#6fcf9a;--warn:#e0b45a;--bad:#f08a8a;--s1:#7db3f0;--s2:#f0a070;--s3:#6fcf9a;--s4:#c3a0e6;--s5:#b5b5ad;--s6:#e0c060}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:860px;margin:0 auto;padding:0 16px 56px}
+a{color:var(--accent)}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88em;background:var(--soft);padding:.05em .3em;border-radius:3px;overflow-wrap:anywhere}
+pre{background:var(--soft);border:1px solid var(--line);border-radius:6px;padding:10px 12px;overflow-x:auto;font-size:.85em;line-height:1.45}
+pre code{background:none;padding:0;overflow-wrap:normal}
+nav.top{border-bottom:1px solid var(--line);background:var(--card)}
+nav.top .wrap{padding-bottom:0}
+nav.top ul{list-style:none;margin:0;padding:8px 0;display:flex;flex-wrap:wrap;gap:2px 14px;font-size:.88rem}
+nav.top a{text-decoration:none}
+nav.top a[aria-current="page"]{font-weight:700;text-decoration:underline}
+header.page{padding:28px 0 8px}
+h1{font-size:1.75rem;line-height:1.2;margin:0 0 8px}
+h2{font-size:1.3rem;margin:34px 0 8px;line-height:1.25;border-top:1px solid var(--line);padding-top:18px}
+h3{font-size:1.05rem;margin:22px 0 6px}
+.lead{font-size:1.1rem;color:var(--text);margin:0 0 6px}
+.meta{color:var(--muted);font-size:.88rem}
+p,li{max-width:70ch}
+ul,ol{padding-left:1.3em}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:16px 0}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.tile .v{font-size:1.45rem;font-weight:700;line-height:1.2;overflow-wrap:anywhere}
+.tile .l{font-size:.88rem}
+.tile .s{font-size:.78rem;color:var(--muted);margin-top:4px;overflow-wrap:anywhere}
+.note{border:1px solid var(--line);border-left:4px solid var(--warn);background:var(--card);border-radius:6px;padding:8px 12px;margin:14px 0;font-size:.93rem}
+.note.info{border-left-color:var(--accent)}
+.note.bad{border-left-color:var(--bad)}
+.note b.k{display:inline-block;margin-right:.4em}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px;margin:14px 0}
+.card h3{margin-top:0}
+figure{margin:14px 0;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px}
+figure svg{display:block;width:100%;max-width:560px;height:auto;margin:0 auto}
+figcaption{font-size:.85rem;color:var(--muted);margin-top:6px}
+.tw{overflow-x:auto;margin:10px 0;border:1px solid var(--line);border-radius:6px;background:var(--card)}
+table{border-collapse:collapse;width:100%;font-size:.84rem}
+caption{caption-side:top;text-align:left;font-weight:600;padding:8px 8px 4px}
+th,td{padding:4px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:var(--soft);font-weight:600}
+td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
+tr:last-child td{border-bottom:0}
+.chip{display:inline-block;padding:0 .5em;border-radius:4px;border:1px solid currentColor;font-size:.78rem;font-weight:700;letter-spacing:.02em;white-space:nowrap}
+.chip.clean{color:var(--ok)}
+.chip.degraded{color:var(--warn)}
+.chip.failed{color:var(--bad)}
+.chip.unverified{color:var(--s4)}
+.legend{list-style:none;padding:0;margin:6px 0 0;display:flex;flex-wrap:wrap;gap:4px 14px;font-size:.8rem}
+.legend li{display:flex;align-items:center;gap:6px}
+.legend svg{width:34px;height:12px;flex:none}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin:14px 0}
+.cards a.pg{display:block;text-decoration:none;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.cards a.pg:hover,.cards a.pg:focus{border-color:var(--accent)}
+.cards a.pg b{color:var(--accent);display:block}
+.cards a.pg span{font-size:.88rem;color:var(--muted)}
+footer{margin-top:40px;padding-top:12px;border-top:1px solid var(--line);font-size:.82rem;color:var(--muted)}
+/* chart text */
+svg text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:var(--text)}
+svg .ax{font-size:10.5px;fill:var(--muted)}
+svg .lb{font-size:11px}
+svg .hd{font-size:11px;font-weight:700}
+svg .vl{font-size:10.5px;font-variant-numeric:tabular-nums}
+svg .gl{stroke:var(--line);stroke-width:1}
+svg .axl{stroke:var(--muted);stroke-width:1}
+svg .ref{stroke:var(--text);stroke-width:1;stroke-dasharray:4 3}
+svg .box{fill:var(--card);stroke:var(--text);stroke-width:1.2}
+svg .boxs{fill:var(--soft);stroke:var(--muted);stroke-width:1}
+svg .arr{stroke:var(--text);stroke-width:1.4;fill:none}
+svg .arrh{fill:var(--text)}
+svg .bn{stroke:var(--s5);stroke-width:1}
+svg .bo{fill:var(--s2)}
+svg .bw{fill:var(--s1)}
+svg .bv{fill:var(--s3)}
+svg .hollow{fill:var(--card)}
+svg .solid{fill:currentColor}
+svg .mk{stroke:currentColor;stroke-width:1.6}
+svg .ln{fill:none;stroke:currentColor;stroke-width:2}
+svg .seg{stroke:var(--card);stroke-width:1}
+.sw{display:inline-block;width:12px;height:12px;vertical-align:-1px;margin-right:6px;border:1px solid var(--text)}
+@media print{
+  nav.top{display:none}
+  body{background:#fff;color:#000;font-size:11pt}
+  .wrap{max-width:none;padding:0}
+  figure,.card,.tile,.tw{break-inside:avoid}
+}
+</style>
+</head>
+<body>
+<nav class="top" aria-label="Pages"><div class="wrap"><ul><li><a href="index.html">Overview</a></li><li><a href="throughput.html">Throughput</a></li><li><a href="time-breakdown.html">Time per request</a></li><li><a href="torch-vs-ort.html">Torch vs ORT</a></li><li><a href="wire-formats.html">Wire formats</a></li><li><a href="result-cache.html">Result cache</a></li><li><a href="correctness.html">Correctness</a></li><li><a href="compatibility.html">Compatibility</a></li><li><a href="boot-time.html">Boot time</a></li><li><a href="scaling.html" aria-current="page">Workers</a></li><li><a href="releases.html">Releases</a></li><li><a href="SUMMARY.html">One page</a></li></ul></div></nav>
+<main class="wrap">
+<header class="page"><h1>More worker processes</h1><p class="lead">Does <code>--workers N</code> raise throughput, and what does it cost?</p><p class="meta">Older data: the 0.5.0 run, 2026-10-04T22:32:59. win32, 16 logical CPUs, Python 3.12.10, torch 2.14.0+cpu, onnxruntime 1.30.0.</p></header>
+<div class="note bad"><b class="k">Old data.</b>The 1.0.0rc1 run did not include the workers sweep (<code>skip_workers</code> is true in its settings). These numbers are for 0.5.0 and 0.4.0. They were not measured for 1.0.0rc1.</div>
+<div class="tiles"><div class="tile"><div class="v">3857 vs 983</div><div class="l">clean_mlp, c=8, 0.5.0: 4 workers vs 1 worker, requests/s</div><div class="s">3.9x</div></div><div class="tile"><div class="v">239 vs 108</div><div class="l">bert_small, c=8, 0.5.0: 4 workers vs 1 worker</div><div class="s">2.2x</div></div><div class="tile"><div class="v">70 vs 91</div><div class="l">bert_small, c=1, 0.5.0: 4 workers vs 1 worker</div><div class="s">slower with more workers at c=1</div></div></div>
+<h2 id="question">The question</h2>
+<p>One downshift process runs inference on one machine. <code>--workers N</code> starts N processes. This page shows what that does to throughput at 1, 8 and 32 concurrent clients.</p>
+<h2 id="method">Method</h2>
+<ul><li>The workers sweep is the last part of <code>python -m bench.run --out bench/results/v0.5.0/results.json</code>. It starts the real CLI with <code>--workers 1</code>, <code>2</code> and <code>4</code> on <code>clean_mlp</code>, <code>mlp_large</code> and <code>bert_small</code>. Batch 1, JSON.</li><li>With more than one worker, the parent exports once and hands the artifact to each worker.</li><li>Data: <code>chart_runs.csv</code> of the 0.5.0 run, rows with <code>suite = workers</code>.</li></ul>
+<h2 id="results">Results</h2>
+<figure><svg viewBox="0 0 400 276" role="img" aria-label="Requests per second for 1, 2 and 4 workers, clean_mlp"><title>Requests per second for 1, 2 and 4 workers, clean_mlp</title><desc>Three groups, one for each concurrency.</desc><defs><pattern id="hat30" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" style="fill:var(--card)"/><line x1="0" y1="0" x2="0" y2="6" style="stroke:var(--s5);stroke-width:3"/></pattern></defs><text class="hd" x="4" y="21">clean_mlp, c=1, requests/s (0.5.0)</text><text class="lb" x="84" y="39" text-anchor="end">1 worker</text><rect class="bw" x="90" y="28" width="58.3" height="14"><title>1 worker: 907</title></rect><text class="vl" x="152.3" y="39">907</text><text class="lb" x="84" y="61" text-anchor="end">2 workers</text><rect class="bw" x="90" y="50" width="60.2" height="14"><title>2 workers: 936</title></rect><text class="vl" x="154.2" y="61">936</text><text class="lb" x="84" y="83" text-anchor="end">4 workers</text><rect class="bw" x="90" y="72" width="62.7" height="14"><title>4 workers: 974</title></rect><text class="vl" x="156.7" y="83">974</text><text class="hd" x="4" y="109">clean_mlp, c=8, requests/s (0.5.0)</text><text class="lb" x="84" y="127" text-anchor="end">1 worker</text><rect class="bw" x="90" y="116" width="63.2" height="14"><title>1 worker: 983</title></rect><text class="vl" x="157.2" y="127">983</text><text class="lb" x="84" y="149" text-anchor="end">2 workers</text><rect class="bw" x="90" y="138" width="133.5" height="14"><title>2 workers: 2076</title></rect><text class="vl" x="227.5" y="149">2076</text><text class="lb" x="84" y="171" text-anchor="end">4 workers</text><rect class="bw" x="90" y="160" width="248.0" height="14"><title>4 workers: 3857</title></rect><text class="vl" x="342.0" y="171">3857</text><text class="hd" x="4" y="197">clean_mlp, c=32, requests/s (0.5.0)</text><text class="lb" x="84" y="215" text-anchor="end">1 worker</text><rect class="bw" x="90" y="204" width="71.4" height="14"><title>1 worker: 1111</title></rect><text class="vl" x="165.4" y="215">1111</text><text class="lb" x="84" y="237" text-anchor="end">2 workers</text><rect class="bw" x="90" y="226" width="126.3" height="14"><title>2 workers: 1964</title></rect><text class="vl" x="220.3" y="237">1964</text><text class="lb" x="84" y="259" text-anchor="end">4 workers</text><rect class="bw" x="90" y="248" width="247.3" height="14"><title>4 workers: 3845</title></rect><text class="vl" x="341.3" y="259">3845</text></svg><figcaption>clean_mlp, downshift 0.5.0: requests per second by number of workers.</figcaption></figure>
+<figure><svg viewBox="0 0 400 276" role="img" aria-label="Requests per second for 1, 2 and 4 workers, mlp_large"><title>Requests per second for 1, 2 and 4 workers, mlp_large</title><desc>Three groups, one for each concurrency.</desc><defs><pattern id="hat31" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" style="fill:var(--card)"/><line x1="0" y1="0" x2="0" y2="6" style="stroke:var(--s5);stroke-width:3"/></pattern></defs><text class="hd" x="4" y="21">mlp_large, c=1, requests/s (0.5.0)</text><text class="lb" x="84" y="39" text-anchor="end">1 worker</text><rect class="bw" x="90" y="28" width="61.1" height="14"><title>1 worker: 515</title></rect><text class="vl" x="155.1" y="39">515</text><text class="lb" x="84" y="61" text-anchor="end">2 workers</text><rect class="bw" x="90" y="50" width="61.0" height="14"><title>2 workers: 514</title></rect><text class="vl" x="155.0" y="61">514</text><text class="lb" x="84" y="83" text-anchor="end">4 workers</text><rect class="bw" x="90" y="72" width="62.3" height="14"><title>4 workers: 525</title></rect><text class="vl" x="156.3" y="83">525</text><text class="hd" x="4" y="109">mlp_large, c=8, requests/s (0.5.0)</text><text class="lb" x="84" y="127" text-anchor="end">1 worker</text><rect class="bw" x="90" y="116" width="97.2" height="14"><title>1 worker: 819</title></rect><text class="vl" x="191.2" y="127">819</text><text class="lb" x="84" y="149" text-anchor="end">2 workers</text><rect class="bw" x="90" y="138" width="119.4" height="14"><title>2 workers: 1006</title></rect><text class="vl" x="213.4" y="149">1006</text><text class="lb" x="84" y="171" text-anchor="end">4 workers</text><rect class="bw" x="90" y="160" width="173.2" height="14"><title>4 workers: 1459</title></rect><text class="vl" x="267.2" y="171">1459</text><text class="hd" x="4" y="197">mlp_large, c=32, requests/s (0.5.0)</text><text class="lb" x="84" y="215" text-anchor="end">1 worker</text><rect class="bw" x="90" y="204" width="98.2" height="14"><title>1 worker: 827</title></rect><text class="vl" x="192.2" y="215">827</text><text class="lb" x="84" y="237" text-anchor="end">2 workers</text><rect class="bw" x="90" y="226" width="142.8" height="14"><title>2 workers: 1203</title></rect><text class="vl" x="236.8" y="237">1203</text><text class="lb" x="84" y="259" text-anchor="end">4 workers</text><rect class="bw" x="90" y="248" width="248.0" height="14"><title>4 workers: 2089</title></rect><text class="vl" x="342.0" y="259">2089</text></svg><figcaption>mlp_large, downshift 0.5.0: requests per second by number of workers.</figcaption></figure>
+<figure><svg viewBox="0 0 400 276" role="img" aria-label="Requests per second for 1, 2 and 4 workers, bert_small"><title>Requests per second for 1, 2 and 4 workers, bert_small</title><desc>Three groups, one for each concurrency.</desc><defs><pattern id="hat32" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" style="fill:var(--card)"/><line x1="0" y1="0" x2="0" y2="6" style="stroke:var(--s5);stroke-width:3"/></pattern></defs><text class="hd" x="4" y="21">bert_small, c=1, requests/s (0.5.0)</text><text class="lb" x="84" y="39" text-anchor="end">1 worker</text><rect class="bw" x="90" y="28" width="91.1" height="14"><title>1 worker: 91</title></rect><text class="vl" x="185.1" y="39">91</text><text class="lb" x="84" y="61" text-anchor="end">2 workers</text><rect class="bw" x="90" y="50" width="91.6" height="14"><title>2 workers: 92</title></rect><text class="vl" x="185.6" y="61">92</text><text class="lb" x="84" y="83" text-anchor="end">4 workers</text><rect class="bw" x="90" y="72" width="69.6" height="14"><title>4 workers: 70</title></rect><text class="vl" x="163.6" y="83">70</text><text class="hd" x="4" y="109">bert_small, c=8, requests/s (0.5.0)</text><text class="lb" x="84" y="127" text-anchor="end">1 worker</text><rect class="bw" x="90" y="116" width="107.5" height="14"><title>1 worker: 108</title></rect><text class="vl" x="201.5" y="127">108</text><text class="lb" x="84" y="149" text-anchor="end">2 workers</text><rect class="bw" x="90" y="138" width="156.7" height="14"><title>2 workers: 157</title></rect><text class="vl" x="250.7" y="149">157</text><text class="lb" x="84" y="171" text-anchor="end">4 workers</text><rect class="bw" x="90" y="160" width="239.0" height="14"><title>4 workers: 239</title></rect><text class="vl" x="333.0" y="171">239</text><text class="hd" x="4" y="197">bert_small, c=32, requests/s (0.5.0)</text><text class="lb" x="84" y="215" text-anchor="end">1 worker</text><rect class="bw" x="90" y="204" width="101.3" height="14"><title>1 worker: 101</title></rect><text class="vl" x="195.3" y="215">101</text><text class="lb" x="84" y="237" text-anchor="end">2 workers</text><rect class="bw" x="90" y="226" width="149.9" height="14"><title>2 workers: 150</title></rect><text class="vl" x="243.9" y="237">150</text><text class="lb" x="84" y="259" text-anchor="end">4 workers</text><rect class="bw" x="90" y="248" width="248.0" height="14"><title>4 workers: 248</title></rect><text class="vl" x="342.0" y="259">248</text></svg><figcaption>bert_small, downshift 0.5.0: requests per second by number of workers.</figcaption></figure>
+<div class="tw" tabindex="0" role="region" aria-label="The workers sweep, batch 1"><table><caption>The workers sweep, batch 1</caption><thead><tr><th scope="col">model</th><th scope="col">version</th><th scope="col" class="r">workers</th><th scope="col" class="r">rps c=1</th><th scope="col" class="r">rps c=8</th><th scope="col" class="r">rps c=32</th><th scope="col" class="r">p99 ms c=8</th><th scope="col" class="r">boot s</th></tr></thead><tbody><tr><td>clean_mlp</td><td>0.4.0</td><td class="r">1</td><td class="r">861</td><td class="r">887</td><td class="r">915</td><td class="r">13.4</td><td class="r">7.7</td></tr><tr><td>clean_mlp</td><td>0.4.0</td><td class="r">2</td><td class="r">823</td><td class="r">1789</td><td class="r">1923</td><td class="r">6.1</td><td class="r">10.6</td></tr><tr><td>clean_mlp</td><td>0.4.0</td><td class="r">4</td><td class="r">846</td><td class="r">3406</td><td class="r">3418</td><td class="r">4.2</td><td class="r">10.6</td></tr><tr><td>clean_mlp</td><td>0.5.0</td><td class="r">1</td><td class="r">907</td><td class="r">983</td><td class="r">1111</td><td class="r">12.7</td><td class="r">9.2</td></tr><tr><td>clean_mlp</td><td>0.5.0</td><td class="r">2</td><td class="r">936</td><td class="r">2076</td><td class="r">1964</td><td class="r">6.0</td><td class="r">11.3</td></tr><tr><td>clean_mlp</td><td>0.5.0</td><td class="r">4</td><td class="r">974</td><td class="r">3857</td><td class="r">3845</td><td class="r">3.7</td><td class="r">12.3</td></tr><tr><td>mlp_large</td><td>0.4.0</td><td class="r">1</td><td class="r">468</td><td class="r">745</td><td class="r">719</td><td class="r">18.6</td><td class="r">7.9</td></tr><tr><td>mlp_large</td><td>0.4.0</td><td class="r">2</td><td class="r">418</td><td class="r">1126</td><td class="r">1260</td><td class="r">13.9</td><td class="r">10.9</td></tr><tr><td>mlp_large</td><td>0.4.0</td><td class="r">4</td><td class="r">475</td><td class="r">1325</td><td class="r">2003</td><td class="r">11.9</td><td class="r">11.3</td></tr><tr><td>mlp_large</td><td>0.5.0</td><td class="r">1</td><td class="r">515</td><td class="r">819</td><td class="r">827</td><td class="r">14.2</td><td class="r">8.2</td></tr><tr><td>mlp_large</td><td>0.5.0</td><td class="r">2</td><td class="r">514</td><td class="r">1006</td><td class="r">1203</td><td class="r">19.5</td><td class="r">11.3</td></tr><tr><td>mlp_large</td><td>0.5.0</td><td class="r">4</td><td class="r">525</td><td class="r">1459</td><td class="r">2089</td><td class="r">10.6</td><td class="r">11.3</td></tr><tr><td>bert_small</td><td>0.4.0</td><td class="r">1</td><td class="r">89</td><td class="r">105</td><td class="r">98</td><td class="r">95.2</td><td class="r">20.2</td></tr><tr><td>bert_small</td><td>0.4.0</td><td class="r">2</td><td class="r">90</td><td class="r">142</td><td class="r">143</td><td class="r">111.6</td><td class="r">23.1</td></tr><tr><td>bert_small</td><td>0.4.0</td><td class="r">4</td><td class="r">66</td><td class="r">227</td><td class="r">231</td><td class="r">98.0</td><td class="r">24.1</td></tr><tr><td>bert_small</td><td>0.5.0</td><td class="r">1</td><td class="r">91</td><td class="r">108</td><td class="r">101</td><td class="r">84.8</td><td class="r">20.3</td></tr><tr><td>bert_small</td><td>0.5.0</td><td class="r">2</td><td class="r">92</td><td class="r">157</td><td class="r">150</td><td class="r">82.7</td><td class="r">23.1</td></tr><tr><td>bert_small</td><td>0.5.0</td><td class="r">4</td><td class="r">70</td><td class="r">239</td><td class="r">248</td><td class="r">58.9</td><td class="r">23.6</td></tr></tbody></table></div>
+<h2 id="limits">What this shows and does not show</h2>
+<h3>Shows</h3>
+<ul><li>With 8 or more clients, throughput rises with the number of workers for all three models in both versions.</li><li>At c=1, more workers do not help. For <code>bert_small</code> 4 workers are slower than 1 (70 against 91 requests/s in 0.5.0).</li><li>Boot time grows with workers: it is longer with 4 workers than with 1 for every model.</li></ul>
+<h3>Does not show</h3>
+<ul><li>Linear scaling. The best case is 3.9x for 4 workers. The load generator shares the 16 logical CPUs with the workers, and its ceiling in this run was 8477 requests/s at c=8.</li><li>Results for 1.0.0rc1, for any other model, or for a machine with another core count.</li><li>The README of <code>bench/</code> notes one startup hang in 0.4.0 (<code>--workers 4</code> on <code>bert_small</code> did not answer <code>/ready</code> within 600 s once, then was re-run). The stored boot times are of the re-run.</li><li>One machine. One run. One 3 s window for each point (5 s for MiniLM). The file holds no repeats, so the size of run-to-run noise is not measured.</li></ul>
+<h2 id="sources">Sources</h2><ul><li><a href="../results/v0.5.0/chart_runs.csv"><code>bench/results/v0.5.0/chart_runs.csv</code></a></li><li><a href="../results/v0.5.0/results.json"><code>bench/results/v0.5.0/results.json</code></a></li><li><a href="../results/v0.5.0/REPORT.md"><code>bench/results/v0.5.0/REPORT.md</code></a></li></ul>
+<footer>
+<p>Made by <code>bench/showcase/build_showcase.py</code> from files in <code>bench/</code>. The script changes no source file.
+Project: <a href="https://github.com/uNRealCoder/downshift-server">https://github.com/uNRealCoder/downshift-server</a>.</p>
+</footer>
+</main>
+</body>
+</html>

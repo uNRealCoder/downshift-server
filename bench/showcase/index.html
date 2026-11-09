@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Overview | downshift benchmarks</title>
+<style>
+:root{--bg:#f7f6f2;--card:#ffffff;--text:#1d1d1b;--muted:#55554f;--line:#d6d4ca;--soft:#efede6;--accent:#1f5fa8;--ok:#1d6b3f;--warn:#8a5a00;--bad:#a12626;--s1:#1f5fa8;--s2:#b5500f;--s3:#1f7a46;--s4:#7a4fa0;--s5:#5f5f58;--s6:#8a6a00}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#14161a;--card:#1c1f24;--text:#e9e8e3;--muted:#a9a9a1;--line:#383c43;--soft:#242830;--accent:#7db3f0;--ok:#6fcf9a;--warn:#e0b45a;--bad:#f08a8a;--s1:#7db3f0;--s2:#f0a070;--s3:#6fcf9a;--s4:#c3a0e6;--s5:#b5b5ad;--s6:#e0c060}}
+:root[data-theme="dark"]{--bg:#14161a;--card:#1c1f24;--text:#e9e8e3;--muted:#a9a9a1;--line:#383c43;--soft:#242830;--accent:#7db3f0;--ok:#6fcf9a;--warn:#e0b45a;--bad:#f08a8a;--s1:#7db3f0;--s2:#f0a070;--s3:#6fcf9a;--s4:#c3a0e6;--s5:#b5b5ad;--s6:#e0c060}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:860px;margin:0 auto;padding:0 16px 56px}
+a{color:var(--accent)}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88em;background:var(--soft);padding:.05em .3em;border-radius:3px;overflow-wrap:anywhere}
+pre{background:var(--soft);border:1px solid var(--line);border-radius:6px;padding:10px 12px;overflow-x:auto;font-size:.85em;line-height:1.45}
+pre code{background:none;padding:0;overflow-wrap:normal}
+nav.top{border-bottom:1px solid var(--line);background:var(--card)}
+nav.top .wrap{padding-bottom:0}
+nav.top ul{list-style:none;margin:0;padding:8px 0;display:flex;flex-wrap:wrap;gap:2px 14px;font-size:.88rem}
+nav.top a{text-decoration:none}
+nav.top a[aria-current="page"]{font-weight:700;text-decoration:underline}
+header.page{padding:28px 0 8px}
+h1{font-size:1.75rem;line-height:1.2;margin:0 0 8px}
+h2{font-size:1.3rem;margin:34px 0 8px;line-height:1.25;border-top:1px solid var(--line);padding-top:18px}
+h3{font-size:1.05rem;margin:22px 0 6px}
+.lead{font-size:1.1rem;color:var(--text);margin:0 0 6px}
+.meta{color:var(--muted);font-size:.88rem}
+p,li{max-width:70ch}
+ul,ol{padding-left:1.3em}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:16px 0}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.tile .v{font-size:1.45rem;font-weight:700;line-height:1.2;overflow-wrap:anywhere}
+.tile .l{font-size:.88rem}
+.tile .s{font-size:.78rem;color:var(--muted);margin-top:4px;overflow-wrap:anywhere}
+.note{border:1px solid var(--line);border-left:4px solid var(--warn);background:var(--card);border-radius:6px;padding:8px 12px;margin:14px 0;font-size:.93rem}
+.note.info{border-left-color:var(--accent)}
+.note.bad{border-left-color:var(--bad)}
+.note b.k{display:inline-block;margin-right:.4em}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px;margin:14px 0}
+.card h3{margin-top:0}
+figure{margin:14px 0;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px}
+figure svg{display:block;width:100%;max-width:560px;height:auto;margin:0 auto}
+figcaption{font-size:.85rem;color:var(--muted);margin-top:6px}
+.tw{overflow-x:auto;margin:10px 0;border:1px solid var(--line);border-radius:6px;background:var(--card)}
+table{border-collapse:collapse;width:100%;font-size:.84rem}
+caption{caption-side:top;text-align:left;font-weight:600;padding:8px 8px 4px}
+th,td{padding:4px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:var(--soft);font-weight:600}
+td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
+tr:last-child td{border-bottom:0}
+.chip{display:inline-block;padding:0 .5em;border-radius:4px;border:1px solid currentColor;font-size:.78rem;font-weight:700;letter-spacing:.02em;white-space:nowrap}
+.chip.clean{color:var(--ok)}
+.chip.degraded{color:var(--warn)}
+.chip.failed{color:var(--bad)}
+.chip.unverified{color:var(--s4)}
+.legend{list-style:none;padding:0;margin:6px 0 0;display:flex;flex-wrap:wrap;gap:4px 14px;font-size:.8rem}
+.legend li{display:flex;align-items:center;gap:6px}
+.legend svg{width:34px;height:12px;flex:none}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin:14px 0}
+.cards a.pg{display:block;text-decoration:none;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.cards a.pg:hover,.cards a.pg:focus{border-color:var(--accent)}
+.cards a.pg b{color:var(--accent);display:block}
+.cards a.pg span{font-size:.88rem;color:var(--muted)}
+footer{margin-top:40px;padding-top:12px;border-top:1px solid var(--line);font-size:.82rem;color:var(--muted)}
+/* chart text */
+svg text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:var(--text)}
+svg .ax{font-size:10.5px;fill:var(--muted)}
+svg .lb{font-size:11px}
+svg .hd{font-size:11px;font-weight:700}
+svg .vl{font-size:10.5px;font-variant-numeric:tabular-nums}
+svg .gl{stroke:var(--line);stroke-width:1}
+svg .axl{stroke:var(--muted);stroke-width:1}
+svg .ref{stroke:var(--text);stroke-width:1;stroke-dasharray:4 3}
+svg .box{fill:var(--card);stroke:var(--text);stroke-width:1.2}
+svg .boxs{fill:var(--soft);stroke:var(--muted);stroke-width:1}
+svg .arr{stroke:var(--text);stroke-width:1.4;fill:none}
+svg .arrh{fill:var(--text)}
+svg .bn{stroke:var(--s5);stroke-width:1}
+svg .bo{fill:var(--s2)}
+svg .bw{fill:var(--s1)}
+svg .bv{fill:var(--s3)}
+svg .hollow{fill:var(--card)}
+svg .solid{fill:currentColor}
+svg .mk{stroke:currentColor;stroke-width:1.6}
+svg .ln{fill:none;stroke:currentColor;stroke-width:2}
+svg .seg{stroke:var(--card);stroke-width:1}
+.sw{display:inline-block;width:12px;height:12px;vertical-align:-1px;margin-right:6px;border:1px solid var(--text)}
+@media print{
+  nav.top{display:none}
+  body{background:#fff;color:#000;font-size:11pt}
+  .wrap{max-width:none;padding:0}
+  figure,.card,.tile,.tw{break-inside:avoid}
+}
+</style>
+</head>
+<body>
+<nav class="top" aria-label="Pages"><div class="wrap"><ul><li><a href="index.html" aria-current="page">Overview</a></li><li><a href="throughput.html">Throughput</a></li><li><a href="time-breakdown.html">Time per request</a></li><li><a href="torch-vs-ort.html">Torch vs ORT</a></li><li><a href="wire-formats.html">Wire formats</a></li><li><a href="result-cache.html">Result cache</a></li><li><a href="correctness.html">Correctness</a></li><li><a href="compatibility.html">Compatibility</a></li><li><a href="boot-time.html">Boot time</a></li><li><a href="scaling.html">Workers</a></li><li><a href="releases.html">Releases</a></li><li><a href="SUMMARY.html">One page</a></li></ul></div></nav>
+<main class="wrap">
+<header class="page"><h1>downshift benchmarks</h1><p class="lead">downshift serves a PyTorch model over HTTP. Before the first request, it checks that the ONNX version of the model gives the same numbers as PyTorch. These pages show what that check finds and what it costs.</p><p class="meta">Run 2026-11-07T22:59:00. win32, 16 logical CPUs, Python 3.12.10, torch 2.14.0+cpu, onnxruntime 1.30.0. downshift 1.0.0rc1 from the checkout, 0.5.1 from PyPI. The folder is named <code>v1.0.0</code>.</p></header>
+<h2 id="sixty">In 60 seconds</h2>
+<ol><li><b>The problem.</b> <code>torch.onnx.export</code> can finish with no error and still give a graph with wrong numbers.</li><li><b>The check.</b> downshift exports the model in memory. It runs 8 samples through PyTorch and through ONNX Runtime. Some samples have shapes that the exporter did not see. It compares the outputs.</li><li><b>The verdict.</b> CLEAN, DEGRADED, FAILED or UNVERIFIED. The verdict selects the backend: ONNX Runtime when the graph is right, eager PyTorch when it is not.</li><li><b>An example from the data.</b> The model <code>scatter_include_self_false</code> exports with no error. The check says: exported via strict=False but numerics diverge on 6/8 samples (max abs err 1.59e+00). A hand-rolled ONNX Runtime server returns answers that are off by 1.2e+00. downshift serves torch and is off by 2.8e-08.</li><li><b>The cost.</b> The check takes time at boot (19.2 s against 11.8 s for MiniLM). Each request does more work than in a hand-rolled server. On tiny models a hand-rolled server is faster (3216 against 1428 requests/s peak on <code>clean_mlp</code>).</li></ol>
+<figure><svg viewBox="0 0 400 276" role="img" aria-label="Flow: load, export, verify, verdict, backend"><title>The downshift flow</title><desc>Four steps run in order: load, export, verify, verdict. The verdict selects the backend. CLEAN selects ONNX Runtime. DEGRADED or FAILED selects eager PyTorch. UNVERIFIED selects ONNX Runtime and labels it as not checked.</desc><rect class="box" x="8" y="14" width="84" height="40" rx="5"/><text class="lb" x="50.0" y="38.0" text-anchor="middle">1 Load</text><path class="arr" d="M92 34 L103 34"/><path class="arrh" d="M108 34 l-6 -3.5 l0 7 z"/><rect class="box" x="108" y="14" width="84" height="40" rx="5"/><text class="lb" x="150.0" y="38.0" text-anchor="middle">2 Export</text><path class="arr" d="M192 34 L203 34"/><path class="arrh" d="M208 34 l-6 -3.5 l0 7 z"/><rect class="box" x="208" y="14" width="84" height="40" rx="5"/><text class="lb" x="250.0" y="38.0" text-anchor="middle">3 Verify</text><path class="arr" d="M292 34 L303 34"/><path class="arrh" d="M308 34 l-6 -3.5 l0 7 z"/><rect class="box" x="308" y="14" width="84" height="40" rx="5"/><text class="lb" x="350.0" y="38.0" text-anchor="middle">4 Verdict</text><text class="hd" x="8" y="92">5 Backend (the verdict selects it)</text><rect class="boxs" x="8" y="104" width="322" height="38" rx="5"/><text class="hd" x="18" y="120">CLEAN</text><text class="lb" x="18" y="135">serve with: ONNX Runtime</text><path class="arr" d="M350 123 L332 123"/><path class="arrh" d="M332 123 l-6 -3.5 l0 7 z"/><rect class="boxs" x="8" y="154" width="322" height="38" rx="5"/><text class="hd" x="18" y="170">DEGRADED or FAILED</text><text class="lb" x="18" y="185">serve with: eager PyTorch</text><path class="arr" d="M350 173 L332 173"/><path class="arrh" d="M332 173 l-6 -3.5 l0 7 z"/><rect class="boxs" x="8" y="204" width="322" height="38" rx="5"/><text class="hd" x="18" y="220">UNVERIFIED</text><text class="lb" x="18" y="235">serve with: ONNX Runtime, marked as not checked</text><path class="arr" d="M350 223 L332 223"/><path class="arrh" d="M332 223 l-6 -3.5 l0 7 z"/><path class="arr" d="M350 54 L350 223"/><text class="ax" x="8" y="258">Load: read the model. Export: make an ONNX graph.</text><text class="ax" x="8" y="271">Verify: compare the graph with PyTorch on 8 samples.</text></svg><figcaption>The flow. The verdict decides the backend.</figcaption></figure>
+<div class="tiles"><div class="tile"><div class="v">1.2e+00 vs 2.8e-08</div><div class="l">Worst error on a model with a silent export fault: hand-rolled ORT vs downshift</div><div class="s">correctness page</div></div><div class="tile"><div class="v">486 vs 141</div><div class="l">MiniLM, one sentence, 8 clients, requests/s: downshift vs hand-rolled torch server</div><div class="s">torch vs ORT page</div></div><div class="tile"><div class="v">1428 vs 3216</div><div class="l">clean_mlp peak requests/s: downshift vs hand-rolled async torch</div><div class="s">throughput page: downshift is slower here</div></div><div class="tile"><div class="v">8 of 8</div><div class="l">real models with verdict CLEAN (worst error 6.0e-05)</div><div class="s">compatibility page</div></div></div>
+<h2 id="pages">Pages</h2>
+<div class="cards"><a class="pg" href="throughput.html"><b>Throughput and latency</b><span>Requests per second and latency against hand-rolled servers, 0.5.1 and 1.0.0rc1.</span></a><a class="pg" href="time-breakdown.html"><b>Time of one request</b><span>Parse, wait, inference, encode and HTTP time, by stage.</span></a><a class="pg" href="torch-vs-ort.html"><b>ONNX Runtime against PyTorch</b><span>The gain from the ONNX backend, in-process and over HTTP.</span></a><a class="pg" href="wire-formats.html"><b>Batches and wire formats</b><span>JSON against safetensors at batch 8 and 32.</span></a><a class="pg" href="result-cache.html"><b>The result cache</b><span>A repeated request against a new request.</span></a><a class="pg" href="correctness.html"><b>Correctness under load</b><span>Every response against eager PyTorch.</span></a><a class="pg" href="compatibility.html"><b>What the gate catches</b><span>14 hazard fixtures and 8 real models.</span></a><a class="pg" href="boot-time.html"><b>Boot time</b><span>What the check costs before the first request.</span></a><a class="pg" href="scaling.html"><b>More worker processes</b><span>The <code>--workers</code> sweep (0.5.0 data).</span></a><a class="pg" href="releases.html"><b>Release to release</b><span>0.4.0 to 0.5.0 and 0.5.1 to 1.0.0rc1.</span></a><a class="pg" href="SUMMARY.html"><b>One-page summary</b><span>A page to print or to screenshot.</span></a></div>
+<h2 id="howto">How to read these pages</h2>
+<ul><li>Every number comes from a file in <code>bench/</code>. Each page lists its sources at the end.</li><li>Each page has the same parts: the question, the method, the results, what the data shows, and what it does not show.</li><li>Charts have text labels. A table with the same numbers follows each chart.</li><li>Read the limits. All load results are from one machine, in one run, with no repeats.</li></ul>
+<h2 id="unmeasured">What is not measured</h2>
+<ul><li>GPU. The machine is CPU only (<code>bench/REPORT_v0.4.0.md</code> states this).</li><li>Linux or macOS. The machine is Windows.</li><li>TorchServe, BentoML, Triton, TEI and Infinity. No run includes them (<code>bench/REPORT_v0.4.0.md</code>, section Not measured).</li><li>The <code>--workers</code> sweep and Prompt Guard for 1.0.0rc1. Both ran in earlier runs only.</li><li>Run-to-run spread. No file holds repeats.</li><li>Text generation. downshift does not do it.</li></ul>
+<h2 id="sources">Sources</h2><ul><li><a href="../results/v1.0.0/results.json"><code>bench/results/v1.0.0/results.json</code></a></li><li><a href="../results/v1.0.0/REPORT.md"><code>bench/results/v1.0.0/REPORT.md</code></a></li><li><a href="../README.md"><code>bench/README.md</code></a></li></ul>
+<footer>
+<p>Made by <code>bench/showcase/build_showcase.py</code> from files in <code>bench/</code>. The script changes no source file.
+Project: <a href="https://github.com/uNRealCoder/downshift-server">https://github.com/uNRealCoder/downshift-server</a>.</p>
+</footer>
+</main>
+</body>
+</html>

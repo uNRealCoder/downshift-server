@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Batches and wire formats | downshift benchmarks</title>
+<style>
+:root{--bg:#f7f6f2;--card:#ffffff;--text:#1d1d1b;--muted:#55554f;--line:#d6d4ca;--soft:#efede6;--accent:#1f5fa8;--ok:#1d6b3f;--warn:#8a5a00;--bad:#a12626;--s1:#1f5fa8;--s2:#b5500f;--s3:#1f7a46;--s4:#7a4fa0;--s5:#5f5f58;--s6:#8a6a00}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#14161a;--card:#1c1f24;--text:#e9e8e3;--muted:#a9a9a1;--line:#383c43;--soft:#242830;--accent:#7db3f0;--ok:#6fcf9a;--warn:#e0b45a;--bad:#f08a8a;--s1:#7db3f0;--s2:#f0a070;--s3:#6fcf9a;--s4:#c3a0e6;--s5:#b5b5ad;--s6:#e0c060}}
+:root[data-theme="dark"]{--bg:#14161a;--card:#1c1f24;--text:#e9e8e3;--muted:#a9a9a1;--line:#383c43;--soft:#242830;--accent:#7db3f0;--ok:#6fcf9a;--warn:#e0b45a;--bad:#f08a8a;--s1:#7db3f0;--s2:#f0a070;--s3:#6fcf9a;--s4:#c3a0e6;--s5:#b5b5ad;--s6:#e0c060}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:860px;margin:0 auto;padding:0 16px 56px}
+a{color:var(--accent)}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88em;background:var(--soft);padding:.05em .3em;border-radius:3px;overflow-wrap:anywhere}
+pre{background:var(--soft);border:1px solid var(--line);border-radius:6px;padding:10px 12px;overflow-x:auto;font-size:.85em;line-height:1.45}
+pre code{background:none;padding:0;overflow-wrap:normal}
+nav.top{border-bottom:1px solid var(--line);background:var(--card)}
+nav.top .wrap{padding-bottom:0}
+nav.top ul{list-style:none;margin:0;padding:8px 0;display:flex;flex-wrap:wrap;gap:2px 14px;font-size:.88rem}
+nav.top a{text-decoration:none}
+nav.top a[aria-current="page"]{font-weight:700;text-decoration:underline}
+header.page{padding:28px 0 8px}
+h1{font-size:1.75rem;line-height:1.2;margin:0 0 8px}
+h2{font-size:1.3rem;margin:34px 0 8px;line-height:1.25;border-top:1px solid var(--line);padding-top:18px}
+h3{font-size:1.05rem;margin:22px 0 6px}
+.lead{font-size:1.1rem;color:var(--text);margin:0 0 6px}
+.meta{color:var(--muted);font-size:.88rem}
+p,li{max-width:70ch}
+ul,ol{padding-left:1.3em}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:16px 0}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.tile .v{font-size:1.45rem;font-weight:700;line-height:1.2;overflow-wrap:anywhere}
+.tile .l{font-size:.88rem}
+.tile .s{font-size:.78rem;color:var(--muted);margin-top:4px;overflow-wrap:anywhere}
+.note{border:1px solid var(--line);border-left:4px solid var(--warn);background:var(--card);border-radius:6px;padding:8px 12px;margin:14px 0;font-size:.93rem}
+.note.info{border-left-color:var(--accent)}
+.note.bad{border-left-color:var(--bad)}
+.note b.k{display:inline-block;margin-right:.4em}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px;margin:14px 0}
+.card h3{margin-top:0}
+figure{margin:14px 0;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px}
+figure svg{display:block;width:100%;max-width:560px;height:auto;margin:0 auto}
+figcaption{font-size:.85rem;color:var(--muted);margin-top:6px}
+.tw{overflow-x:auto;margin:10px 0;border:1px solid var(--line);border-radius:6px;background:var(--card)}
+table{border-collapse:collapse;width:100%;font-size:.84rem}
+caption{caption-side:top;text-align:left;font-weight:600;padding:8px 8px 4px}
+th,td{padding:4px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:var(--soft);font-weight:600}
+td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
+tr:last-child td{border-bottom:0}
+.chip{display:inline-block;padding:0 .5em;border-radius:4px;border:1px solid currentColor;font-size:.78rem;font-weight:700;letter-spacing:.02em;white-space:nowrap}
+.chip.clean{color:var(--ok)}
+.chip.degraded{color:var(--warn)}
+.chip.failed{color:var(--bad)}
+.chip.unverified{color:var(--s4)}
+.legend{list-style:none;padding:0;margin:6px 0 0;display:flex;flex-wrap:wrap;gap:4px 14px;font-size:.8rem}
+.legend li{display:flex;align-items:center;gap:6px}
+.legend svg{width:34px;height:12px;flex:none}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin:14px 0}
+.cards a.pg{display:block;text-decoration:none;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.cards a.pg:hover,.cards a.pg:focus{border-color:var(--accent)}
+.cards a.pg b{color:var(--accent);display:block}
+.cards a.pg span{font-size:.88rem;color:var(--muted)}
+footer{margin-top:40px;padding-top:12px;border-top:1px solid var(--line);font-size:.82rem;color:var(--muted)}
+/* chart text */
+svg text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:var(--text)}
+svg .ax{font-size:10.5px;fill:var(--muted)}
+svg .lb{font-size:11px}
+svg .hd{font-size:11px;font-weight:700}
+svg .vl{font-size:10.5px;font-variant-numeric:tabular-nums}
+svg .gl{stroke:var(--line);stroke-width:1}
+svg .axl{stroke:var(--muted);stroke-width:1}
+svg .ref{stroke:var(--text);stroke-width:1;stroke-dasharray:4 3}
+svg .box{fill:var(--card);stroke:var(--text);stroke-width:1.2}
+svg .boxs{fill:var(--soft);stroke:var(--muted);stroke-width:1}
+svg .arr{stroke:var(--text);stroke-width:1.4;fill:none}
+svg .arrh{fill:var(--text)}
+svg .bn{stroke:var(--s5);stroke-width:1}
+svg .bo{fill:var(--s2)}
+svg .bw{fill:var(--s1)}
+svg .bv{fill:var(--s3)}
+svg .hollow{fill:var(--card)}
+svg .solid{fill:currentColor}
+svg .mk{stroke:currentColor;stroke-width:1.6}
+svg .ln{fill:none;stroke:currentColor;stroke-width:2}
+svg .seg{stroke:var(--card);stroke-width:1}
+.sw{display:inline-block;width:12px;height:12px;vertical-align:-1px;margin-right:6px;border:1px solid var(--text)}
+@media print{
+  nav.top{display:none}
+  body{background:#fff;color:#000;font-size:11pt}
+  .wrap{max-width:none;padding:0}
+  figure,.card,.tile,.tw{break-inside:avoid}
+}
+</style>
+</head>
+<body>
+<nav class="top" aria-label="Pages"><div class="wrap"><ul><li><a href="index.html">Overview</a></li><li><a href="throughput.html">Throughput</a></li><li><a href="time-breakdown.html">Time per request</a></li><li><a href="torch-vs-ort.html">Torch vs ORT</a></li><li><a href="wire-formats.html" aria-current="page">Wire formats</a></li><li><a href="result-cache.html">Result cache</a></li><li><a href="correctness.html">Correctness</a></li><li><a href="compatibility.html">Compatibility</a></li><li><a href="boot-time.html">Boot time</a></li><li><a href="scaling.html">Workers</a></li><li><a href="releases.html">Releases</a></li><li><a href="SUMMARY.html">One page</a></li></ul></div></nav>
+<main class="wrap">
+<header class="page"><h1>Batches and wire formats</h1><p class="lead">What happens when a request carries 8 or 32 rows, and when the body is safetensors and not JSON?</p><p class="meta">Run 2026-11-07T22:59:00. win32, 16 logical CPUs, Python 3.12.10, torch 2.14.0+cpu, onnxruntime 1.30.0. downshift 1.0.0rc1 from the checkout, 0.5.1 from PyPI. The folder is named <code>v1.0.0</code>.</p></header>
+<div class="tiles"><div class="tile"><div class="v">25221 vs 8022</div><div class="l">mlp_large, batch 32, c=8, rows/s: 0.5.1 safetensors vs JSON</div><div class="s">Clean comparison, same pass</div></div><div class="tile"><div class="v">0.19x</div><div class="l">mlp_large, batch 32: safetensors body size divided by JSON body size</div><div class="s">65608 against 338169 bytes</div></div><div class="tile"><div class="v">37558 vs 43150</div><div class="l">clean_mlp, batch 32, c=8, rows/s: safetensors vs JSON</div><div class="s">safetensors is slower here</div></div></div>
+<h2 id="question">The question</h2>
+<p>downshift runs one inference for each request. A client that has many rows can send them in one request. A client can also send binary tensors (safetensors) in place of JSON text. This page shows what each choice does to the rows per second and to the body size.</p>
+<h2 id="method">Method</h2>
+<ul><li>Same command and files as the throughput page. Batch 8 and 32 are in <code>--batch 1 8 32</code>; the batch sweep ran at concurrency 1, 8 and 32. This page uses c=8.</li><li><code>rows/s</code> is requests/s times the batch size.</li><li><code>downshift_safetensors</code> sends the request as safetensors and asks for a safetensors response. Version 0.5.0 added it. The base64 variant of earlier runs is not in this run.</li><li>The hand-rolled async server did not run for batches.</li></ul>
+<h2 id="results">Results</h2>
+<figure><svg viewBox="0 0 400 452" role="img" aria-label="Rows per second at batch 32 and concurrency 8"><title>Rows per second at batch 32 and concurrency 8</title><desc>Four bars for each model. Values are in the table below.</desc><defs><pattern id="hat14" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" style="fill:var(--card)"/><line x1="0" y1="0" x2="0" y2="6" style="stroke:var(--s5);stroke-width:3"/></pattern></defs><text class="hd" x="4" y="21">clean_mlp, batch 32, c=8, rows/s</text><text class="lb" x="122" y="39" text-anchor="end">0.5.1 JSON</text><rect class="bo" x="128" y="28" width="210.0" height="14"><title>0.5.1 JSON: 48023</title></rect><text class="vl" x="342.0" y="39">48023</text><text class="lb" x="122" y="61" text-anchor="end">0.5.1 safetensors</text><rect class="bo" x="128" y="50" width="175.3" height="14"><title>0.5.1 safetensors: 40092</title></rect><text class="vl" x="307.3" y="61">40092</text><text class="lb" x="122" y="83" text-anchor="end">1.0.0rc1 JSON</text><rect class="bw" x="128" y="72" width="188.7" height="14"><title>1.0.0rc1 JSON: 43150</title></rect><text class="vl" x="320.7" y="83">43150</text><text class="lb" x="122" y="105" text-anchor="end">1.0.0rc1 safetensors</text><rect class="bw" x="128" y="94" width="164.2" height="14"><title>1.0.0rc1 safetensors: 37558</title></rect><text class="vl" x="296.2" y="105">37558</text><text class="hd" x="4" y="131">tiny_bert, batch 32, c=8, rows/s</text><text class="lb" x="122" y="149" text-anchor="end">0.5.1 JSON</text><rect class="bo" x="128" y="138" width="107.6" height="14"><title>0.5.1 JSON: 24605</title></rect><text class="vl" x="239.6" y="149">24605</text><text class="lb" x="122" y="171" text-anchor="end">0.5.1 safetensors</text><rect class="bo" x="128" y="160" width="134.8" height="14"><title>0.5.1 safetensors: 30833</title></rect><text class="vl" x="266.8" y="171">30833</text><text class="lb" x="122" y="193" text-anchor="end">1.0.0rc1 JSON</text><rect class="bw" x="128" y="182" width="108.1" height="14"><title>1.0.0rc1 JSON: 24724</title></rect><text class="vl" x="240.1" y="193">24724</text><text class="lb" x="122" y="215" text-anchor="end">1.0.0rc1 safetensors</text><rect class="bw" x="128" y="204" width="139.1" height="14"><title>1.0.0rc1 safetensors: 31813</title></rect><text class="vl" x="271.1" y="215">31813</text><text class="hd" x="4" y="241">mlp_large, batch 32, c=8, rows/s</text><text class="lb" x="122" y="259" text-anchor="end">0.5.1 JSON</text><rect class="bo" x="128" y="248" width="35.1" height="14"><title>0.5.1 JSON: 8022</title></rect><text class="vl" x="167.1" y="259">8022</text><text class="lb" x="122" y="281" text-anchor="end">0.5.1 safetensors</text><rect class="bo" x="128" y="270" width="110.3" height="14"><title>0.5.1 safetensors: 25221</title></rect><text class="vl" x="242.3" y="281">25221</text><text class="lb" x="122" y="303" text-anchor="end">1.0.0rc1 JSON</text><rect class="bw" x="128" y="292" width="28.7" height="14"><title>1.0.0rc1 JSON: 6561</title></rect><text class="vl" x="160.7" y="303">6561</text><text class="lb" x="122" y="325" text-anchor="end">1.0.0rc1 safetensors</text><rect class="bw" x="128" y="314" width="111.0" height="14"><title>1.0.0rc1 safetensors: 25378</title></rect><text class="vl" x="243.0" y="325">25378</text><text class="hd" x="4" y="351">scatter_include_self_false, batch 32, c=8, rows/s</text><text class="lb" x="122" y="369" text-anchor="end">0.5.1 JSON</text><rect class="bo" x="128" y="358" width="141.8" height="14"><title>0.5.1 JSON: 32435</title></rect><text class="vl" x="273.8" y="369">32435</text><text class="lb" x="122" y="391" text-anchor="end">0.5.1 safetensors</text><rect class="bo" x="128" y="380" width="185.1" height="14"><title>0.5.1 safetensors: 42325</title></rect><text class="vl" x="317.1" y="391">42325</text><text class="lb" x="122" y="413" text-anchor="end">1.0.0rc1 JSON</text><rect class="bw" x="128" y="402" width="127.6" height="14"><title>1.0.0rc1 JSON: 29181</title></rect><text class="vl" x="259.6" y="413">29181</text><text class="lb" x="122" y="435" text-anchor="end">1.0.0rc1 safetensors</text><rect class="bw" x="128" y="424" width="177.4" height="14"><title>1.0.0rc1 safetensors: 40579</title></rect><text class="vl" x="309.4" y="435">40579</text></svg><ul class="legend"><li><svg viewBox="0 0 34 12" aria-hidden="true"><rect class="bo" x="1" y="1" width="30" height="10"/></svg>downshift 0.5.1</li><li><svg viewBox="0 0 34 12" aria-hidden="true"><rect class="bw" x="1" y="1" width="30" height="10"/></svg>downshift 1.0.0rc1</li></ul><figcaption>Rows per second, batch 32, c=8. Longer is better.</figcaption></figure>
+<figure><svg viewBox="0 0 400 108" role="img" aria-label="Safetensors body size divided by JSON body size, batch 32"><title>Safetensors body size divided by JSON body size, batch 32</title><desc>A value below 1 means the safetensors body is smaller.</desc><defs><pattern id="hat17" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" style="fill:var(--card)"/><line x1="0" y1="0" x2="0" y2="6" style="stroke:var(--s5);stroke-width:3"/></pattern></defs><text class="lb" x="122" y="17" text-anchor="end">clean_mlp</text><rect class="bw" x="128" y="6" width="19.1" height="14"><title>clean_mlp: 0.20x</title></rect><text class="vl" x="151.1" y="17">0.20x</text><text class="lb" x="122" y="39" text-anchor="end">tiny_bert</text><rect class="bw" x="128" y="28" width="210.0" height="14"><title>tiny_bert: 2.19x</title></rect><text class="vl" x="342.0" y="39">2.19x</text><text class="lb" x="122" y="61" text-anchor="end">mlp_large</text><rect class="bw" x="128" y="50" width="18.6" height="14"><title>mlp_large: 0.19x</title></rect><text class="vl" x="150.6" y="61">0.19x</text><text class="lb" x="122" y="83" text-anchor="end">scatter_include_..</text><rect class="bw" x="128" y="72" width="23.0" height="14"><title>scatter_include_..: 0.24x</title></rect><text class="vl" x="155.0" y="83">0.24x</text><line class="ref" x1="224.0" x2="224.0" y1="2" y2="94"/><text class="ax" x="227.0" y="104">1x: equal</text></svg><figcaption>Size of the safetensors request body divided by the JSON body, batch 32. Below 1: smaller.</figcaption></figure>
+<div class="tw" tabindex="0" role="region" aria-label="Wire encodings, batch 32, concurrency 8"><table><caption>Wire encodings, batch 32, concurrency 8</caption><thead><tr><th scope="col">model</th><th scope="col">server</th><th scope="col" class="r">request bytes</th><th scope="col" class="r">requests/s</th><th scope="col" class="r">p50 ms</th><th scope="col" class="r">rows/s</th></tr></thead><tbody><tr><td>clean_mlp</td><td>downshift 0.5.1</td><td class="r">10659</td><td class="r">1501</td><td class="r">5.75</td><td class="r">48023</td></tr><tr><td>clean_mlp</td><td>downshift 0.5.1 safetensors</td><td class="r">2120</td><td class="r">1253</td><td class="r">6.02</td><td class="r">40092</td></tr><tr><td>clean_mlp</td><td>downshift 1.0.0rc1</td><td class="r">10659</td><td class="r">1348</td><td class="r">5.78</td><td class="r">43150</td></tr><tr><td>clean_mlp</td><td>downshift 1.0.0rc1 safetensors</td><td class="r">2120</td><td class="r">1174</td><td class="r">6.34</td><td class="r">37558</td></tr><tr><td>tiny_bert</td><td>downshift 0.5.1</td><td class="r">1941</td><td class="r">769</td><td class="r">10.39</td><td class="r">24605</td></tr><tr><td>tiny_bert</td><td>downshift 0.5.1 safetensors</td><td class="r">4248</td><td class="r">964</td><td class="r">7.59</td><td class="r">30833</td></tr><tr><td>tiny_bert</td><td>downshift 1.0.0rc1</td><td class="r">1941</td><td class="r">773</td><td class="r">10.09</td><td class="r">24724</td></tr><tr><td>tiny_bert</td><td>downshift 1.0.0rc1 safetensors</td><td class="r">4248</td><td class="r">994</td><td class="r">7.16</td><td class="r">31813</td></tr><tr><td>mlp_large</td><td>downshift 0.5.1</td><td class="r">338169</td><td class="r">251</td><td class="r">32.70</td><td class="r">8022</td></tr><tr><td>mlp_large</td><td>downshift 0.5.1 safetensors</td><td class="r">65608</td><td class="r">788</td><td class="r">10.04</td><td class="r">25221</td></tr><tr><td>mlp_large</td><td>downshift 1.0.0rc1</td><td class="r">338169</td><td class="r">205</td><td class="r">39.93</td><td class="r">6561</td></tr><tr><td>mlp_large</td><td>downshift 1.0.0rc1 safetensors</td><td class="r">65608</td><td class="r">793</td><td class="r">10.15</td><td class="r">25378</td></tr><tr><td>scatter_include_self_false</td><td>downshift 0.5.1</td><td class="r">32706</td><td class="r">1014</td><td class="r">8.29</td><td class="r">32435</td></tr><tr><td>scatter_include_self_false</td><td>downshift 0.5.1 safetensors</td><td class="r">7824</td><td class="r">1323</td><td class="r">6.37</td><td class="r">42325</td></tr><tr><td>scatter_include_self_false</td><td>downshift 1.0.0rc1</td><td class="r">32706</td><td class="r">912</td><td class="r">9.08</td><td class="r">29181</td></tr><tr><td>scatter_include_self_false</td><td>downshift 1.0.0rc1 safetensors</td><td class="r">7824</td><td class="r">1268</td><td class="r">6.64</td><td class="r">40579</td></tr></tbody></table></div>
+<div class="tw" tabindex="0" role="region" aria-label="Rows per second at concurrency 8 (requests/s times batch)"><table><caption>Rows per second at concurrency 8 (requests/s times batch)</caption><thead><tr><th scope="col">server</th><th scope="col" class="r">clean_mlp b8</th><th scope="col" class="r">clean_mlp b32</th><th scope="col" class="r">tiny_bert b8</th><th scope="col" class="r">tiny_bert b32</th><th scope="col" class="r">mlp_large b8</th><th scope="col" class="r">mlp_large b32</th><th scope="col" class="r">scatter b8</th><th scope="col" class="r">scatter b32</th></tr></thead><tbody><tr><td>naive FastAPI + torch</td><td class="r">7972</td><td class="r">30507</td><td class="r">2384</td><td class="r">7314</td><td class="r">1673</td><td class="r">2386</td><td class="r">8970</td><td class="r">17310</td></tr><tr><td>naive FastAPI + ONNX Runtime</td><td class="r">14257</td><td class="r">46352</td><td class="r">7986</td><td class="r">16548</td><td class="r">2076</td><td class="r">2916</td><td class="r">14572</td><td class="r">29924</td></tr><tr><td>downshift 0.5.1</td><td class="r">10559</td><td class="r">48023</td><td class="r">7721</td><td class="r">24605</td><td class="r">4724</td><td class="r">8022</td><td class="r">10158</td><td class="r">32435</td></tr><tr><td>downshift 0.5.1 safetensors</td><td class="r">10291</td><td class="r">40092</td><td class="r">7501</td><td class="r">30833</td><td class="r">7339</td><td class="r">25221</td><td class="r">7856</td><td class="r">42325</td></tr><tr><td>downshift 1.0.0rc1</td><td class="r">9788</td><td class="r">43150</td><td class="r">7783</td><td class="r">24724</td><td class="r">3714</td><td class="r">6561</td><td class="r">9700</td><td class="r">29181</td></tr><tr><td>downshift 1.0.0rc1 safetensors</td><td class="r">10076</td><td class="r">37558</td><td class="r">7127</td><td class="r">31813</td><td class="r">7277</td><td class="r">25378</td><td class="r">7597</td><td class="r">40579</td></tr><tr><td>downshift 1.0.0rc1 result cache on</td><td class="r">11922</td><td class="r">43426</td><td class="r">6645</td><td class="r">21697</td><td class="r">6717</td><td class="r">9239</td><td class="r">9199</td><td class="r">29699</td></tr><tr><td>downshift 1.0.0rc1 --metrics</td><td class="r">10093</td><td class="r">46029</td><td class="r">7639</td><td class="r">23325</td><td class="r">4296</td><td class="r">7873</td><td class="r">9221</td><td class="r">27496</td></tr></tbody></table></div>
+<div class="note"><b class="k">Limit.</b>In the 1.0.0rc1 JSON row for <code>mlp_large</code>, the main pass was slow (see the throughput page). The re-run covered batch 1 only. The 1.0.0rc1 batch rows for <code>mlp_large</code> are not re-measured. Use the 0.5.1 rows for the clean JSON against safetensors comparison.</div>
+<h2 id="limits">What this shows and does not show</h2>
+<h3>Shows</h3>
+<ul><li>For a wide input (<code>mlp_large</code>, 512 floats a row), safetensors gives more than 3 times the rows per second of JSON at batch 32 (25221 against 8022 for 0.5.1), and the body is 5.2 times smaller.</li><li>For a tiny input (<code>clean_mlp</code>, 16 floats a row) safetensors is slower than JSON in both versions at batch 32.</li><li>For <code>tiny_bert</code> the safetensors body is larger than the JSON body, because the inputs are short integer lists. The rows per second are still higher with safetensors.</li></ul>
+<h3>Does not show</h3>
+<ul><li>A real client. The harness encodes the body once and sends the same bytes every time.</li><li>Batch sizes above 32, or batches of different row counts.</li><li>Dynamic request batching. downshift has none; one request makes one inference.</li><li>One machine. One run. One 3 s window for each point (5 s for MiniLM). The file holds no repeats, so the size of run-to-run noise is not measured.</li></ul>
+<h2 id="sources">Sources</h2><ul><li><a href="../results/v1.0.0/chart_runs.csv"><code>bench/results/v1.0.0/chart_runs.csv</code></a></li><li><a href="../results/v1.0.0/REPORT.md"><code>bench/results/v1.0.0/REPORT.md</code></a></li><li><a href="../cases.py"><code>bench/cases.py</code></a></li><li><a href="../run.py"><code>bench/run.py</code></a></li></ul>
+<footer>
+<p>Made by <code>bench/showcase/build_showcase.py</code> from files in <code>bench/</code>. The script changes no source file.
+Project: <a href="https://github.com/uNRealCoder/downshift-server">https://github.com/uNRealCoder/downshift-server</a>.</p>
+</footer>
+</main>
+</body>
+</html>

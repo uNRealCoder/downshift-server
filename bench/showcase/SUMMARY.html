@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>One-page summary | downshift benchmarks</title>
+<style>
+:root{--bg:#f7f6f2;--card:#ffffff;--text:#1d1d1b;--muted:#55554f;--line:#d6d4ca;--soft:#efede6;--accent:#1f5fa8;--ok:#1d6b3f;--warn:#8a5a00;--bad:#a12626;--s1:#1f5fa8;--s2:#b5500f;--s3:#1f7a46;--s4:#7a4fa0;--s5:#5f5f58;--s6:#8a6a00}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#14161a;--card:#1c1f24;--text:#e9e8e3;--muted:#a9a9a1;--line:#383c43;--soft:#242830;--accent:#7db3f0;--ok:#6fcf9a;--warn:#e0b45a;--bad:#f08a8a;--s1:#7db3f0;--s2:#f0a070;--s3:#6fcf9a;--s4:#c3a0e6;--s5:#b5b5ad;--s6:#e0c060}}
+:root[data-theme="dark"]{--bg:#14161a;--card:#1c1f24;--text:#e9e8e3;--muted:#a9a9a1;--line:#383c43;--soft:#242830;--accent:#7db3f0;--ok:#6fcf9a;--warn:#e0b45a;--bad:#f08a8a;--s1:#7db3f0;--s2:#f0a070;--s3:#6fcf9a;--s4:#c3a0e6;--s5:#b5b5ad;--s6:#e0c060}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:860px;margin:0 auto;padding:0 16px 56px}
+a{color:var(--accent)}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88em;background:var(--soft);padding:.05em .3em;border-radius:3px;overflow-wrap:anywhere}
+pre{background:var(--soft);border:1px solid var(--line);border-radius:6px;padding:10px 12px;overflow-x:auto;font-size:.85em;line-height:1.45}
+pre code{background:none;padding:0;overflow-wrap:normal}
+nav.top{border-bottom:1px solid var(--line);background:var(--card)}
+nav.top .wrap{padding-bottom:0}
+nav.top ul{list-style:none;margin:0;padding:8px 0;display:flex;flex-wrap:wrap;gap:2px 14px;font-size:.88rem}
+nav.top a{text-decoration:none}
+nav.top a[aria-current="page"]{font-weight:700;text-decoration:underline}
+header.page{padding:28px 0 8px}
+h1{font-size:1.75rem;line-height:1.2;margin:0 0 8px}
+h2{font-size:1.3rem;margin:34px 0 8px;line-height:1.25;border-top:1px solid var(--line);padding-top:18px}
+h3{font-size:1.05rem;margin:22px 0 6px}
+.lead{font-size:1.1rem;color:var(--text);margin:0 0 6px}
+.meta{color:var(--muted);font-size:.88rem}
+p,li{max-width:70ch}
+ul,ol{padding-left:1.3em}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:16px 0}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.tile .v{font-size:1.45rem;font-weight:700;line-height:1.2;overflow-wrap:anywhere}
+.tile .l{font-size:.88rem}
+.tile .s{font-size:.78rem;color:var(--muted);margin-top:4px;overflow-wrap:anywhere}
+.note{border:1px solid var(--line);border-left:4px solid var(--warn);background:var(--card);border-radius:6px;padding:8px 12px;margin:14px 0;font-size:.93rem}
+.note.info{border-left-color:var(--accent)}
+.note.bad{border-left-color:var(--bad)}
+.note b.k{display:inline-block;margin-right:.4em}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px;margin:14px 0}
+.card h3{margin-top:0}
+figure{margin:14px 0;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px}
+figure svg{display:block;width:100%;max-width:560px;height:auto;margin:0 auto}
+figcaption{font-size:.85rem;color:var(--muted);margin-top:6px}
+.tw{overflow-x:auto;margin:10px 0;border:1px solid var(--line);border-radius:6px;background:var(--card)}
+table{border-collapse:collapse;width:100%;font-size:.84rem}
+caption{caption-side:top;text-align:left;font-weight:600;padding:8px 8px 4px}
+th,td{padding:4px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:var(--soft);font-weight:600}
+td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
+tr:last-child td{border-bottom:0}
+.chip{display:inline-block;padding:0 .5em;border-radius:4px;border:1px solid currentColor;font-size:.78rem;font-weight:700;letter-spacing:.02em;white-space:nowrap}
+.chip.clean{color:var(--ok)}
+.chip.degraded{color:var(--warn)}
+.chip.failed{color:var(--bad)}
+.chip.unverified{color:var(--s4)}
+.legend{list-style:none;padding:0;margin:6px 0 0;display:flex;flex-wrap:wrap;gap:4px 14px;font-size:.8rem}
+.legend li{display:flex;align-items:center;gap:6px}
+.legend svg{width:34px;height:12px;flex:none}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin:14px 0}
+.cards a.pg{display:block;text-decoration:none;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.cards a.pg:hover,.cards a.pg:focus{border-color:var(--accent)}
+.cards a.pg b{color:var(--accent);display:block}
+.cards a.pg span{font-size:.88rem;color:var(--muted)}
+footer{margin-top:40px;padding-top:12px;border-top:1px solid var(--line);font-size:.82rem;color:var(--muted)}
+/* chart text */
+svg text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:var(--text)}
+svg .ax{font-size:10.5px;fill:var(--muted)}
+svg .lb{font-size:11px}
+svg .hd{font-size:11px;font-weight:700}
+svg .vl{font-size:10.5px;font-variant-numeric:tabular-nums}
+svg .gl{stroke:var(--line);stroke-width:1}
+svg .axl{stroke:var(--muted);stroke-width:1}
+svg .ref{stroke:var(--text);stroke-width:1;stroke-dasharray:4 3}
+svg .box{fill:var(--card);stroke:var(--text);stroke-width:1.2}
+svg .boxs{fill:var(--soft);stroke:var(--muted);stroke-width:1}
+svg .arr{stroke:var(--text);stroke-width:1.4;fill:none}
+svg .arrh{fill:var(--text)}
+svg .bn{stroke:var(--s5);stroke-width:1}
+svg .bo{fill:var(--s2)}
+svg .bw{fill:var(--s1)}
+svg .bv{fill:var(--s3)}
+svg .hollow{fill:var(--card)}
+svg .solid{fill:currentColor}
+svg .mk{stroke:currentColor;stroke-width:1.6}
+svg .ln{fill:none;stroke:currentColor;stroke-width:2}
+svg .seg{stroke:var(--card);stroke-width:1}
+.sw{display:inline-block;width:12px;height:12px;vertical-align:-1px;margin-right:6px;border:1px solid var(--text)}
+@media print{
+  nav.top{display:none}
+  body{background:#fff;color:#000;font-size:11pt}
+  .wrap{max-width:none;padding:0}
+  figure,.card,.tile,.tw{break-inside:avoid}
+}
+</style>
+</head>
+<body>
+<nav class="top" aria-label="Pages"><div class="wrap"><ul><li><a href="index.html">Overview</a></li><li><a href="throughput.html">Throughput</a></li><li><a href="time-breakdown.html">Time per request</a></li><li><a href="torch-vs-ort.html">Torch vs ORT</a></li><li><a href="wire-formats.html">Wire formats</a></li><li><a href="result-cache.html">Result cache</a></li><li><a href="correctness.html">Correctness</a></li><li><a href="compatibility.html">Compatibility</a></li><li><a href="boot-time.html">Boot time</a></li><li><a href="scaling.html">Workers</a></li><li><a href="releases.html">Releases</a></li><li><a href="SUMMARY.html" aria-current="page">One page</a></li></ul></div></nav>
+<main class="wrap">
+<header class="page"><h1>downshift benchmarks: one page</h1><p class="lead">Verified export for a model you already have. What the checks found, and what they cost.</p><p class="meta">Run 2026-11-07T22:59:00. win32, 16 logical CPUs, Python 3.12.10, torch 2.14.0+cpu, onnxruntime 1.30.0. downshift 1.0.0rc1 from the checkout, 0.5.1 from PyPI. The folder is named <code>v1.0.0</code>.</p></header>
+<div class="tiles"><div class="tile"><div class="v">1.2e+00 vs 2.8e-08</div><div class="l">worst error on a model with a silent export fault: hand-rolled ORT vs downshift</div><div class="s">results.json, chart_runs.csv</div></div><div class="tile"><div class="v">8 of 8</div><div class="l">real models CLEAN; worst error 6.0e-05</div><div class="s">real_models.json</div></div><div class="tile"><div class="v">486 vs 141</div><div class="l">MiniLM requests/s at 8 clients: downshift vs hand-rolled</div><div class="s">chart_runs.csv</div></div><div class="tile"><div class="v">1428 vs 3216</div><div class="l">clean_mlp peak requests/s: downshift vs hand-rolled async torch</div><div class="s">chart_runs.csv</div></div></div>
+<figure><svg viewBox="0 0 400 144" role="img" aria-label="MiniLM requests per second at c=8"><title>MiniLM requests per second at c=8</title><desc>Five servers</desc><defs><pattern id="hat39" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" style="fill:var(--card)"/><line x1="0" y1="0" x2="0" y2="6" style="stroke:var(--s5);stroke-width:3"/></pattern></defs><text class="hd" x="4" y="21">MiniLM, one sentence, requests/s at c=8</text><text class="lb" x="134" y="39" text-anchor="end">FastAPI + transformers</text><rect class="bn" x="140" y="28" width="53.4" height="14" style="fill:url(#hat39)"><title>FastAPI + transformers: 141</title></rect><text class="vl" x="197.4" y="39">141</text><text class="lb" x="134" y="61" text-anchor="end">transformers, async</text><rect class="bn" x="140" y="50" width="39.7" height="14" style="fill:url(#hat39)"><title>transformers, async: 105</title></rect><text class="vl" x="183.7" y="61">105</text><text class="lb" x="134" y="83" text-anchor="end">downshift 0.5.1</text><rect class="bo" x="140" y="72" width="198.0" height="14"><title>downshift 0.5.1: 524</title></rect><text class="vl" x="342.0" y="83">524</text><text class="lb" x="134" y="105" text-anchor="end">downshift 1.0.0rc1</text><rect class="bw" x="140" y="94" width="183.6" height="14"><title>downshift 1.0.0rc1: 486</title></rect><text class="vl" x="327.6" y="105">486</text><text class="lb" x="134" y="127" text-anchor="end">1.0.0rc1 --backend torch</text><rect class="bv" x="140" y="116" width="55.0" height="14"><title>1.0.0rc1 --backend torch: 146</title></rect><text class="vl" x="199.0" y="127">146</text></svg><ul class="legend"><li><svg viewBox="0 0 34 12" aria-hidden="true"><defs><pattern id="lg35" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" style="fill:var(--card)"/><line x1="0" y1="0" x2="0" y2="6" style="stroke:var(--s5);stroke-width:3"/></pattern></defs><rect class="bn" x="1" y="1" width="30" height="10" style="fill:url(#lg35)"/></svg>hand-rolled</li><li><svg viewBox="0 0 34 12" aria-hidden="true"><rect class="bo" x="1" y="1" width="30" height="10"/></svg>downshift 0.5.1</li><li><svg viewBox="0 0 34 12" aria-hidden="true"><rect class="bw" x="1" y="1" width="30" height="10"/></svg>downshift 1.0.0rc1</li><li><svg viewBox="0 0 34 12" aria-hidden="true"><rect class="bv" x="1" y="1" width="30" height="10"/></svg>downshift, torch backend</li></ul><figcaption>all-MiniLM-L6-v2 on CPU. 5 s windows. Cache off.</figcaption></figure>
+<figure><svg viewBox="0 0 400 276" role="img" aria-label="Peak requests per second"><title>Peak requests per second</title><desc>Two models, five servers</desc><defs><pattern id="hat40" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" style="fill:var(--card)"/><line x1="0" y1="0" x2="0" y2="6" style="stroke:var(--s5);stroke-width:3"/></pattern></defs><text class="hd" x="4" y="21">clean_mlp</text><text class="lb" x="134" y="39" text-anchor="end">FastAPI + torch</text><rect class="bn" x="140" y="28" width="104.6" height="14" style="fill:url(#hat40)"><title>FastAPI + torch: 1698</title></rect><text class="vl" x="248.6" y="39">1698</text><text class="lb" x="134" y="61" text-anchor="end">FastAPI + ORT</text><rect class="bn" x="140" y="50" width="127.4" height="14" style="fill:url(#hat40)"><title>FastAPI + ORT: 2069</title></rect><text class="vl" x="271.4" y="61">2069</text><text class="lb" x="134" y="83" text-anchor="end">torch, async def</text><rect class="bn" x="140" y="72" width="198.0" height="14" style="fill:url(#hat40)"><title>torch, async def: 3216</title></rect><text class="vl" x="342.0" y="83">3216</text><text class="lb" x="134" y="105" text-anchor="end">downshift 0.5.1</text><rect class="bo" x="140" y="94" width="87.5" height="14"><title>downshift 0.5.1: 1421</title></rect><text class="vl" x="231.5" y="105">1421</text><text class="lb" x="134" y="127" text-anchor="end">downshift 1.0.0rc1</text><rect class="bw" x="140" y="116" width="87.9" height="14"><title>downshift 1.0.0rc1: 1428</title></rect><text class="vl" x="231.9" y="127">1428</text><text class="hd" x="4" y="153">tiny_bert</text><text class="lb" x="134" y="171" text-anchor="end">FastAPI + torch</text><rect class="bn" x="140" y="160" width="21.6" height="14" style="fill:url(#hat40)"><title>FastAPI + torch: 350</title></rect><text class="vl" x="165.6" y="171">350</text><text class="lb" x="134" y="193" text-anchor="end">FastAPI + ORT</text><rect class="bn" x="140" y="182" width="81.8" height="14" style="fill:url(#hat40)"><title>FastAPI + ORT: 1329</title></rect><text class="vl" x="225.8" y="193">1329</text><text class="lb" x="134" y="215" text-anchor="end">torch, async def</text><rect class="bn" x="140" y="204" width="33.4" height="14" style="fill:url(#hat40)"><title>torch, async def: 543</title></rect><text class="vl" x="177.4" y="215">543</text><text class="lb" x="134" y="237" text-anchor="end">downshift 0.5.1</text><rect class="bo" x="140" y="226" width="72.8" height="14"><title>downshift 0.5.1: 1183</title></rect><text class="vl" x="216.8" y="237">1183</text><text class="lb" x="134" y="259" text-anchor="end">downshift 1.0.0rc1</text><rect class="bw" x="140" y="248" width="65.7" height="14"><title>downshift 1.0.0rc1: 1067</title></rect><text class="vl" x="209.7" y="259">1067</text></svg><ul class="legend"><li><svg viewBox="0 0 34 12" aria-hidden="true"><defs><pattern id="lg41" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" style="fill:var(--card)"/><line x1="0" y1="0" x2="0" y2="6" style="stroke:var(--s5);stroke-width:3"/></pattern></defs><rect class="bn" x="1" y="1" width="30" height="10" style="fill:url(#lg41)"/></svg>hand-rolled</li><li><svg viewBox="0 0 34 12" aria-hidden="true"><rect class="bo" x="1" y="1" width="30" height="10"/></svg>downshift 0.5.1</li><li><svg viewBox="0 0 34 12" aria-hidden="true"><rect class="bw" x="1" y="1" width="30" height="10"/></svg>downshift 1.0.0rc1</li></ul><figcaption>Fixtures on CPU. 3 s windows.</figcaption></figure>
+<h2 id="limits">Read this first</h2>
+<ul><li>One Windows machine, 16 logical CPUs, CPU only. One run. No repeats.</li><li>downshift 1.0.0rc1 and 0.5.1 are close in speed. The data shows no gain.</li><li>On tiny models, hand-rolled servers handle more requests per second. On MiniLM, downshift handles more.</li><li>The check costs boot time: 19.2 s against 11.8 s on MiniLM.</li><li>The result cache numbers are a best case: one body, repeated.</li><li>Not measured: GPU, Linux, other servers (TorchServe, Triton, TEI), 1.0.0 final.</li></ul>
+<p>Full method, tables and limits: <a href="index.html">index.html</a>, <a href="RESULTS.md">RESULTS.md</a>, <a href="METHODOLOGY.md">METHODOLOGY.md</a>.</p>
+<footer>
+<p>Made by <code>bench/showcase/build_showcase.py</code> from files in <code>bench/</code>. The script changes no source file.
+Project: <a href="https://github.com/uNRealCoder/downshift-server">https://github.com/uNRealCoder/downshift-server</a>.</p>
+</footer>
+</main>
+</body>
+</html>

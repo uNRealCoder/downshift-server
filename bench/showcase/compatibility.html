@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Compatibility | downshift benchmarks</title>
+<style>
+:root{--bg:#f7f6f2;--card:#ffffff;--text:#1d1d1b;--muted:#55554f;--line:#d6d4ca;--soft:#efede6;--accent:#1f5fa8;--ok:#1d6b3f;--warn:#8a5a00;--bad:#a12626;--s1:#1f5fa8;--s2:#b5500f;--s3:#1f7a46;--s4:#7a4fa0;--s5:#5f5f58;--s6:#8a6a00}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#14161a;--card:#1c1f24;--text:#e9e8e3;--muted:#a9a9a1;--line:#383c43;--soft:#242830;--accent:#7db3f0;--ok:#6fcf9a;--warn:#e0b45a;--bad:#f08a8a;--s1:#7db3f0;--s2:#f0a070;--s3:#6fcf9a;--s4:#c3a0e6;--s5:#b5b5ad;--s6:#e0c060}}
+:root[data-theme="dark"]{--bg:#14161a;--card:#1c1f24;--text:#e9e8e3;--muted:#a9a9a1;--line:#383c43;--soft:#242830;--accent:#7db3f0;--ok:#6fcf9a;--warn:#e0b45a;--bad:#f08a8a;--s1:#7db3f0;--s2:#f0a070;--s3:#6fcf9a;--s4:#c3a0e6;--s5:#b5b5ad;--s6:#e0c060}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:860px;margin:0 auto;padding:0 16px 56px}
+a{color:var(--accent)}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88em;background:var(--soft);padding:.05em .3em;border-radius:3px;overflow-wrap:anywhere}
+pre{background:var(--soft);border:1px solid var(--line);border-radius:6px;padding:10px 12px;overflow-x:auto;font-size:.85em;line-height:1.45}
+pre code{background:none;padding:0;overflow-wrap:normal}
+nav.top{border-bottom:1px solid var(--line);background:var(--card)}
+nav.top .wrap{padding-bottom:0}
+nav.top ul{list-style:none;margin:0;padding:8px 0;display:flex;flex-wrap:wrap;gap:2px 14px;font-size:.88rem}
+nav.top a{text-decoration:none}
+nav.top a[aria-current="page"]{font-weight:700;text-decoration:underline}
+header.page{padding:28px 0 8px}
+h1{font-size:1.75rem;line-height:1.2;margin:0 0 8px}
+h2{font-size:1.3rem;margin:34px 0 8px;line-height:1.25;border-top:1px solid var(--line);padding-top:18px}
+h3{font-size:1.05rem;margin:22px 0 6px}
+.lead{font-size:1.1rem;color:var(--text);margin:0 0 6px}
+.meta{color:var(--muted);font-size:.88rem}
+p,li{max-width:70ch}
+ul,ol{padding-left:1.3em}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:16px 0}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.tile .v{font-size:1.45rem;font-weight:700;line-height:1.2;overflow-wrap:anywhere}
+.tile .l{font-size:.88rem}
+.tile .s{font-size:.78rem;color:var(--muted);margin-top:4px;overflow-wrap:anywhere}
+.note{border:1px solid var(--line);border-left:4px solid var(--warn);background:var(--card);border-radius:6px;padding:8px 12px;margin:14px 0;font-size:.93rem}
+.note.info{border-left-color:var(--accent)}
+.note.bad{border-left-color:var(--bad)}
+.note b.k{display:inline-block;margin-right:.4em}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px;margin:14px 0}
+.card h3{margin-top:0}
+figure{margin:14px 0;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px}
+figure svg{display:block;width:100%;max-width:560px;height:auto;margin:0 auto}
+figcaption{font-size:.85rem;color:var(--muted);margin-top:6px}
+.tw{overflow-x:auto;margin:10px 0;border:1px solid var(--line);border-radius:6px;background:var(--card)}
+table{border-collapse:collapse;width:100%;font-size:.84rem}
+caption{caption-side:top;text-align:left;font-weight:600;padding:8px 8px 4px}
+th,td{padding:4px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:var(--soft);font-weight:600}
+td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
+tr:last-child td{border-bottom:0}
+.chip{display:inline-block;padding:0 .5em;border-radius:4px;border:1px solid currentColor;font-size:.78rem;font-weight:700;letter-spacing:.02em;white-space:nowrap}
+.chip.clean{color:var(--ok)}
+.chip.degraded{color:var(--warn)}
+.chip.failed{color:var(--bad)}
+.chip.unverified{color:var(--s4)}
+.legend{list-style:none;padding:0;margin:6px 0 0;display:flex;flex-wrap:wrap;gap:4px 14px;font-size:.8rem}
+.legend li{display:flex;align-items:center;gap:6px}
+.legend svg{width:34px;height:12px;flex:none}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin:14px 0}
+.cards a.pg{display:block;text-decoration:none;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.cards a.pg:hover,.cards a.pg:focus{border-color:var(--accent)}
+.cards a.pg b{color:var(--accent);display:block}
+.cards a.pg span{font-size:.88rem;color:var(--muted)}
+footer{margin-top:40px;padding-top:12px;border-top:1px solid var(--line);font-size:.82rem;color:var(--muted)}
+/* chart text */
+svg text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:var(--text)}
+svg .ax{font-size:10.5px;fill:var(--muted)}
+svg .lb{font-size:11px}
+svg .hd{font-size:11px;font-weight:700}
+svg .vl{font-size:10.5px;font-variant-numeric:tabular-nums}
+svg .gl{stroke:var(--line);stroke-width:1}
+svg .axl{stroke:var(--muted);stroke-width:1}
+svg .ref{stroke:var(--text);stroke-width:1;stroke-dasharray:4 3}
+svg .box{fill:var(--card);stroke:var(--text);stroke-width:1.2}
+svg .boxs{fill:var(--soft);stroke:var(--muted);stroke-width:1}
+svg .arr{stroke:var(--text);stroke-width:1.4;fill:none}
+svg .arrh{fill:var(--text)}
+svg .bn{stroke:var(--s5);stroke-width:1}
+svg .bo{fill:var(--s2)}
+svg .bw{fill:var(--s1)}
+svg .bv{fill:var(--s3)}
+svg .hollow{fill:var(--card)}
+svg .solid{fill:currentColor}
+svg .mk{stroke:currentColor;stroke-width:1.6}
+svg .ln{fill:none;stroke:currentColor;stroke-width:2}
+svg .seg{stroke:var(--card);stroke-width:1}
+.sw{display:inline-block;width:12px;height:12px;vertical-align:-1px;margin-right:6px;border:1px solid var(--text)}
+@media print{
+  nav.top{display:none}
+  body{background:#fff;color:#000;font-size:11pt}
+  .wrap{max-width:none;padding:0}
+  figure,.card,.tile,.tw{break-inside:avoid}
+}
+</style>
+</head>
+<body>
+<nav class="top" aria-label="Pages"><div class="wrap"><ul><li><a href="index.html">Overview</a></li><li><a href="throughput.html">Throughput</a></li><li><a href="time-breakdown.html">Time per request</a></li><li><a href="torch-vs-ort.html">Torch vs ORT</a></li><li><a href="wire-formats.html">Wire formats</a></li><li><a href="result-cache.html">Result cache</a></li><li><a href="correctness.html">Correctness</a></li><li><a href="compatibility.html" aria-current="page">Compatibility</a></li><li><a href="boot-time.html">Boot time</a></li><li><a href="scaling.html">Workers</a></li><li><a href="releases.html">Releases</a></li><li><a href="SUMMARY.html">One page</a></li></ul></div></nav>
+<main class="wrap">
+<header class="page"><h1>What the gate catches</h1><p class="lead">Which models pass the gate, and which export hazards does it find? Two sets: 14 small fixtures that each isolate one hazard, and 8 real public models.</p><p class="meta">Real models: <code>real_models.json</code>, date 2026-11-07. Fixture table: <code>docs/compatibility.md</code>, generated 2026-10-12.</p></header>
+<div class="tiles"><div class="tile"><div class="v">8 of 8</div><div class="l">real models with verdict CLEAN</div><div class="s">max abs error 6.0e-05 (limit: atol 1e-4)</div></div><div class="tile"><div class="v">10 / 2 / 1</div><div class="l">fixtures: CLEAN / FAILED / DEGRADED</div><div class="s">plus 1 skipped (broken_factory)</div></div><div class="tile"><div class="v">1 of 14</div><div class="l">fixtures with silent wrong numbers (DEGRADED)</div><div class="s">scatter_include_self_false</div></div></div>
+<h2 id="question">The question</h2>
+<p>Does the verdict agree with what is true about a model? A hazard fixture has a known right answer. A real model shows whether the gate passes models that people use.</p>
+<h2 id="method">Method</h2>
+<ul><li><b>Fixtures.</b> <code>python scripts/gen_matrix.py</code> runs <code>downshift.check(..., samples=8)</code> on each model in <code>tests/models/</code>. It writes the table in <code>docs/compatibility.md</code>. This page reads that table.</li><li><b>Real models.</b> <code>python scripts/check_real_models.py</code> runs <code>downshift check --json</code> on each model in its own subprocess, on CPU. It writes <code>bench/results/v1.0.0/real_models.json</code> and the second table of <code>docs/compatibility.md</code>. Models: Hugging Face encoders, torchvision ResNet-18 and a PyG GCN.</li><li>Verification: 8 samples. Some have shapes that the exporter did not see. Tolerance atol 1e-4, rtol 1e-3 (float32). Embedding models also need a minimum cosine of 0.9999.</li><li>The hub models were read from local copies. downshift never contacts the hub.</li></ul>
+<h2 id="real">Results: 8 real models</h2>
+<figure><svg viewBox="0 0 400 248" role="img" aria-label="Max abs error of eight real models against PyTorch"><title>Max abs error of eight real models against PyTorch</title><desc>One dot for each model on a log scale. The dashed line is the absolute tolerance 1e-4.</desc><line class="gl" x1="150.0" x2="150.0" y1="20" y2="218"/><text class="ax" x="150.0" y="231" text-anchor="middle">1e-8</text><line class="gl" x1="196.8" x2="196.8" y1="20" y2="218"/><text class="ax" x="196.8" y="231" text-anchor="middle">1e-7</text><line class="gl" x1="243.6" x2="243.6" y1="20" y2="218"/><text class="ax" x="243.6" y="231" text-anchor="middle">1e-6</text><line class="gl" x1="290.4" x2="290.4" y1="20" y2="218"/><text class="ax" x="290.4" y="231" text-anchor="middle">1e-5</text><line class="gl" x1="337.2" x2="337.2" y1="20" y2="218"/><text class="ax" x="337.2" y="231" text-anchor="middle">1e-4</text><line class="gl" x1="384.0" x2="384.0" y1="20" y2="218"/><text class="ax" x="384.0" y="231" text-anchor="middle">1e-3</text><text class="ax" x="150" y="245">max abs error against eager PyTorch (log scale)</text><line class="ref" x1="337.2" x2="337.2" y1="16" y2="218"/><text class="ax" x="337.2" y="13" text-anchor="middle">atol 1e-4</text><text class="lb" x="144" y="42.0" text-anchor="end">all-MiniLM-L6-v2</text><circle class="mk" style="color:var(--s1);fill:var(--s1)" cx="214.5" cy="38.0" r="4.5"><title>all-MiniLM-L6-v2: 2.4e-07</title></circle><text class="vl" x="222.5" y="42.0" text-anchor="start">2.4e-07</text><text class="lb" x="144" y="66.0" text-anchor="end">bge-small-en-v1.5</text><circle class="mk" style="color:var(--s1);fill:var(--s1)" cx="219.0" cy="62.0" r="4.5"><title>bge-small-en-v1.5: 3.0e-07</title></circle><text class="vl" x="227.0" y="66.0" text-anchor="start">3.0e-07</text><text class="lb" x="144" y="90.0" text-anchor="end">e5-small-v2</text><circle class="mk" style="color:var(--s1);fill:var(--s1)" cx="214.8" cy="86.0" r="4.5"><title>e5-small-v2: 2.4e-07</title></circle><text class="vl" x="222.8" y="90.0" text-anchor="start">2.4e-07</text><text class="lb" x="144" y="114.0" text-anchor="end">distilbert-sst-2</text><circle class="mk" style="color:var(--s1);fill:var(--s1)" cx="296.0" cy="110.0" r="4.5"><title>distilbert-sst-2: 1.3e-05</title></circle><text class="vl" x="304.0" y="114.0" text-anchor="start">1.3e-05</text><text class="lb" x="144" y="138.0" text-anchor="end">ms-marco-MiniLM-L-6-v2</text><circle class="mk" style="color:var(--s1);fill:var(--s1)" cx="282.2" cy="134.0" r="4.5"><title>ms-marco-MiniLM-L-6-v2: 6.7e-06</title></circle><text class="vl" x="290.2" y="138.0" text-anchor="start">6.7e-06</text><text class="lb" x="144" y="162.0" text-anchor="end">Prompt-Guard-86M</text><circle class="mk" style="color:var(--s1);fill:var(--s1)" cx="326.8" cy="158.0" r="4.5"><title>Prompt-Guard-86M: 6.0e-05</title></circle><text class="vl" x="334.8" y="162.0" text-anchor="start">6.0e-05</text><text class="lb" x="144" y="186.0" text-anchor="end">resnet18</text><circle class="mk" style="color:var(--s1);fill:var(--s1)" cx="270.8" cy="182.0" r="4.5"><title>resnet18: 3.8e-06</title></circle><text class="vl" x="278.8" y="186.0" text-anchor="start">3.8e-06</text><text class="lb" x="144" y="210.0" text-anchor="end">pyg GCN (fixture)</text><circle class="mk" style="color:var(--s1);fill:var(--s1)" cx="200.4" cy="206.0" r="4.5"><title>pyg GCN (fixture): 1.2e-07</title></circle><text class="vl" x="208.4" y="210.0" text-anchor="start">1.2e-07</text></svg><figcaption>Largest absolute difference between ONNX Runtime and PyTorch over 8 samples. Log scale. All dots are left of the tolerance line.</figcaption></figure>
+<div class="tw" tabindex="0" role="region" aria-label="Real models: verdict, numerics and shape coverage"><table><caption>Real models: verdict, numerics and shape coverage</caption><thead><tr><th scope="col">model</th><th scope="col">family</th><th scope="col">verdict</th><th scope="col" class="r">max abs err</th><th scope="col" class="r">max rel err</th><th scope="col" class="r">min cosine</th><th scope="col" class="r">samples</th><th scope="col">sampled batch / seq</th><th scope="col" class="r">check s</th></tr></thead><tbody><tr><td>sentence-transformers/all-MiniLM-L6-v2</td><td>hf</td><td><span class="chip clean">CLEAN</span></td><td class="r">2.4e-07</td><td class="r">5.9e-03</td><td class="r">1.000000</td><td class="r">8</td><td>1-4 / 1-512 (serves 1-4096 / 1-512)</td><td class="r">19.2</td></tr><tr><td>BAAI/bge-small-en-v1.5</td><td>hf</td><td><span class="chip clean">CLEAN</span></td><td class="r">3.0e-07</td><td class="r">1.0e-02</td><td class="r">1.000000</td><td class="r">8</td><td>1-4 / 1-512 (serves 1-4096 / 1-512)</td><td class="r">21.9</td></tr><tr><td>intfloat/e5-small-v2</td><td>hf</td><td><span class="chip clean">CLEAN</span></td><td class="r">2.4e-07</td><td class="r">5.4e-03</td><td class="r">1.000000</td><td class="r">8</td><td>1-4 / 1-512 (serves 1-4096 / 1-512)</td><td class="r">21.8</td></tr><tr><td>distilbert/distilbert-base-uncased-finetuned-sst-2-english</td><td>hf</td><td><span class="chip clean">CLEAN</span></td><td class="r">1.3e-05</td><td class="r">1.3e-05</td><td class="r">-</td><td class="r">8</td><td>1-4 / 1-512 (serves 1-4096 / 1-512)</td><td class="r">20.4</td></tr><tr><td>cross-encoder/ms-marco-MiniLM-L-6-v2</td><td>hf</td><td><span class="chip clean">CLEAN</span></td><td class="r">6.7e-06</td><td class="r">9.9e-07</td><td class="r">-</td><td class="r">8</td><td>1-4 / 1-512 (serves 1-4096 / 1-512)</td><td class="r">18.6</td></tr><tr><td>meta-llama/Prompt-Guard-86M</td><td>hf</td><td><span class="chip clean">CLEAN</span></td><td class="r">6.0e-05</td><td class="r">7.1e-05</td><td class="r">-</td><td class="r">8</td><td>1-4 / 1-512 (serves 1-4096 / 1-512)</td><td class="r">39.0</td></tr><tr><td>torchvision/resnet18</td><td>generic</td><td><span class="chip clean">CLEAN</span></td><td class="r">3.8e-06</td><td class="r">4.9e-03</td><td class="r">-</td><td class="r">8</td><td>1-3 (serves 1-65536)</td><td class="r">10.6</td></tr><tr><td>pyg/GCN (tests/models/gnn_gcn)</td><td>pyg</td><td><span class="chip clean">CLEAN</span></td><td class="r">1.2e-07</td><td class="r">1.8e-05</td><td class="r">-</td><td class="r">8</td><td>1-12 / 2-20 (serves 1-65536 / 1-65536)</td><td class="r">17.6</td></tr></tbody></table></div>
+<div class="note info"><b class="k">Note.</b>The pass rule combines atol and rtol. The file also stores the max relative error. It is large for some models (for example 5.9e-03 for MiniLM) because the relative error is high where the expected value is near 0. Those samples pass through the absolute term.</div>
+<p>One detail: the PyG GCN has <code>row_independent = False</code>. The reason in the file: &quot;input edge_index has no dynamic batch axis&quot;. A graph does not have independent batch rows, so the result cache does not apply to it.</p>
+<h2 id="fixtures">Results: 14 hazard fixtures</h2>
+<div class="tw" tabindex="0" role="region" aria-label="Fixtures from tests/models (generated 2026-10-12)"><table><caption>Fixtures from tests/models (generated 2026-10-12)</caption><thead><tr><th scope="col">fixture</th><th scope="col">hazard</th><th scope="col">family</th><th scope="col">export</th><th scope="col">capture</th><th scope="col">numerics</th><th scope="col">shape-general</th><th scope="col">backend</th></tr></thead><tbody><tr><td>bf16_weights</td><td>bfloat16 weights: ONNX Runtime CPU has no bf16 Gemm kernel</td><td>generic</td><td><span class="chip failed">FAILED</span></td><td>strict=False</td><td>—</td><td>—</td><td>torch</td></tr><tr><td>broken_factory</td><td>Not an export hazard fixture: raises as soon as it is instantiated</td><td>—</td><td>skipped (RuntimeError)</td><td>—</td><td>—</td><td>—</td><td>—</td></tr><tr><td>clean_mlp</td><td>Control fixture: no export hazards</td><td>generic</td><td><span class="chip clean">CLEAN</span></td><td>strict=False</td><td>1.2e-07</td><td>✓</td><td>onnxruntime</td></tr><tr><td>custom_autograd</td><td>custom autograd.Function with no symbolic override</td><td>generic</td><td><span class="chip clean">CLEAN</span></td><td>strict=False</td><td>2.4e-07</td><td>✓</td><td>onnxruntime</td></tr><tr><td>data_dependent_branch</td><td>data-dependent control flow</td><td>generic</td><td><span class="chip failed">FAILED</span></td><td>—</td><td>—</td><td>—</td><td>torch</td></tr><tr><td>dict_input</td><td>dataclass container input</td><td>generic</td><td><span class="chip clean">CLEAN</span></td><td>strict=False</td><td>1.2e-07</td><td>✓</td><td>onnxruntime</td></tr><tr><td>dropout_model</td><td>stochastic layer</td><td>generic</td><td><span class="chip clean">CLEAN</span></td><td>strict=False</td><td>2.4e-07</td><td>✓</td><td>onnxruntime</td></tr><tr><td>dynamic_batch_cnn</td><td>batch-dim generalization</td><td>generic</td><td><span class="chip clean">CLEAN</span></td><td>strict=False</td><td>6.0e-08</td><td>✓</td><td>onnxruntime</td></tr><tr><td>gnn_gat</td><td>GNN fixture: 3-layer GAT node classifier</td><td>pyg</td><td><span class="chip clean">CLEAN</span></td><td>strict=False</td><td>1.2e-07</td><td>✓</td><td>onnxruntime</td></tr><tr><td>gnn_gcn</td><td>GNN fixture: 2-layer GCN node classifier</td><td>pyg</td><td><span class="chip clean">CLEAN</span></td><td>strict=False</td><td>1.2e-07</td><td>✓</td><td>onnxruntime</td></tr><tr><td>gnn_sage</td><td>GNN fixture: 2-layer GraphSAGE node classifier</td><td>pyg</td><td><span class="chip clean">CLEAN</span></td><td>strict=False</td><td>2.1e-07</td><td>✓</td><td>onnxruntime</td></tr><tr><td>scatter_include_self_false</td><td>scatter_reduce(include_self=False) has no faithful ONNX translation</td><td>generic</td><td><span class="chip degraded">DEGRADED</span></td><td>strict=False</td><td>9.5e-01</td><td>—</td><td>torch</td></tr><tr><td>tied_weights</td><td>tied embedding/output weight (GPT-2/OPT-style)</td><td>generic</td><td><span class="chip clean">CLEAN</span></td><td>strict=False</td><td>3.8e-06</td><td>✓</td><td>onnxruntime</td></tr><tr><td>tiny_bert</td><td>HF fixture: a BERT encoder with two layers and random initialization</td><td>hf</td><td><span class="chip clean">CLEAN</span></td><td>strict=False</td><td>7.2e-07</td><td>✓</td><td>onnxruntime</td></tr></tbody></table></div>
+<ul><li><code>scatter_include_self_false</code> exports without an error and gives wrong numbers. Only the numerics check stops it.</li><li><code>bf16_weights</code> exports, but ONNX Runtime on CPU has no bfloat16 Gemm kernel. The verdict is FAILED and torch serves it.</li><li><code>data_dependent_branch</code> does not export. The verdict is FAILED.</li><li><code>custom_autograd</code> is CLEAN. <code>torch.export</code> traces through the function.</li></ul>
+<h2 id="limits">What this shows and does not show</h2>
+<h3>Shows</h3>
+<ul><li>The gate passes 8 of 8 models that people use, with errors from 1.2e-07 to 6.0e-05.</li><li>The gate finds the three kinds of hazard in the fixtures: wrong numbers, no kernel, no export.</li><li>The check takes 10.6 to 39.0 s for each model on this machine (<code>seconds</code> in the file).</li></ul>
+<h3>Does not show</h3>
+<ul><li>A false-negative rate. A model that is wrong only on an input that none of the 8 samples hit would pass. The sampled range is small: batch 1 to 4 for the encoders, while the server accepts batch 1 to 4096 (the file marks this as not verified above the sampled range).</li><li>Any other model family or size. Qwen3-Embedding-0.6B is in <code>scripts/check_real_models.py</code> behind <code>--large</code>. It is not in the file.</li><li>Speed. These runs check the numbers. They do not load-test the real models (only MiniLM has a load run).</li><li>The machine. <code>real_models.json</code> stores the date and the package versions. It does not store the operating system or the CPU.</li><li>Only CPU. The GPU path is not measured.</li></ul>
+<div class="note bad"><b class="k">Source mismatch.</b>The date of <code>real_models.json</code> is 2026-11-07. The second table of <code>docs/compatibility.md</code> says it was generated on 2026-10-12. The file lists torch 2.14.0 and onnxruntime 1.30.0. The doc line lists: torch 2.14.1+cpu, onnx 1.23.2, onnxruntime 1.31.0, torch_geometric 2.8.1, transformers 5.19.0. The numbers in both tables agree. The version text is stale in one of the two files. Not changed here.</div>
+<h2 id="sources">Sources</h2><ul><li><a href="../results/v1.0.0/real_models.json"><code>bench/results/v1.0.0/real_models.json</code></a></li><li><a href="../../docs/compatibility.md"><code>docs/compatibility.md</code></a></li><li><a href="../../scripts/check_real_models.py"><code>scripts/check_real_models.py</code></a></li><li><a href="../../scripts/gen_matrix.py"><code>scripts/gen_matrix.py</code></a></li></ul>
+<footer>
+<p>Made by <code>bench/showcase/build_showcase.py</code> from files in <code>bench/</code>. The script changes no source file.
+Project: <a href="https://github.com/uNRealCoder/downshift-server">https://github.com/uNRealCoder/downshift-server</a>.</p>
+</footer>
+</main>
+</body>
+</html>
