@@ -43,7 +43,9 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install "torch==2.6.0" --index-url https://download.pytorch.org/whl/cpu
-      - run: pip install "onnx==1.16.0" "onnxruntime==1.17.0" "onnxscript==0.5.0" "numpy<2" "transformers==5.17.0"
+      # onnx-ir 0.1.16 and later break the exporter of torch 2.6: its version converter says "The
+      # model contains functions" and every export is FAILED. 0.1.15 is the newest that works.
+      - run: pip install "onnx==1.16.0" "onnxruntime==1.17.0" "onnxscript==0.5.0" "onnx-ir<0.1.16" "numpy<2" "transformers==5.17.0"
       - run: pip install -e ".[dev,gnn,hf,fast]"
       # The HTTPS tests make a throwaway certificate with the openssl command (tests/conftest.py).
       # The runner images have it. The install is only a fallback.
