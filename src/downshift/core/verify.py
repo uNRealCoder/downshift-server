@@ -363,6 +363,9 @@ def verify(
                     tuple(t.shape) if isinstance(t, torch.Tensor) else type(t).__name__
                     for t in sample
                 ]
+                # Sample 0 is the example input. If torch fails on it, the model or the inputs
+                # are wrong. A later sample comes from the sampler of downshift, so its message
+                # names the sampler and the bounds.
                 if i == 0:
                     raise ValueError(
                         f"model raised on sample {i} (input shapes {described}): "
@@ -419,5 +422,6 @@ def verify(
             f"embedding rows: minimum cosine {report.min_cosine:.5f} "
             f"(tolerance {TOLERANCE_COSINE:g})"
         )
+    # If sample 0 failed, the fault is not about shapes, so the answer is "not known" (None).
     report.shape_generalization = None if report.baseline_failed else report.failures == 0
     return report

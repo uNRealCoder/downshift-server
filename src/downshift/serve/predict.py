@@ -1,5 +1,14 @@
 """The request path of /predict and /predict/graph, from the raw body to the response: parse,
 convert and check (prep pool), infer and encode (inference pool), and the result cache.
+
+To read this file, go in this order:
+
+1. `run_predict`: the entry point. It picks one of three paths: inline (all on the event
+   loop), cached (`_run_cached`), or the plain two-hop path.
+2. `_parse`, `_prepare_feeds`, `_violation`: decode the body, make the arrays, check them.
+   Each client error is a 400 here, so the model never sees a bad input.
+3. `_infer`, `_encode_response`: the backend call, and the JSON, base64 or safetensors body.
+4. `_run_cached`, `_cache_prepare`, `_CachePlan`: the same path with the result cache.
 """
 
 import asyncio
@@ -742,6 +751,9 @@ async def _run_cached(
         raise
     owned = plan.owned
 
+    # `rows` maps a row index of the request to its output. The cache hits are in it already.
+    # The steps below add the rows that this request computes, then the rows that other
+    # requests compute. `finish` joins them in the order of the request.
     rows: dict[int, Row] = dict(plan.found.hits)
     served = len(plan.found.hits)  # the rows that this request did not compute
 
@@ -754,6 +766,8 @@ async def _run_cached(
             _check_timeout(state, deadline)
             outputs, infer_ms = _infer(state, feeds)
             timings_ms["infer"] = round(infer_ms, 2)
+            # True if each output has one entry for each row that we sent. Only then can we
+            # cache and join the rows one by one.
             by_row = all(o.ndim and o.shape[0] == len(indexes) for o in outputs.values())
             if plan.passthrough or (not by_row and len(indexes) == len(plan.keys)):
                 # An empty batch, or outputs without a row axis: nothing to cache or join. The
@@ -781,6 +795,10 @@ async def _run_cached(
         )
         return done
 
+    # Step 1: compute the rows that no request has claimed yet (the rows that this one owns).
+    # Step 2: wait for the rows that other requests compute.
+    # Step 3: if the owner of a row failed, compute that row here.
+    # A failure at any step releases the claims of this request, so no waiter hangs.
     try:
         _check_timeout(state, deadline)
         if plan.feeds is not None:
@@ -858,10 +876,13 @@ async def run_predict(
     pools, timeout, cache and row checks. `with_tokens` gives `encode` the token count of each
     text row. `deadline` is a time.monotonic value (None for no limit).
     """
+    # Path 1, inline: parse here, on the event loop (a small JSON body only).
     parsed: _Request | None = None
     if inline:
         parsed = parse() if parse is not None else _parse(state, body, graph, binary, timings_ms)
+    # A text request still goes to the prep pool, because the tokenizer can be slow.
     run_here = parsed is not None and parsed.text is None
+    # Path 2, cached: the result cache never serves /predict/graph.
     if state.result_cache is not None and not graph:
         return await _run_cached(
             state,
@@ -880,6 +901,8 @@ async def run_predict(
             use_lookup=use_cache,
         )
 
+    # Path 3, plain: hop 1 (prep pool) parses and checks, hop 2 (inference pool) infers and
+    # encodes. The event loop does neither, so /health and /ready never wait.
     def prepare() -> tuple[_Request, dict[str, np.ndarray], GraphLayout | None]:
         request = parsed or (
             parse() if parse is not None else _parse(state, body, graph, binary, timings_ms)

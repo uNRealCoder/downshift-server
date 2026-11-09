@@ -371,6 +371,8 @@ def build_verdict(
     )
     for _, kept in capture_exceptions:
         _drop_frame_locals(kept)
+    # The verdict starts as FAILED on torch. Each step that works changes it: a failed capture
+    # keeps it, --no-verify makes it UNVERIFIED, and `_verify_into` makes it CLEAN or DEGRADED.
     verdict = _verdict(
         prepared,
         Status.FAILED,

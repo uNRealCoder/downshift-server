@@ -124,6 +124,7 @@ def capture(
     captured = io.StringIO()
 
     with _capture_torch_output(captured), _quiet_registration_warnings():
+        # Try strict=False first, then strict=True. The first one that works is the strategy.
         for name, strict in _STRATEGIES:
             try:
                 exported_program = torch.export.export(

@@ -1,4 +1,15 @@
-"""The FastAPI app over a ServingState. The routes are the same for both backends."""
+"""The FastAPI app over a ServingState. The routes are the same for both backends.
+
+To read this file, go in this order:
+
+1. `build_app`: makes the app. With `loader=`, the app binds first and the lifespan
+   (`_loader_lifespan`) loads the model on a background thread. Until then, `/ready` is 503.
+2. `PredictRoute`: admits a slot (or 503), applies --request-timeout, and releases the slot.
+3. `_predict`: checks the content type and the body size, then calls `run_predict`
+   (serve/predict.py). The request path continues there.
+4. `RequestIdMiddleware`, `ApiKeyMiddleware`, `load_middleware`: the middleware stack, from the
+   outside in.
+"""
 
 import asyncio
 import contextvars

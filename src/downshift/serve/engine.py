@@ -1,4 +1,20 @@
-"""From a loaded model (or a reused export) to a warmed-up backend in a ServingState."""
+"""From a loaded model (or a reused export) to a warmed-up backend in a ServingState.
+
+There are two checks, and they are not the same:
+
+- The verdict check (core/verdict.py) runs on the CPU. It compares ONNX Runtime with torch and
+  makes the ExportVerdict.
+- The serving check (`_build_checked`) runs at boot, only if the backend serves off the CPU
+  (a GPU). It replays the verification samples through the serving backend and compares the
+  result with the CPU result. If it fails, torch serves (`_falls_back`).
+
+There are two boot builders, and both end in `_finish`:
+
+- `prepare_serving`: runs the whole gate (export, verify), then builds the backend.
+- `state_from_entry`: boots from an earlier export. It skips the gate.
+
+`choose_backend` turns the verdict and the options into a backend name.
+"""
 
 import gc
 import logging
@@ -546,6 +562,8 @@ def prepare_serving(
     name, notes = choose_backend(verdict, opts)
     prepared = verdict.prepared
     feeds = example_feeds(prepared.input_names, prepared.inputs) if prepared is not None else None
+    # Build the backend. If the serving check fails on a GPU and torch can serve, this returns
+    # the torch backend and its name in place of the first one.
     name, backend, numerics = _serve_checked(
         name,
         verdict,

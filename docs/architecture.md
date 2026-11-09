@@ -99,7 +99,11 @@ A cache key hashes the weights, the model code, the options and the toolchain. T
 
 The cache holds only CLEAN and DEGRADED results.
 
-### 7. Serving (`serve/`)
+### 7. The serving check (`serve/engine.py`)
+
+The verdict is made on the CPU. If the server serves on a GPU (ONNX Runtime CUDA or torch `cuda`), a second check runs at boot. It replays the verification samples through the serving backend and compares the result with the CPU result. If it fails and torch can serve, torch serves instead. On the CPU, this check does not run. Refer to "GPU" in [`production.md`](production.md#gpu).
+
+### 8. Serving (`serve/`)
 
 For a full description, read [`serving.md`](serving.md). In short:
 
