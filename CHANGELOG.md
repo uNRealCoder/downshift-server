@@ -58,6 +58,10 @@ All notable changes to this project are documented here. Format follows
   - `downshift.core.verify.quiet_ort_logging` is removed. `new_session` silences the ONNX Runtime logger itself.
 - `import downshift` does not read the environment. `export()` reads `DOWNSHIFT_EXPORT_CACHE_DIR` when you call it, not at import. `export_cache_dir=None` still means no disk tier.
 
+### Removed
+
+- The weekly workflow `compatibility-matrix.yml`. It opened a pull request each week with a new compatibility matrix. To make the matrix again, run `python scripts/gen_matrix.py`.
+
 ### Fixed
 
 - With `--workers N`, an input named `file` or `allow_pickle` no longer breaks the hand-off of the example inputs to the workers. The file uses the `in.` name prefix, as the export cache does.

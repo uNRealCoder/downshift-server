@@ -205,7 +205,7 @@ downshift serve ./bert-base-uncased
 
 ## Compatibility matrix
 
-`scripts/gen_matrix.py` generates this table from the fixtures in `tests/models/`. Each fixture isolates one export hazard. CI makes the table again each week against the current torch and onnxruntime. The full file, with versions, is [docs/compatibility.md](docs/compatibility.md). The same page lists [Tested real models](docs/compatibility.md#tested-real-models): public Hugging Face, torchvision and PyG models that `scripts/check_real_models.py` checks.
+`scripts/gen_matrix.py` generates this table from the fixtures in `tests/models/`. Each fixture isolates one export hazard. To make the table again, run `python scripts/gen_matrix.py`. The full file, with versions, is [docs/compatibility.md](docs/compatibility.md). The same page lists [Tested real models](docs/compatibility.md#tested-real-models): public Hugging Face, torchvision and PyG models that `scripts/check_real_models.py` checks.
 
 <!-- matrix:start -->
 | Model | Hazard | Family | Export | Capture | Numerics | Shape-general | Backend |
