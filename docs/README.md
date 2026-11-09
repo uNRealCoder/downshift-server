@@ -2,10 +2,12 @@
 
 Downshift serves a model that you already downloaded, over HTTP. Before it answers a request, it exports the model to ONNX and compares the ONNX graph with PyTorch on inputs that the exporter did not see. The check gives a verdict: CLEAN, DEGRADED, FAILED or UNVERIFIED. The verdict selects the backend behind `/predict`.
 
-For a first walkthrough, read the repo [`README.md`](../README.md). The pages below are reference material. Each one describes the code as it is.
+For a first walkthrough, read the repo [`README.md`](../README.md). To learn the code, read [`architecture.md`](architecture.md) and then [`walkthrough.md`](walkthrough.md). The other pages are reference material. Each one describes the code as it is.
 
 | Page | Read it to |
 |---|---|
+| [`architecture.md`](architecture.md) | Learn how the parts fit together: the flow from `MODEL` to verdict to backend, the layers, the design rules and a glossary. |
+| [`walkthrough.md`](walkthrough.md) | Run the three verdicts, export a file and call a server, with the code to read at each step. |
 | [`cli.md`](cli.md) | Use `downshift check`, `export` and `serve`: every flag, environment variable, log level and exit code. |
 | [`http-api.md`](http-api.md) | Call a server: every route, body, status code, header and wire format (JSON, base64, safetensors, text, graphs). |
 | [`openai.md`](openai.md) | Use the OpenAI embeddings routes (`/v1/embeddings`) with an OpenAI client: the fields, `--served-model-name`, `--matryoshka` and the errors. |
