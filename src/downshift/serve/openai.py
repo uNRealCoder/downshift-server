@@ -66,7 +66,8 @@ def _matryoshka_cut(vectors: np.ndarray, dimensions: int) -> np.ndarray:
         _check_dimensions(dimensions, vectors.shape[-1])
     cut = vectors[:, :dimensions].astype(np.float32, copy=False)  # float16 would overflow
     norms = np.linalg.norm(cut, axis=1, keepdims=True)
-    return cut / np.where(norms == 0, 1.0, norms)
+    scaled: np.ndarray = cut / np.where(norms == 0, 1.0, norms)  # numpy 1.x stubs give Any
+    return scaled
 
 
 def parse_embeddings(state: ServingState, body: bytes, timings_ms: dict[str, float]) -> _Request:

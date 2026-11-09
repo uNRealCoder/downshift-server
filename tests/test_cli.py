@@ -330,8 +330,9 @@ def test_serve_defaults_for_the_proxy_and_shutdown_options(monkeypatch, workers)
     _, captured = _serve_captured(monkeypatch, "--workers", workers)
     assert captured["root_path"] == ""
     assert captured["timeout_graceful_shutdown"] == 30
-    # Not given: uvicorn keeps its own default.
-    assert captured.get("forwarded_allow_ips", "127.0.0.1") == "127.0.0.1"
+    # Not given: uvicorn keeps its own default. The default depends on the uvicorn version.
+    uvicorn_default = uvicorn.Config("downshift:app").forwarded_allow_ips
+    assert captured.get("forwarded_allow_ips", uvicorn_default) == uvicorn_default
 
 
 def test_serve_timeout_graceful_shutdown_zero_waits_without_a_limit(monkeypatch):

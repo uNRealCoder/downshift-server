@@ -657,12 +657,19 @@ def test_tf32_off_sets_the_torch_flags_of_a_cuda_backend(monkeypatch):
 
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(torch.nn.Module, "to", lambda self, *a, **k: self)
-    monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32", False)
-    monkeypatch.setattr(torch.backends.cudnn, "allow_tf32", True)
-    b.TorchBackend(clean_mlp.make_model(), ("x",), device="cuda", tf32=True)
-    assert torch.backends.cuda.matmul.allow_tf32 is True
-    b.TorchBackend(clean_mlp.make_model(), ("x",), device="cuda", tf32=False)
-    assert torch.backends.cuda.matmul.allow_tf32 is False
+    # Do not use monkeypatch for the two flags. In current torch they are properties, so
+    # monkeypatch cannot undo them. Its undo then raises an error and stops, and the two patches
+    # above stay on for all later tests. Save and restore the flags by hand.
+    saved = torch.backends.cuda.matmul.allow_tf32, torch.backends.cudnn.allow_tf32
+    try:
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = True
+        b.TorchBackend(clean_mlp.make_model(), ("x",), device="cuda", tf32=True)
+        assert torch.backends.cuda.matmul.allow_tf32 is True
+        b.TorchBackend(clean_mlp.make_model(), ("x",), device="cuda", tf32=False)
+        assert torch.backends.cuda.matmul.allow_tf32 is False
+    finally:
+        torch.backends.cuda.matmul.allow_tf32, torch.backends.cudnn.allow_tf32 = saved
 
 
 def test_a_cache_hit_replays_all_the_verification_samples(off_onnx, exported_mlp, tmp_path):
