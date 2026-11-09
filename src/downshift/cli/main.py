@@ -2,6 +2,17 @@
 
 Heavy modules (torch, onnxruntime, uvicorn, downshift.core and downshift.serve) are imported
 inside the command bodies, so `--help` and `--version` stay fast.
+
+To read this file, go in this order:
+
+1. `_exit_on_error`: how an error becomes an exit code (`ValueError` is 4, any other error is 5).
+2. `check_cmd`: load, `downshift.check`, print the verdict. The exit code is the status.
+3. `export_cmd`: the same, then write NAME.onnx and NAME.manifest.json (nothing for FAILED).
+4. `serve_cmd`: the long one. It reads the options, builds `ServeOptions` and `ServeArgs`, and
+   then starts one server, or N workers. The model loads after the port is bound.
+
+The option types are in cli/options.py. The boot code is in cli/runtime.py. The text of the
+reports is in cli/render.py.
 """
 
 from __future__ import annotations
@@ -417,6 +428,7 @@ def serve_cmd(
 
     _setup_logging(log_level)
     with _exit_on_error(log_level is LogLevel.debug):
+        # Step 1: check the options that can fail, before a slow load. Each error is exit code 4.
         if metrics and workers > 1:
             raise ValueError(
                 "--metrics needs one worker. A scrape reaches one worker only. "
@@ -453,6 +465,8 @@ def serve_cmd(
         from downshift.core.shapes import parse_dynamic_spec
         from downshift.loading import LoadSpec
 
+        # Step 2: put the options in three objects. LoadSpec says how to load the model,
+        # ServeOptions how to serve it, and ServeArgs both, in a form that a worker can get as JSON.
         load = LoadSpec(
             model=model,
             inputs=inputs,
@@ -518,6 +532,7 @@ def serve_cmd(
                 api_key_set=bool(settings.API_KEY),
             )
 
+        # Step 3: start. N workers share one export from the parent. One worker boots here.
         if workers > 1:
             _run_workers(args, workers, uvicorn_kwargs, announce)
             return

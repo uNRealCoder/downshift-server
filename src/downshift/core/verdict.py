@@ -4,6 +4,15 @@ CLEAN      exports, the numbers match, works on unseen shapes  -> serve via ORT
 DEGRADED   exports, but the numbers differ beyond tolerance    -> serve via torch
 FAILED     does not export (or ORT cannot run it)              -> serve via torch
 UNVERIFIED a .onnx file with no reference model                -> serve via ORT, say so
+
+To read this file, go in this order:
+
+1. `ExportVerdict`: the fields. Everything else in the file makes one.
+2. `check`: the public gate for an `nn.Module`. It calls `prepare_model`, then `build_verdict`.
+3. `prepare_model`: adapter, example inputs, dynamic shapes. It does not export.
+4. `build_verdict`: capture (core/capture.py), then `_verify_into`.
+5. `_verify_into`: verify (core/verify.py) and the row check, then it sets the status.
+6. `intake`: the gate for a .onnx file that another tool made.
 """
 
 import copy
@@ -317,6 +326,8 @@ def _verify_into(
         if timings is not None:
             timings[Phase.verify] = time.perf_counter() - start
 
+    # The checks ran. Keep the session and the samples: the server reuses the session (it
+    # saves a second load), and the GPU serving check replays the samples.
     verdict.numerics = numerics
     verdict._session = session
     verdict.sample_feeds = bound_samples(kept_feeds)

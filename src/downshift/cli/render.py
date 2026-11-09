@@ -1,6 +1,17 @@
 """Everything the CLI reports, as plain text through `logging`. Each report (verdict, banner,
 artifacts) is one multi-line INFO record on `downshift.report`, so a log collector keeps it
 together.
+
+To read this file, go in this order:
+
+1. `_Rows`: the helper that puts the values of a report in one column.
+2. `print_verdict`: the report of `check` and `export`. The `_*_text` functions above it each
+   make one row.
+3. `print_banner`: the report of `serve` after the boot. It adds the rows of the backend, the
+   capacity and the cache. `print_config` adds the options that the banner does not show.
+4. `print_booting`, `print_ready`, `warn`, `error`: the short lines.
+
+The text of a row is a public output that people read, so check the docs before you change it.
 """
 
 from __future__ import annotations
