@@ -29,7 +29,7 @@ CLEAN means that the ONNX graph agrees with PyTorch. It does not mean that the g
 <!-- real-models:start -->
 ## Tested real models
 
-Generated 2026-10-12 by `scripts/gen_matrix.py` with torch 2.14.1+cpu, onnx 1.23.2, onnxruntime 1.31.0, torch_geometric 2.8.1, transformers 5.19.0.
+Generated 2026-11-07 by `scripts/check_real_models.py` with torch 2.14.0, onnx 1.22.0, onnxruntime 1.30.0, transformers 5.17.0, torch_geometric 2.8.0.post1, torchvision 0.29.2+cpu.
 Downshift ran `downshift check --json` on each model, on the CPU.
 The Rows column is the number of verification samples. The script is in the repository: to run it again, use `python scripts/check_real_models.py`.
 

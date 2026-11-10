@@ -15,6 +15,10 @@ bench/
   README.md
   run.py, hf_models.py, report.py   entry points (python -m bench.<name>)
   *.py, large/                      the harness modules they use (see "What runs")
+  CAPABILITIES.md                   each downshift capability, with the result that shows it
+  showcase/                         static pages for an outside reader (open showcase/index.html)
+  results/v1.0.0/                   the newest run: data of 1.0.0rc1 (see "Published runs")
+  results/v0.6.0/                   cache_acceptance.json: the result cache check of 0.6.0
   results/v0.5.0/                   a published run: REPORT.md, results*.json, chart_*.csv
   REPORT_v0.4.0.md, BLOG_APPENDIX_v0.4.0.md, results*_v0.4.0.json
                                     the 0.4.0 run, left at the root because the post links here
@@ -24,11 +28,19 @@ bench/
 
 A new published run goes in `results/vX.Y.Z/` with the same file names as 0.5.0.
 
+## Start here
+
+- [`CAPABILITIES.md`](CAPABILITIES.md): one page. Each downshift capability, the result file that shows it, and one number.
+- [`showcase/index.html`](showcase/index.html): static pages with charts and tables. Open the file in a browser. [`showcase/README.md`](showcase/README.md) says how it is made.
+
+**Hardware: not recorded in these runs.** The result files hold the platform (`win32`), the number of logical CPUs (16) and the torch thread count (8). They do not hold the CPU model or the RAM. Compare rows inside one report. Do not compare them with a run on other hardware.
+
 ## Published runs
 
 | run | report | raw data |
 |---|---|---|
-| **1.0.0**: naive vs 0.5.1 vs 1.0.0, one session; metrics and result cache rows | [`results/v1.0.0/REPORT.md`](results/v1.0.0/REPORT.md) | `results/v1.0.0/`: `results.json`, `results_hf.json`, `rerun_mlp_large.json`; chart data `chart_runs.csv`, `chart_stages.csv` |
+| **1.0.0rc1** (the directory is named `v1.0.0`, but the data is from the release candidate 1.0.0rc1, not the final 1.0.0): naive vs 0.5.1 vs 1.0.0rc1, one session; metrics and result cache rows | [`results/v1.0.0/REPORT.md`](results/v1.0.0/REPORT.md) | `results/v1.0.0/`: `results.json`, `results_hf.json`, `rerun_mlp_large.json`, `real_models.json` (verdicts of 8 real models, 2026-11-07); chart data `chart_runs.csv`, `chart_stages.csv` |
+| 0.6.0: result cache acceptance check (MiniLM, in-process, 60 repeats) | none | `results/v0.6.0/cache_acceptance.json` |
 | 0.5.0: naive vs 0.4.0 vs 0.5.0, one session | [`results/v0.5.0/REPORT.md`](results/v0.5.0/REPORT.md) | `results/v0.5.0/`: `results.json`, `results_hf.json`; chart data `chart_runs.csv`, `chart_stages.csv` |
 | 0.4.0: naive vs 0.4.0, behind the launch post *Stop hand-rolling model servers* | [`REPORT_v0.4.0.md`](REPORT_v0.4.0.md), [`BLOG_APPENDIX_v0.4.0.md`](BLOG_APPENDIX_v0.4.0.md) | `results_v0.4.0.json`, `results_hf*_v0.4.0.json` |
 
@@ -36,7 +48,7 @@ The 0.4.0 files were produced by the harness as of commit `02419cf` and are kept
 because the post links to them. Their numbers are not comparable row-for-row with the 0.5.0 run,
 which re-measured 0.4.0 alongside 0.5.0 in the same session.
 
-## 1.0.0 at a glance
+## 1.0.0rc1 at a glance (`results/v1.0.0/`)
 
 From [`results/v1.0.0/REPORT.md`](results/v1.0.0/REPORT.md) (run 2026-11-07/08, about 57 minutes of
 measuring with the default 3 s windows; 5 s on MiniLM); 16-CPU Windows machine, CPU only, batch 1,
@@ -48,15 +60,15 @@ answer from memory. Not run: the `--workers` sweep and Prompt Guard.
   vs 1039 rps, p50 0.77 vs 0.80 ms, p99 1.79 vs 2.02 ms. `tiny_bert`: 633 vs 591 rps, p99 6.7 vs
   7.4 ms. `scatter_include_self_false`: 1186 vs 1222 rps. Peak rps: `clean_mlp` 1428 vs 1421,
   `tiny_bert` 1067 vs 1183 (-10%), `scatter_include_self_false` 1387 vs 1443 (-4%). `mlp_large`
-  peak was 765 vs 965 in the main pass but 939 vs 989 (-5%) when measured again (the main-pass row
+  peak was 765 vs 965 in the main pass but 942 vs 989 (-4.7%) when measured again (the main-pass row
   does not fit its own `--metrics` row; see "Notes on this run"). MiniLM, one sentence, c=1/c=8: 185/486 vs
   199/524 rps (-7%), p50 4.9 vs 4.6 ms.
 - **`--metrics` costs 14 to 61 microseconds a request.** Concurrency 1: `clean_mlp` 1114 to 1054 rps
   (+51 us, -5.4%), `tiny_bert` 633 to 610 (+61 us, -3.7%), `scatter_include_self_false` 1186 to 1167
   (+14 us, -1.6%). Peak rps: -7.2%, -0.6%, -5.4%. On `mlp_large` the cost is inside the noise
-  (re-run: peak 939 vs 920 rps, -2%).
+  (re-run: peak 942 vs 934 rps, -0.9%).
 - **The result cache, all hits, is a best case.** `clean_mlp` peak 1824 vs 1428 rps (+28%), p50
-  at c=1 0.69 vs 0.77 ms; `mlp_large` 1742 vs 765 rps (939 in the re-run) and c=1 p50 0.80 vs 2.17 ms;
+  at c=1 0.69 vs 0.77 ms; `mlp_large` 1742 vs 765 rps (942 in the re-run) and c=1 p50 0.80 vs 2.17 ms;
   MiniLM short_b1 1456 vs 185 rps at c=1 (p50 0.62 vs 4.89 ms) and 1911 vs 486 at c=8. It does
   nothing for `tiny_bert` and `scatter_include_self_false`, where the default cache is off (rows
   `dependent` and `not checked`).

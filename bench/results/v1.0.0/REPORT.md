@@ -2,6 +2,10 @@
 
 `win32`, 16 logical CPUs, Python 3.12.10, torch 2.14.0+cpu (CPU), onnxruntime 1.30.0, run 2026-11-07T22:59:00. downshift 1.0.0rc1 from the checkout; downshift 0.5.1 from the pip-installed release. Every downshift server is the real `downshift serve` CLI; all servers ran in one session on the same machine.
 
+**Version.** The directory `results/v1.0.0/` holds data of downshift **1.0.0rc1** (a release candidate), not of the final 1.0.0 release. The run was made before the 1.0.0 release. No file in this directory was made with the final 1.0.0.
+
+**Hardware: not recorded in these runs.** The files hold only the platform (`win32`), the number of logical CPUs (16) and the torch thread count (8). They do not hold the CPU model, the RAM, the clock speed or the power plan. Do not compare the numbers with a run on other hardware.
+
 ## Fixture and compute-heavy models
 
 Closed-loop load, 3.0 s window after 1.0 s warm-up, load generator sharded over up to 6 processes on the same machine. Every server gets the same seeded weights and byte-identical request bodies, and every row's response is checked element-wise against eager PyTorch.
@@ -278,6 +282,6 @@ Median of 300 sequential requests on one keep-alive connection, batch 1 (HF: one
 - **The result cache is off in every headline row.** Version 1.0.0 turns the result cache on by default for a model with independent rows. The harness sends the same body again and again, so a cache would answer from memory and the row would not measure the model. Every `1.0.0rc1` row but "result cache on" starts with `--result-cache-rows 0`. Version 0.5.1 has no cache. The "result cache on" rows use the default and send the same body every time, so they show the best case (every request is a hit), not a normal workload.
 - **The cache does nothing for two of the four fixtures.** `downshift check` says `Rows dependent` for `tiny_bert` and `Rows not checked` for `scatter_include_self_false` (the numerics check failed). The default cache is off for both, so their "result cache on" rows are an ordinary run and differ from the default rows only by noise.
 - **`--metrics` rows** start the same server as the default row with `--metrics` added.
-- **Slow `mlp_large` row.** In the main pass, 1.0.0rc1 default on `mlp_large` reached 765 rps (c=64, p99 240 ms) against 965 rps for 0.5.1, and its `--metrics` row reached 919 rps. That does not fit one code path, so the case was measured again with only batch 1 and the variants `downshift` and `downshift_metrics` (file `rerun_mlp_large.json`, same session, nothing else running): 1.0.0rc1 default peak 939 rps, `--metrics` 920 rps, 0.5.1 989 rps. The main-pass row is kept in the tables above. Use the re-run for comparisons on `mlp_large`.
+- **Slow `mlp_large` row.** In the main pass, 1.0.0rc1 default on `mlp_large` reached 765 rps (c=64, p99 240 ms) against 965 rps for 0.5.1, and its `--metrics` row reached 919 rps. That does not fit one code path, so the case was measured again with only batch 1 and the variants `downshift` and `downshift_metrics` (file `rerun_mlp_large.json`, same session, nothing else running): 1.0.0rc1 default peak 942 rps (c=64; 939 rps at c=16), `--metrics` peak 934 rps (c=64; 920 rps at c=16), 0.5.1 peak 989 rps (c=16). Values are from `rerun_mlp_large.json`. The main-pass row is kept in the tables above. Use the re-run for comparisons on `mlp_large`.
 - Windows are 3 s on the fixtures and 5 s on MiniLM, as in the 0.5.0 run. The `--workers` sweep was not part of this run, and Prompt Guard was not measured.
 - Machine state differs from the 0.5.0 run (the hand-rolled servers are faster here too), so compare rows inside this report, not with `results/v0.5.0/`.

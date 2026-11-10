@@ -17,6 +17,7 @@ A set of static pages that show the benchmark data of `bench/` to an outside rea
 | `boot-time.html` | The seconds before the first request. |
 | `scaling.html` | The `--workers` sweep (0.5.0 data; not run for 1.0.0rc1). |
 | `releases.html` | Release to release, inside one run each. |
+| `../CAPABILITIES.md` | Not a page of this folder. One table: each capability, the result file that shows it, and one number. |
 | `SUMMARY.html` | One page for print or screenshot. |
 | `RESULTS.md` | The key tables as plain text, with the source file of each. |
 | `METHODOLOGY.md` | How the data is made, hardware and versions, how to reproduce, limits. |
@@ -28,7 +29,7 @@ A set of static pages that show the benchmark data of `bench/` to an outside rea
 
 ## How to open it
 
-Open `bench/showcase/index.html` in a browser. The pages are self-contained: inline CSS, inline SVG, no script, no network. They work from disk, at phone width, and in light and dark mode.
+Open `bench/showcase/index.html` in a browser. To find the proof of one capability, read [`../CAPABILITIES.md`](../CAPABILITIES.md). The pages are self-contained: inline CSS, inline SVG, no script, no network. They work from disk, at phone width, and in light and dark mode.
 
 ## How to rebuild
 
@@ -42,6 +43,7 @@ python bench/showcase/build_showcase.py
 - If a source file is missing, the page shows a "Missing data" note and the script exits with code 1.
 - Some sentences depend on the data. The script checks them (`claim(...)`). If the data change and a sentence is no longer true, the build stops with an error. Change the sentence, then build again.
 - To show a new run, change the paths `R1`, `R5` and `R6` at the top of the script.
+- `results/v1.0.0/` holds data of 1.0.0rc1. The hardware (CPU model, RAM) is not recorded in any run. The pages say so.
 
 ## Rules of the pages
 

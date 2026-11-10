@@ -888,7 +888,8 @@ def run_meta() -> str:
     return (
         f"Run {esc(env1()['timestamp'])}. {esc(env1()['platform'])}, {env1()['cpu_count']} logical CPUs, "
         f"Python {esc(env1()['python'])}, torch {esc(env1()['torch'])}, onnxruntime {esc(env1()['onnxruntime'])}. "
-        "downshift 1.0.0rc1 from the checkout, 0.5.1 from PyPI. The folder is named <code>v1.0.0</code>."
+        "downshift 1.0.0rc1 from the checkout, 0.5.1 from PyPI. The folder is named <code>v1.0.0</code>, but its data is from the release candidate 1.0.0rc1. "
+        "Hardware: not recorded in these runs (the files hold the CPU count only)."
     )
 
 
@@ -1141,11 +1142,10 @@ def page_throughput() -> str:
     )
     body.append(
         note(
-            "bad",
-            f"The text of <code>results/v1.0.0/REPORT.md</code> gives the re-run peaks as 939, 920 and 989 requests/s. "
-            f"The file <code>rerun_mlp_large.json</code> has {n1(rerun_peaks[('downshift', '1.0.0rc1')])}, {n1(rerun_peaks[('downshift_metrics', '1.0.0rc1')])} and {n1(rerun_peaks[('downshift', '0.5.1')])}. "
-            "The report values are the c=16 points. The tables on this page use the file values.",
-            "Source mismatch.",
+            "info",
+            f"Re-run peaks of <code>rerun_mlp_large.json</code>: {n1(rerun_peaks[('downshift', '1.0.0rc1')])} (default), {n1(rerun_peaks[('downshift_metrics', '1.0.0rc1')])} (<code>--metrics</code>) and {n1(rerun_peaks[('downshift', '0.5.1')])} (0.5.1) requests/s. "
+            "Each value is the best point of the sweep. Some earlier text quoted the c=16 points, which are lower for the two 1.0.0rc1 rows. The tables on this page use the best points.",
+            "Note.",
         )
     )
 
@@ -2473,7 +2473,7 @@ def parse_matrix():
             cells = [c.strip() for c in line.strip().strip("|").split("|")]
             rows.append([c.strip("`") for c in cells])
     real_part = text.split("<!-- real-models:start -->")[1]
-    gen2 = re.search(r"Generated (\S+) by `scripts/gen_matrix.py` with (.+?)\.\n", real_part)
+    gen2 = re.search(r"Generated (\S+) by `scripts/check_real_models.py` with (.+?)\.\n", real_part)
     return rows, (gen.groups() if gen else ("?", "?")), (gen2.groups() if gen2 else ("?", "?"))
 
 
@@ -3353,6 +3353,7 @@ def page_index() -> str:
         ul(
             [
                 "Every number comes from a file in <code>bench/</code>. Each page lists its sources at the end.",
+                'To find the proof of one capability, read <a href="../CAPABILITIES.md">CAPABILITIES.md</a>. It names the result file and gives one number for each capability.',
                 "Each page has the same parts: the question, the method, the results, what the data shows, and what it does not show.",
                 "Charts have text labels. A table with the same numbers follows each chart.",
                 "Read the limits. All load results are from one machine, in one run, with no repeats.",
@@ -3597,7 +3598,7 @@ downshift picks a backend from a correctness verdict. The benchmark does not ask
 | Main run date | {env["timestamp"]} (HF part: {hf["environment"]["timestamp"]}) | `results.json`, `results_hf.json` |
 | Platform | {env["platform"]}; `{hf["platform"]}` | `results.json`, `results_hf.json` |
 | Logical CPUs | {env["cpu_count"]} | `results.json` |
-| CPU model, RAM | not recorded in the 1.0.0 files | - |
+| CPU model, RAM | not recorded in these runs (hardware: not recorded) | - |
 | Python | {env["python"]} | `results.json` |
 | torch | {env["torch"]}; torch threads {env["torch_num_threads"]} | `results.json` |
 | onnxruntime | {env["onnxruntime"]}; providers {", ".join(env["ort_providers"])} | `results.json` |
@@ -3640,7 +3641,7 @@ Without `--out`, the commands write to `bench/scratch/`. A trial run never overw
 11. **The gate is a sample.** The gate runs 8 samples. A fault that none of them hits is not found. The real-model check shows verdicts, not a false-negative rate.
 12. **Boot time ends are not equal.** downshift is ready on `/ready`. The hand-rolled servers are ready on `/health`.
 13. **CPU and Windows only.** GPU, Linux and macOS are not measured.
-14. **Source mismatches.** Some existing files disagree (for example the re-run peaks in `results/v1.0.0/REPORT.md`, and the version text in `docs/compatibility.md`). The pages show the file values and mark the mismatch.
+14. **Source mismatches.** The pages show the values of the data files. If a text file disagrees with a data file, the page marks the mismatch. No mismatch is known now.
 
 ## 7. How the site is made
 

@@ -44,7 +44,7 @@ downshift picks a backend from a correctness verdict. The benchmark does not ask
 | Main run date | 2026-11-07T22:59:00 (HF part: 2026-11-07T23:45:53) | `results.json`, `results_hf.json` |
 | Platform | win32; `Windows-11-10.0.26200-SP0` | `results.json`, `results_hf.json` |
 | Logical CPUs | 16 | `results.json` |
-| CPU model, RAM | not recorded in the 1.0.0 files | - |
+| CPU model, RAM | not recorded in these runs (hardware: not recorded) | - |
 | Python | 3.12.10 | `results.json` |
 | torch | 2.14.0+cpu; torch threads 8 | `results.json` |
 | onnxruntime | 1.30.0; providers AzureExecutionProvider, CPUExecutionProvider | `results.json` |
@@ -87,7 +87,7 @@ Without `--out`, the commands write to `bench/scratch/`. A trial run never overw
 11. **The gate is a sample.** The gate runs 8 samples. A fault that none of them hits is not found. The real-model check shows verdicts, not a false-negative rate.
 12. **Boot time ends are not equal.** downshift is ready on `/ready`. The hand-rolled servers are ready on `/health`.
 13. **CPU and Windows only.** GPU, Linux and macOS are not measured.
-14. **Source mismatches.** Some existing files disagree (for example the re-run peaks in `results/v1.0.0/REPORT.md`, and the version text in `docs/compatibility.md`). The pages show the file values and mark the mismatch.
+14. **Source mismatches.** The pages show the values of the data files. If a text file disagrees with a data file, the page marks the mismatch. No mismatch is known now.
 
 ## 7. How the site is made
 
