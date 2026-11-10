@@ -47,9 +47,14 @@ jobs:
       # onnx-ir 0.1.16 and later broke the exporter of torch 2.6: its version converter said "The
       # model contains functions" and every export was FAILED. 0.1.15 is the newest that worked
       # there. The pin keeps the floor job the same on each run.
-      - run: pip install "onnx==1.23.2" "onnxruntime==1.20.1" "onnxscript==0.5.0" "onnx-ir<0.1.16" "numpy==2.0.2" "transformers==5.17.0"
-      # The other declared minimums (pyproject.toml), pinned to the exact floor so that CI proves them.
-      - run: pip install "typer==0.12.0" "fastapi==0.115.0" "uvicorn[standard]==0.30.0" "pydantic==2.5.0" "orjson==3.9.7" "torch-geometric==2.5.0"
+      # One pip command for all pins, so that pip resolves them together. typer 0.12 to 0.14 were
+      # three packages (typer, typer-slim, typer-cli) that share one folder. If pip installs them
+      # on top of a newer typer, its uninstall step deletes the new files, and `import typer` fails.
+      # That is why the typer floor is 0.15, the first release of one package again.
+      - run: >-
+          pip install "onnx==1.23.2" "onnxruntime==1.20.1" "onnxscript==0.5.0" "onnx-ir<0.1.16"
+          "numpy==2.0.2" "transformers==5.17.0" "typer==0.15.4" "fastapi==0.115.0"
+          "uvicorn[standard]==0.30.0" "pydantic==2.5.0" "orjson==3.9.7" "torch-geometric==2.5.0"
       - run: pip install -e ".[dev,gnn,hf,fast]"
       # The HTTPS tests make a throwaway certificate with the openssl command (tests/conftest.py).
       # The runner images have it. The install is only a fallback.
