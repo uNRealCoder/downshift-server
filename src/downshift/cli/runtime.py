@@ -210,10 +210,13 @@ def _serve_app_factory() -> FastAPI:
     A worker that cannot load exits with uvicorn's STARTUP_FAILURE code, which stops the whole
     server instead of a restart into the same failure.
     """
-    from uvicorn.config import STARTUP_FAILURE
+    import uvicorn.config
 
     from downshift.serve.app import build_app
 
+    # uvicorn's exit code for a failed start. Older uvicorn stubs do not declare the name, so read it
+    # with getattr. 3 is its value in every release.
+    startup_failure: int = getattr(uvicorn.config, "STARTUP_FAILURE", 3)
     args = ServeArgs.from_json(os.environ[_SERVE_ARGS_ENV])
     _setup_logging(LogLevel(args.log_level))
 
@@ -224,7 +227,7 @@ def _serve_app_factory() -> FastAPI:
             if LogLevel(args.log_level) is LogLevel.debug:
                 render.print_traceback()
             render.error(f"model failed to load in this worker: {type(exc).__name__}: {exc}")
-            os._exit(STARTUP_FAILURE)
+            os._exit(startup_failure)
         release_graph(state)
         render.print_ready(state)
         return state

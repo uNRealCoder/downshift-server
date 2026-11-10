@@ -55,7 +55,8 @@ class ApiError(HTTPException):
         headers: Mapping[str, str] | None = None,
         param: str | None = None,
     ) -> None:
-        super().__init__(status, message, headers=headers)
+        # Older fastapi types the headers as dict, so pass a dict.
+        super().__init__(status, message, headers=dict(headers) if headers is not None else None)
         self.code = code
         self.param = param
 
@@ -100,7 +101,9 @@ def error_response(
         body = {"detail": message, "code": code}
         if request_id is not None:
             body["request_id"] = request_id
-    return JSONResponse(body, status_code=status, headers=headers)
+    return JSONResponse(
+        body, status_code=status, headers=dict(headers) if headers is not None else None
+    )
 
 
 async def http_error_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
