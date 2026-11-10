@@ -25,10 +25,10 @@ classifiers = [
 ]
 
 dependencies = [
-    "torch>=2.7",  # CI tests the floor on 2.7; torch 2.6 cannot export a Hugging Face encoder up to its position limit
-    "onnx>=1.16",  # onnxscript's own floor; older onnx also hits real bugs in torch 2.5's exporter
-    "onnxruntime>=1.17",
-    "onnxscript>=0.5",  # 0.1-0.4 fail to translate ops torch 2.5's exporter emits for dynamic shapes
+    "torch>=2.8",  # CI tests the floor on 2.8; torch 2.6 and 2.7 cannot export a Hugging Face encoder up to its position limit
+    "onnx>=1.23",  # the floor job tests the latest stable onnx; only the dynamo exporter is used, so no legacy exporter limits it
+    "onnxruntime>=1.20",  # torch 2.8 writes IR version 10 graphs (ORT 1.17 reads up to 9); ORT 1.18 has no CPU kernel for ArgMax(13), which last-token pooling needs
+    "onnxscript>=0.5",  # 0.1-0.4 fail to translate ops that the torch exporter emits for dynamic shapes
     "typer>=0.12",
     "fastapi>=0.100",
     "uvicorn[standard]>=0.23",
