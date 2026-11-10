@@ -174,3 +174,20 @@ def test_opset_is_the_one_of_the_default_domain(monkeypatch):
 
     assert result.success is True
     assert result.opset is not None and result.opset > 1
+
+
+def test_capture_keeps_what_the_exporter_prints_off_stdout(monkeypatch, capsys):
+    """onnxscript 0.5 prints a line on stdout during the export. `check --json` needs stdout to
+    hold only the JSON."""
+    real_export = torch.onnx.export
+
+    def noisy_export(*args, **kwargs):
+        print("Applied 1 of general pattern rewrite rules.")
+        return real_export(*args, **kwargs)
+
+    monkeypatch.setattr(torch.onnx, "export", noisy_export)
+
+    result = capture(clean_mlp.make_model(), clean_mlp.make_inputs())
+
+    assert result.success is True
+    assert capsys.readouterr().out == ""

@@ -65,6 +65,7 @@ All notable changes to this project are documented here. Format follows
 
 ### Fixed
 
+- `check --json` and `export --json` could print `Applied N of general pattern rewrite rules.` before the JSON, with `onnxscript` 0.5 (it prints this line on stdout during the export). The export now drops what `onnxscript` prints on stdout, so stdout holds only the JSON.
 - With `--workers N`, an input named `file` or `allow_pickle` no longer breaks the hand-off of the example inputs to the workers. The file uses the `in.` name prefix, as the export cache does.
 - `--device auto` now serves on the CPU if torch has a GPU but ONNX Runtime has no CUDA provider (or the provider does not start). The server logs one line. Before, the boot failed. An explicit `--device cuda` still fails with a message.
 - `--device cuda:N` with N at or above the number of GPUs now gives a usage error that names the valid range. Before, it gave a raw error and exit code `5`.

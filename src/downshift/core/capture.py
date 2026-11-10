@@ -38,11 +38,13 @@ def _quiet_registration_warnings() -> Iterator[None]:
 
 @contextlib.contextmanager
 def _capture_torch_output(sink: io.StringIO) -> Iterator[None]:
-    """Collect what torch prints during the export (whole FX graphs on a failed guard). The
-    sys.stderr swap is process-wide, so it happens only on the main thread. On the serve loader
-    thread, next to a live server, only the torch loggers are collected."""
+    """Collect what torch prints during the export (whole FX graphs on a failed guard). Drop what
+    onnxscript prints on stdout (onnxscript 0.5 prints "Applied N of general pattern rewrite
+    rules."), so `--json` output stays valid JSON. The sys.stderr and sys.stdout swaps are
+    process-wide, so they happen only on the main thread. On the serve loader thread, next to a
+    live server, only the torch loggers are collected."""
     if threading.current_thread() is threading.main_thread():
-        with contextlib.redirect_stderr(sink):
+        with contextlib.redirect_stderr(sink), contextlib.redirect_stdout(io.StringIO()):
             yield
         return
     handler = logging.StreamHandler(sink)
