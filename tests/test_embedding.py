@@ -421,7 +421,13 @@ def test_check_takes_the_pooling_flags(repo):
     result = _cli("check", repo, "--pooling", "cls", "--no-normalize", "--json")
 
     assert result.exit_code == 0, result.output
-    assert json.loads(result.stdout)["status"] == "CLEAN"
+    try:
+        status = json.loads(result.stdout)["status"]
+    except ValueError:
+        pytest.fail(
+            f"stdout is not JSON.\nstdout: {result.stdout[:800]!r}\noutput: {result.output[:800]!r}"
+        )
+    assert status == "CLEAN"
 
 
 def test_check_rejects_an_unknown_pooling(repo):

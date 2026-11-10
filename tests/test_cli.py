@@ -37,7 +37,14 @@ def run(*args: str):
 
 def parse(result) -> dict:
     assert result.exit_code in (0, 1, 2, 3), result.output
-    return json.loads(result.stdout)
+    try:
+        parsed: dict = json.loads(result.stdout)
+    except ValueError:
+        # Show what the command wrote. The bare JSON error does not.
+        pytest.fail(
+            f"stdout is not JSON.\nstdout: {result.stdout[:800]!r}\noutput: {result.output[:800]!r}"
+        )
+    return parsed
 
 
 @pytest.fixture(scope="module")

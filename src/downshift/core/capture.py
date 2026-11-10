@@ -147,7 +147,11 @@ def capture(
             )
 
         try:
-            onnx_program = torch.onnx.export(exported_program, verbose=False, report=False)
+            # dynamo=True is explicit: downshift only uses the dynamo exporter. (An ExportedProgram
+            # already selects it in torch 2.6 and later, and torch 2.9 made it the default.)
+            onnx_program = torch.onnx.export(
+                exported_program, verbose=False, report=False, dynamo=True
+            )
             if onnx_program is None:  # the stub allows it for the legacy path, never for a program
                 raise RuntimeError("torch.onnx.export returned None")
         except Exception as exc:  # noqa: BLE001 - a failed translation is a failed capture
