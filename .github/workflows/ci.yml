@@ -50,11 +50,11 @@ jobs:
       # One pip command for all pins, so that pip resolves them together. typer 0.12 to 0.14 were
       # three packages (typer, typer-slim, typer-cli) that share one folder. If pip installs them
       # on top of a newer typer, its uninstall step deletes the new files, and `import typer` fails.
-      # That is why the typer floor is 0.16 (0.15 is also one package).
+      # The typer floor is 0.19 for another reason: typer 0.18 and earlier import rich at load time.
       - run: >-
           pip install "onnx==1.23.2" "onnxruntime==1.20.1" "onnxscript==0.5.0" "onnx-ir<0.1.16"
-          "numpy==2.0.2" "transformers==5.17.0" "typer==0.16.0" "fastapi==0.115.0"
-          "uvicorn[standard]==0.30.0" "pydantic==2.5.0" "orjson==3.9.7" "torch-geometric==2.5.0"
+          "numpy==2.0.2" "transformers==5.17.0" "typer==0.19.0" "fastapi==0.115.0"
+          "uvicorn[standard]==0.30.0" "pydantic==2.5.0" "orjson==3.10.7" "torch-geometric==2.7.0"
       - run: pip install -e ".[dev,gnn,hf,fast]"
       # The HTTPS tests make a throwaway certificate with the openssl command (tests/conftest.py).
       # The runner images have it. The install is only a fallback.

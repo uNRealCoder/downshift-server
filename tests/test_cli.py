@@ -546,9 +546,12 @@ def test_a_worker_that_cannot_load_exits_with_uvicorns_startup_failure_code(monk
     It would then reload the same failing model forever. STARTUP_FAILURE makes it stop the
     server."""
     pytest.importorskip("downshift.serve.app")
-    from uvicorn.config import STARTUP_FAILURE
+    import uvicorn.config
 
     from downshift.cli import runtime
+
+    # Older uvicorn does not declare the name in uvicorn.config. Its value is 3 in every release.
+    STARTUP_FAILURE = getattr(uvicorn.config, "STARTUP_FAILURE", 3)
 
     args = runtime.ServeArgs(
         load=LoadSpec(CLEAN),
