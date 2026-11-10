@@ -30,9 +30,9 @@ dependencies = [
     "onnxruntime>=1.20",  # torch 2.8 writes IR version 10 graphs (ORT 1.17 reads up to 9); ORT 1.18 has no CPU kernel for ArgMax(13), which last-token pooling needs
     "onnxscript>=0.5",  # 0.1-0.4 fail to translate ops that the torch exporter emits for dynamic shapes
     "typer>=0.12",
-    "fastapi>=0.100",
-    "uvicorn[standard]>=0.23",
-    "numpy>=1.26",  # first numpy with Python 3.12 wheels; the floor job tests it
+    "fastapi>=0.115",  # the floor job tests it; fastapi 0.100 types HTTPException headers as dict, which fails mypy
+    "uvicorn[standard]>=0.30",  # the floor job tests it; uvicorn 0.23 has no uvicorn.config.STARTUP_FAILURE
+    "numpy>=2.0",  # numpy 2 only; the floor job tests 2.0.2 (torch 2.8 and onnxruntime 1.20 both support numpy 2)
     "pydantic>=2.5",  # first pydantic with Python 3.12 support; the floor job tests it
     "orjson>=3.9.7",  # first orjson with Python 3.12 wheels; the floor job tests it
 ]
