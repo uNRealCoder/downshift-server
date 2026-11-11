@@ -1,4 +1,3 @@
-import dataclasses
 import json
 import re
 from pathlib import Path
@@ -15,6 +14,7 @@ from downshift.serve.app import build_app
 from downshift.serve.codec import decode_safetensors, encode_safetensors
 from downshift.serve.engine import prepare_serving
 from downshift.serve.options import ExecutionChoice
+from tests.conftest import with_options
 from tests.models import hf_repo
 
 BIG = 1 << 30
@@ -179,10 +179,6 @@ def _outputs(resp) -> dict[str, np.ndarray]:
     return st_load(resp.content)
 
 
-def _with(state, **overrides):
-    return dataclasses.replace(state, options=dataclasses.replace(state.options, **overrides))
-
-
 def test_binary_request_matches_json(mlp_client):
     x = np.random.default_rng(0).standard_normal((3, 16)).astype(np.float32)
     want = mlp_client.post("/predict", json={"inputs": {"x": x.tolist()}}).json()
@@ -252,15 +248,15 @@ def test_text_in_metadata_is_400(mlp_client):
 def test_body_limit_and_max_input_bytes(mlp_state):
     x = np.zeros((4, 16), dtype=np.float32)
     body_len = len(st_save({"x": x}))
-    client = TestClient(build_app(_with(mlp_state, max_body_bytes=body_len - 1)))
+    client = TestClient(build_app(with_options(mlp_state, max_body_bytes=body_len - 1)))
     assert _post(client, "/predict", {"x": x}).status_code == 413
-    client = TestClient(build_app(_with(mlp_state, max_input_bytes=255)))
+    client = TestClient(build_app(with_options(mlp_state, max_input_bytes=255)))
     resp = _post(client, "/predict", {"x": x})
     assert resp.status_code == 400 and "input limit" in resp.json()["detail"]
 
 
 def test_binary_never_goes_inline(mlp_state):
-    state = _with(mlp_state, execution=ExecutionChoice.inline, server_timing=True)
+    state = with_options(mlp_state, execution=ExecutionChoice.inline, server_timing=True)
     resp = _post(TestClient(build_app(state)), "/predict", {"x": np.zeros((1, 16), np.float32)})
     assert resp.status_code == 200
     # On the event loop, the prep wait would be 0.00.

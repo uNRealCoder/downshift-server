@@ -14,15 +14,11 @@ from fastapi.testclient import TestClient
 from downshift.adapters.text import TextTooLongError
 from downshift.serve.app import build_app
 from downshift.serve.errors import ERROR_CODES, http_error_handler
+from tests.conftest import with_options
 
 GOOD = {"inputs": {"x": [[0.0] * 16]}}
-ST = "application/vnd.safetensors"
 KEY = "s3cret"
 REPO = Path(__file__).resolve().parent.parent
-
-
-def _state(state, **options):
-    return dataclasses.replace(state, options=dataclasses.replace(state.options, **options))
 
 
 def _text_state(state, **recipe):
@@ -72,7 +68,7 @@ def _unauthorized(state, monkeypatch):
 
 
 def _body_too_large(state, monkeypatch):
-    return _client(_state(state, max_body_bytes=10)).post("/predict", json=GOOD)
+    return _client(with_options(state, max_body_bytes=10)).post("/predict", json=GOOD)
 
 
 def _unsupported_media_type(state, monkeypatch):
@@ -94,7 +90,7 @@ def _not_ready(state, monkeypatch):
 
 
 def _at_capacity(state, monkeypatch):
-    full = _state(state, max_concurrency=1, max_queue=0)
+    full = with_options(state, max_concurrency=1, max_queue=0)
     full.in_flight = 1
     return _client(full).post("/predict", json=GOOD)
 
@@ -103,7 +99,7 @@ def _request_timeout(state, monkeypatch):
     def slow(inputs):
         time.sleep(0.5)
 
-    slow_state = _state(state, request_timeout=0.05)
+    slow_state = with_options(state, request_timeout=0.05)
     monkeypatch.setattr(slow_state.backend, "infer", slow)
     return _client(slow_state).post("/predict", json=GOOD)
 

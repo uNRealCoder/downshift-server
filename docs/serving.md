@@ -2,16 +2,7 @@
 
 This page describes the code under `downshift serve` and `app_for`, for a person who changes it. To run a server, read [`production.md`](production.md). To call one, read [`http-api.md`](http-api.md).
 
-| Module | Contents |
-|---|---|
-| `serve/options.py` | `ServeOptions`, `BackendChoice`, `ExecutionChoice`. No torch import. |
-| `serve/engine.py` | `ServingState`, `choose_backend`, the boot builders and the warmup. |
-| `serve/reuse.py` | The boot from an earlier export: the memo, the disk cache, or the `--workers` handoff. |
-| `serve/app.py` | `build_app`, the routes, `PredictRoute`, and the request-ID and API-key middleware. |
-| `serve/predict.py` | The request path of `/predict` and `/predict/graph`. |
-| `serve/result_cache.py` | The result cache. |
-| `serve/backends.py` | `OnnxRuntimeBackend` and `TorchBackend`. |
-| `serve/describe.py`, `serve/schemas.py`, `serve/codec.py`, `serve/graphs.py` | `/schema`, the pydantic models, the base64 and safetensors codecs, and graph batching. |
+The `serve/` modules are in the [module map](README.md#module-map).
 
 ## `ServeOptions`
 

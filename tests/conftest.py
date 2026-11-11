@@ -5,6 +5,7 @@ that more than one module needs one time for each session.
 """
 
 import base64
+import dataclasses
 import os
 import shutil
 import subprocess
@@ -108,6 +109,11 @@ def subprocess_env(*extra_paths: Path) -> dict[str, str]:
     paths = [str(REPO_ROOT / "src"), *map(str, extra_paths), env.get("PYTHONPATH", "")]
     env["PYTHONPATH"] = os.pathsep.join(paths)
     return env
+
+
+def with_options(state: ServingState, **overrides) -> ServingState:
+    """A copy of `state` whose ServeOptions have the changes in `overrides`."""
+    return dataclasses.replace(state, options=dataclasses.replace(state.options, **overrides))
 
 
 def b64_input(arr: np.ndarray, **overrides) -> dict:

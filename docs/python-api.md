@@ -390,19 +390,7 @@ class WorstMismatch:
 
 ### `Adapter`
 
-```python
-@runtime_checkable
-class Adapter(Protocol):
-    name: str
-
-    def matches(self, model: nn.Module, example_inputs: tuple | None) -> bool: ...
-    def example_inputs(self, model: nn.Module) -> tuple | None: ...
-    def prepare(
-        self, model: nn.Module, example_inputs: tuple, axis_max: dict[str, int] | None = None
-    ) -> Prepared: ...
-```
-
-`Adapter` is a `typing.Protocol` with `@runtime_checkable`, so `isinstance(obj, Adapter)` works. `registry.load_from_file` uses this to validate a custom adapter. [`adapters.md`](adapters.md) has the full contract, the resolution order and a worked example.
+`Adapter` is a `typing.Protocol` with `@runtime_checkable`, so `isinstance(obj, Adapter)` works. It has the attribute `name` and the methods `matches`, `example_inputs` and `prepare`. `registry.load_from_file` uses this to validate a custom adapter. [`adapters.md`](adapters.md) has the full contract, the resolution order and a worked example.
 
 ### `Prepared`
 

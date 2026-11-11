@@ -65,7 +65,7 @@ The JSON wire formats and the safetensors wire format are part of the contract. 
 
 ## Result cache
 
-The result cache is on when the row check finds the rows independent. The row check uses two rows, so it cannot prove that a small effect is absent. On a server with more than one tenant, a hit is faster than a miss, and a client can see the difference. To turn the cache off, set `--result-cache-rows 0`. Refer to [Result cache](production.md#result-cache).
+The result cache is on when the row check finds the rows independent. To turn it off, set `--result-cache-rows 0`. On a server with more than one tenant, read the warning in [Result cache](production.md#result-cache).
 
 ## OpenAI routes
 

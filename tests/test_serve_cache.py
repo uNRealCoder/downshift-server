@@ -2,7 +2,6 @@
 
 import asyncio
 import base64
-import dataclasses
 import threading
 import time
 from concurrent.futures import Future
@@ -25,6 +24,7 @@ from downshift.serve.engine import prepare_serving
 from downshift.serve.options import ServeOptions
 from downshift.serve.result_cache import Lookup
 from downshift.settings import DEFAULT_RESULT_CACHE_ROWS
+from tests.conftest import with_options
 from tests.models import hf_repo
 
 
@@ -157,9 +157,7 @@ def test_a_partial_hit_runs_only_the_rows_that_missed_in_the_order_of_the_reques
     mixed = _post(client, _x(3.0, 1.0, 4.0, 2.0)).json()
 
     assert spy.rows == [2]
-    uncached = dataclasses.replace(
-        state, options=dataclasses.replace(state.options, result_cache_rows=0)
-    )
+    uncached = with_options(state, result_cache_rows=0)
     reference = TestClient(build_app(uncached))
     expected = _post(reference, _x(3.0, 1.0, 4.0, 2.0)).json()
     np.testing.assert_allclose(

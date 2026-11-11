@@ -2,7 +2,6 @@
 request body, the admission before the body is read, bf16 models, the checks of input ranges,
 the /ready phases and the mapping of torch errors."""
 
-import dataclasses
 import logging
 import threading
 import time
@@ -21,6 +20,7 @@ from downshift.serve.app import build_app
 from downshift.serve.backends import OnnxRuntimeBackend, TorchBackend
 from downshift.serve.engine import ServeOptions, ServingState, prepare_serving
 from downshift.serve.options import BackendChoice
+from tests.conftest import with_options
 
 MLP_INPUT = {"inputs": {"x": [[0.0] * 16]}}
 NOT_SET = "DOWNSHIFT_API_KEY is not set"
@@ -33,10 +33,6 @@ def _serve(spec: str, **opts) -> ServingState:
     return prepare_serving(load_model(LoadSpec(spec)), ServeOptions(warmup=1, **opts))
 
 
-def _with_options(state: ServingState, **overrides) -> ServingState:
-    return dataclasses.replace(state, options=dataclasses.replace(state.options, **overrides))
-
-
 @pytest.fixture(scope="module")
 def mlp_state() -> ServingState:
     return _serve("tests.models.clean_mlp:make_model", result_cache_rows=0)
@@ -44,7 +40,7 @@ def mlp_state() -> ServingState:
 
 @pytest.fixture(scope="module")
 def small_body_state(mlp_state) -> ServingState:
-    return _with_options(mlp_state, max_body_bytes=BODY_LIMIT)
+    return with_options(mlp_state, max_body_bytes=BODY_LIMIT)
 
 
 # --- API key ---------------------------------------------------------------------------------
@@ -220,7 +216,7 @@ def test_a_content_length_over_the_limit_is_413_before_the_handler_runs(
 
 @pytest.fixture
 def tight_state(mlp_state) -> ServingState:
-    return _with_options(mlp_state, max_concurrency=1, max_queue=0, max_body_bytes=BODY_LIMIT)
+    return with_options(mlp_state, max_concurrency=1, max_queue=0, max_body_bytes=BODY_LIMIT)
 
 
 def test_a_full_server_answers_503_without_reading_the_body(tight_state):
@@ -605,7 +601,7 @@ def test_a_request_queued_for_inference_still_times_out(mlp_state, monkeypatch):
         gate.wait(30)
         return {"output_0": np.zeros((1, 4), dtype=np.float32)}
 
-    state = _with_options(mlp_state, max_concurrency=1, max_queue=5, request_timeout=0.1)
+    state = with_options(mlp_state, max_concurrency=1, max_queue=5, request_timeout=0.1)
     monkeypatch.setattr(state.backend, "infer", slow_infer)
     client = TestClient(build_app(state, api_key=None))
     results: list[int] = []
@@ -648,7 +644,7 @@ def test_a_500_sets_the_configured_request_id_header(torch_state, monkeypatch):
 
 
 def test_a_timeout_error_inside_the_backend_is_not_a_request_timeout(mlp_state, monkeypatch):
-    state = _with_options(mlp_state, request_timeout=30.0)
+    state = with_options(mlp_state, request_timeout=30.0)
 
     def broken(_inputs):
         raise TimeoutError("the backend lost a socket")

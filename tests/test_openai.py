@@ -21,6 +21,7 @@ from downshift.serve.engine import prepare_serving
 from downshift.serve.errors import ApiError
 from downshift.serve.openai import _check_dimensions, _matryoshka_cut
 from downshift.serve.options import ServeOptions
+from tests.conftest import with_options
 from tests.models import hf_repo
 
 
@@ -42,10 +43,6 @@ def name(state) -> str:
 @pytest.fixture(scope="module")
 def client(state) -> TestClient:
     return TestClient(build_app(state, api_key=None))
-
-
-def _with(state, **options):
-    return dataclasses.replace(state, options=dataclasses.replace(state.options, **options))
 
 
 def _embed(client, name, input_, **extra):
@@ -90,7 +87,9 @@ def test_version_route(client):
 
 
 def test_served_model_name_replaces_the_name_and_survives_the_workers(state, repo):
-    renamed = TestClient(build_app(_with(state, served_model_name="my-embedder"), api_key=None))
+    renamed = TestClient(
+        build_app(with_options(state, served_model_name="my-embedder"), api_key=None)
+    )
 
     assert renamed.get("/v1/models").json()["data"][0]["id"] == "my-embedder"
     assert renamed.get("/v1/models/my-embedder").status_code == 200
@@ -197,7 +196,7 @@ def test_predict_does_not_show_the_token_count_of_a_cached_row(state):
 
 
 def test_without_the_cache_the_usage_is_the_same(state, name):
-    plain = TestClient(build_app(_with(state, result_cache_rows=0), api_key=None))
+    plain = TestClient(build_app(with_options(state, result_cache_rows=0), api_key=None))
     assert plain.app.state.serving.result_cache is None
 
     body = _embed(plain, name, ["hello world", "the"]).json()
@@ -253,7 +252,7 @@ def test_dimensions_are_not_supported_without_matryoshka(client, name):
 
 @pytest.fixture(scope="module")
 def cut_client(state) -> TestClient:
-    return TestClient(build_app(_with(state, matryoshka=True), api_key=None))
+    return TestClient(build_app(with_options(state, matryoshka=True), api_key=None))
 
 
 def test_dimensions_keep_the_first_values_and_scale_them_to_unit_length(cut_client, name):
@@ -284,7 +283,7 @@ def test_all_the_dimensions_are_a_valid_request(cut_client, name):
 
 
 def test_one_cache_entry_serves_all_sizes(state, name):
-    cached = TestClient(build_app(_with(state, matryoshka=True), api_key=None))
+    cached = TestClient(build_app(with_options(state, matryoshka=True), api_key=None))
     texts = ["cut cache hello", "cut cache world"]
     for _ in range(2):  # a row is stored on its second sighting
         _embed(cached, name, texts)
@@ -335,7 +334,7 @@ def test_a_zero_vector_stays_zero():
 
 
 def test_server_timing_is_on_the_embeddings_route_when_the_option_is_on(state, name):
-    timed = TestClient(build_app(_with(state, server_timing=True), api_key=None))
+    timed = TestClient(build_app(with_options(state, server_timing=True), api_key=None))
 
     header = _embed(timed, name, "hello").headers["server-timing"]
 
@@ -420,7 +419,7 @@ def test_the_other_routes_keep_the_detail_shape(client):
 
 
 def test_a_413_and_a_415_have_the_openai_shape(state, name):
-    small = TestClient(build_app(_with(state, max_body_bytes=10), api_key=None))
+    small = TestClient(build_app(with_options(state, max_body_bytes=10), api_key=None))
 
     _shape(_embed(small, name, "hello world"), 413, "invalid_request_error", "body_too_large")
     _shape(
@@ -442,7 +441,7 @@ def test_the_503s_have_the_openai_shape(state, name):
     )
     _shape(TestClient(loading).get("/v1/models"), 503, "server_error", "not_ready")
 
-    full = _with(state, max_concurrency=1, max_queue=0)
+    full = with_options(state, max_concurrency=1, max_queue=0)
     full.in_flight = 1
     _shape(
         _embed(TestClient(build_app(full, api_key=None)), name, "x"),
@@ -456,7 +455,7 @@ def test_the_500_has_the_openai_shape(state, name, monkeypatch):
     def boom(feeds):
         raise RuntimeError("bug")
 
-    broken = _with(state, result_cache_rows=0)
+    broken = with_options(state, result_cache_rows=0)
     monkeypatch.setattr(broken.backend, "infer", boom)
     client = TestClient(build_app(broken, api_key=None), raise_server_exceptions=False)
 

@@ -178,11 +178,11 @@ Boot        6.4 s: load 0.3, export 2.8, verify 0.2, session 0.1, warmup 0.1
 
 ## Model name
 
-`GET /v1/models` lists one model. `POST /v1/embeddings` accepts only that name in `model`. Without `--served-model-name NAME` (or `DOWNSHIFT_SERVED_MODEL_NAME`), the name is the last part of the model path. For example, the model `./models/bge-small` has the name `bge-small`. For an import spec such as `pkg.mod:make_model`, the name is the whole spec. Set the option if a client must use a fixed name that does not depend on the path.
+`--served-model-name NAME` (or `DOWNSHIFT_SERVED_MODEL_NAME`) sets the name that `GET /v1/models` lists and that `POST /v1/embeddings` accepts. Set it if a client must use a fixed name that does not depend on the path. Refer to [Model name](openai.md#model-name).
 
 ## Matryoshka cuts
 
-If the model was trained for Matryoshka cuts, start the server with `--matryoshka` (or `DOWNSHIFT_MATRYOSHKA=1`). `POST /v1/embeddings` then accepts `dimensions`. The server keeps the first `dimensions` values of each vector and scales the vector to unit length. The result cache keeps the full vector, so one cache entry serves all sizes. Without the option, a request with `dimensions` gets the error `dimensions_not_supported`.
+`--matryoshka` (or `DOWNSHIFT_MATRYOSHKA=1`) lets `POST /v1/embeddings` accept `dimensions`. Use it only for a model that was trained for Matryoshka cuts. Refer to [Dimensions and --matryoshka](openai.md#dimensions-and---matryoshka).
 
 ## Metrics
 

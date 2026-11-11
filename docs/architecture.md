@@ -107,12 +107,9 @@ The verdict is made on the CPU. If the server serves on a GPU (ONNX Runtime CUDA
 
 For a full description, read [`serving.md`](serving.md). In short:
 
-- `serve/engine.py` has `choose_backend` and the two boot builders. `prepare_serving` runs the whole gate. `state_from_entry` boots from an earlier export and skips the gate. `serve/reuse.py` decides which one to use.
-- `ServingState` holds everything that one server process needs: the verdict, the backend, the pools and the caches.
-- `serve/app.py` has `build_app`. With `loader=`, the app binds the port first and loads the model on a background thread. `/health` is `200` at once. `/ready` is `503` until the model is ready.
-- `serve/predict.py` is the request path. Per-request speed has priority over boot time, so all the export work happens at boot.
-- `serve/backends.py` has `OnnxRuntimeBackend` and `TorchBackend`. Both take and return numpy arrays.
-- `serve/result_cache.py` keeps rows that arrive a second time.
+- `prepare_serving` runs the whole gate. `state_from_entry` boots from an earlier export and skips the gate. `ServingState` holds everything that one server process needs: the verdict, the backend, the pools and the caches.
+- With `loader=`, `build_app` binds the port first and loads the model on a background thread. `/health` is `200` at once. `/ready` is `503` until the model is ready.
+- Per-request speed has priority over boot time, so all the export work happens at boot. The two backends (`OnnxRuntimeBackend` and `TorchBackend`) take and return numpy arrays.
 
 ## Design rules that explain the code
 

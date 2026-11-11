@@ -1,7 +1,6 @@
 """prepare_serving(): verdict, backend selection, warmed-up state, and the shared contract of the
 backends."""
 
-import dataclasses
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -23,6 +22,7 @@ from downshift.serve.engine import (
     prepare_serving,
     synthesize_feeds,
 )
+from tests.conftest import with_options
 from tests.models import clean_mlp
 
 
@@ -39,16 +39,12 @@ def test_serving_state_builds_an_executor_from_max_concurrency(mlp_state):
     assert mlp_state.executor._max_workers == mlp_state.options.max_concurrency == 4
     assert mlp_state.in_flight == 0
 
-    wider = dataclasses.replace(
-        mlp_state, options=dataclasses.replace(mlp_state.options, max_concurrency=3)
-    )
+    wider = with_options(mlp_state, max_concurrency=3)
     assert wider.executor._max_workers == 3
 
 
 def test_serving_state_builds_a_prep_pool_from_prep_threads(mlp_state):
-    narrow = dataclasses.replace(
-        mlp_state, options=dataclasses.replace(mlp_state.options, prep_threads=2)
-    )
+    narrow = with_options(mlp_state, prep_threads=2)
     assert isinstance(narrow.prep_executor, ThreadPoolExecutor)
     assert narrow.prep_executor._max_workers == 2
     assert narrow.prep_executor._thread_name_prefix == "downshift-prep"

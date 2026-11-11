@@ -1,6 +1,5 @@
 """GET /metrics: the Prometheus text, the counters, and the --metrics option."""
 
-import dataclasses
 import time
 
 import pytest
@@ -17,6 +16,7 @@ from downshift.serve.errors import error_response
 from downshift.serve.metrics import BUCKETS, CONTENT_TYPE, Histogram, Metrics
 from downshift.serve.metrics import render as render_text
 from downshift.serve.options import ServeOptions
+from tests.conftest import with_options
 from tests.test_cli import _serve_captured
 from tests.test_render import _serving_state, _verdict
 
@@ -107,9 +107,7 @@ def test_the_stage_histograms_count_a_predict(plain_state):
 
 
 def test_the_gauges_come_from_the_state(plain_state):
-    state = dataclasses.replace(
-        plain_state, options=dataclasses.replace(plain_state.options, max_queue=7)
-    )
+    state = with_options(plain_state, max_queue=7)
     state.ready = True
     samples = _samples(_client(state))
 
@@ -148,9 +146,7 @@ def test_the_cache_rows_agree_with_the_cache_headers():
 
 
 def test_a_full_queue_counts_a_capacity_rejection(plain_state):
-    full = dataclasses.replace(
-        plain_state, options=dataclasses.replace(plain_state.options, max_queue=0)
-    )
+    full = with_options(plain_state, max_queue=0)
     full.in_flight = full.options.max_concurrency
     client = _client(full)
 
@@ -165,9 +161,7 @@ def test_a_full_queue_counts_a_capacity_rejection(plain_state):
 
 
 def test_a_slow_request_counts_a_timeout_rejection(plain_state, monkeypatch):
-    slow = dataclasses.replace(
-        plain_state, options=dataclasses.replace(plain_state.options, request_timeout=0.05)
-    )
+    slow = with_options(plain_state, request_timeout=0.05)
     monkeypatch.setattr(slow.backend, "infer", lambda inputs: time.sleep(0.5))
     client = _client(slow)
 
