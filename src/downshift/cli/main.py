@@ -23,7 +23,7 @@ import sys
 import traceback
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
@@ -424,6 +424,7 @@ def serve_cmd(
 
     GET /schema on the running server says what to POST: the name, dtype and shape of each input, plus an example body.
     """  # noqa: E501 - typer wraps the help text itself. A line break in the source would show in it
+    flags = dict(locals())  # the options as given, before any other local name exists
     import uvicorn
 
     _setup_logging(log_level)
@@ -475,39 +476,13 @@ def serve_cmd(
             pooling=pooling,
             normalize=normalize,
         )
-        options = ServeOptions(
-            backend=backend,
-            force_onnx=force_onnx,
-            device=device,
-            warmup=warmup,
-            samples=samples,
-            adapter=adapter,
-            dynamic=parse_dynamic_spec(dynamic) if dynamic else None,
-            intra_op_threads=intra_op_threads,
-            inter_op_threads=inter_op_threads,
-            output_encoding=output_encoding,
-            max_input_bytes=max_input_bytes,
-            max_body_bytes=max_body_bytes,
-            max_concurrency=max_concurrency,
-            execution=execution,
-            prep_threads=prep_threads,
-            max_queue=max_queue,
-            request_timeout=request_timeout,
-            result_cache_rows=result_cache_rows,
-            server_timing=server_timing,
-            metrics=metrics,
-            served_model_name=served_model_name,
-            matryoshka=matryoshka,
-            tf32=tf32,
-            atol=atol,
-            rtol=rtol,
-            seed=seed,
-            vary=vary,
-            axis_max=_axis_max(axis_max),
-            export_cache_dir=export_cache_dir,
-            pooling=pooling,
-            normalize=normalize,
-        )
+        # Each field of ServeOptions takes the value of the serve_cmd parameter with the same
+        # name. A new option therefore needs a field and a parameter, and no line here.
+        # tests/test_cli.py checks that both exist.
+        values = {**flags, "intra_op_threads": intra_op_threads}
+        values["dynamic"] = parse_dynamic_spec(dynamic) if dynamic else None
+        values["axis_max"] = _axis_max(axis_max)
+        options = ServeOptions(**{f.name: values[f.name] for f in fields(ServeOptions)})
         args = ServeArgs(
             load=load,
             options=options,

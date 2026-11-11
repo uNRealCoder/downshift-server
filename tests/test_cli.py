@@ -971,3 +971,38 @@ def test_serve_tf32_flag_reaches_the_options_and_the_worker_json(monkeypatch):
     options = captured["app"].state.serving.options
     assert options.tf32 is True
     assert ServeArgs.from_json(_serve_args(options=options).to_json()).options.tf32 is True
+
+
+# serve_cmd copies each ServeOptions field from the parameter with the same name. These are the
+# parameters that are not ServeOptions fields: they load the model, bind the server or log.
+NOT_SERVE_OPTIONS = {
+    "access_log", "forwarded_allow_ips", "host", "inputs", "log_level", "middleware", "model",
+    "model_class", "port", "reference", "root_path", "ssl_certfile", "ssl_keyfile",
+    "timeout_graceful_shutdown", "tokenizer_from", "unsafe_load", "workers",
+}  # fmt: skip
+
+
+def test_serve_cmd_has_a_parameter_for_each_serve_option_and_names_the_rest():
+    import dataclasses
+    import inspect
+
+    from downshift.cli.main import serve_cmd
+
+    params = set(inspect.signature(serve_cmd).parameters)
+    options = {f.name for f in dataclasses.fields(ServeOptions)}
+    assert sorted(options - params) == [], "a ServeOptions field has no serve option"
+    assert sorted(params - options - NOT_SERVE_OPTIONS) == [], (
+        "a new serve option is not a ServeOptions field. Add the field, or list the name here"
+    )
+
+
+def test_docs_cli_md_lists_each_serve_flag():
+    import typer.main
+
+    from downshift.cli.main import app as cli_app
+
+    command = typer.main.get_command(cli_app).commands["serve"]  # type: ignore[attr-defined]
+    flags = {opt for param in command.params for opt in getattr(param, "opts", []) if "--" in opt}
+    page = (REPO_ROOT / "docs" / "cli.md").read_text(encoding="utf-8")
+    assert len(flags) > 30
+    assert sorted(flag for flag in flags if flag not in page) == []
