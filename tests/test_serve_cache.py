@@ -19,11 +19,14 @@ from downshift.entities.axes import DimBound
 from downshift.entities.cache import Lookup
 from downshift.entities.loading import LoadSpec
 from downshift.entities.options import ServeOptions
+from downshift.entities.requests import CachePlan, ParsedRequest
 from downshift.loading import load_model
-from downshift.serve import predict
+from downshift.serve import cached, encode, predict
 from downshift.serve.app import build_app
 from downshift.serve.backends import InferenceInputError
 from downshift.serve.engine import prepare_serving
+from downshift.serve.errors import ApiError
+from downshift.serve.result_cache import tensor_keys
 from downshift.settings import DEFAULT_RESULT_CACHE_ROWS
 from tests.conftest import with_options
 from tests.models import hf_repo
@@ -343,11 +346,11 @@ def _fake_plan(cache, request, arrays, *, pending=None, claim=()):
     if claim:
         found = cache.lookup(list(claim))
         owned = list(claim)
-    return predict.CachePlan(request, arrays, keys, found, None, owned)
+    return CachePlan(request, arrays, keys, found, None, owned)
 
 
 def _encoder(state):
-    return lambda outputs, request, tokens, layout: predict._encode_response(
+    return lambda outputs, request, tokens, layout: encode.encode_response(
         state, outputs, request.encoding, {}, False, layout
     )
 
@@ -355,17 +358,17 @@ def _encoder(state):
 def test_a_request_that_leaves_during_the_prep_hop_releases_its_rows(monkeypatch):
     state = _state("clean_mlp")
     cache = state.result_cache
-    request = predict.ParsedRequest()
+    request = ParsedRequest()
 
     def slow_prepare(*_args):
         time.sleep(0.3)  # the thread claims the row after the client has left
         return _fake_plan(cache, request, None, claim=[b"k0"])
 
-    monkeypatch.setattr(predict, "_cache_prepare", slow_prepare)
+    monkeypatch.setattr(cached, "cache_prepare", slow_prepare)
 
     async def go():
         task = asyncio.ensure_future(
-            predict._run_cached(
+            cached.run_cached(
                 state,
                 cache,
                 request,
@@ -396,7 +399,7 @@ def test_a_waiter_that_leaves_does_not_cancel_the_row_of_its_owner():
     future: Future = Future()
 
     async def go():
-        waiter = asyncio.ensure_future(predict._await_row(future))
+        waiter = asyncio.ensure_future(cached.await_row(future))
         await asyncio.sleep(0.05)
         waiter.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -424,8 +427,10 @@ def test_a_slow_step_gets_a_503_at_the_request_timeout(monkeypatch, slow, cache_
     if slow == "infer":
         Spy(state, gate=gate)
     else:
-        for name in ("_prepare_feeds", "_cache_prepare"):
-            monkeypatch.setattr(predict, name, _slowed(getattr(predict, name), gate))
+        for module in (predict, cached):
+            for name in ("prepare_feeds", "cache_prepare"):
+                if hasattr(module, name):
+                    monkeypatch.setattr(module, name, _slowed(getattr(module, name), gate))
     client = TestClient(build_app(state))
 
     start = time.monotonic()
@@ -440,7 +445,7 @@ def test_a_slow_step_gets_a_503_at_the_request_timeout(monkeypatch, slow, cache_
     assert elapsed < 3.0, "the 503 comes at the limit (1 s), not when the step ends"
     assert state.in_flight == 0, "the slot is released"
     if slow == "infer" and state.result_cache is not None:
-        keys = predict.tensor_keys({"x": np.full((1, 16), 1.0, dtype=np.float32)}, 1)
+        keys = tensor_keys({"x": np.full((1, 16), 1.0, dtype=np.float32)}, 1)
         assert state.result_cache.lookup(keys).missing == [0], "the claim was released"
 
 
@@ -450,18 +455,20 @@ def test_a_waiter_that_retries_can_get_a_whole_response(monkeypatch):
     state = _state("clean_mlp")
     cache = state.result_cache
     arrays = {"x": np.ones((1, 16), dtype=np.float32)}
-    request = predict.ParsedRequest(tensors=arrays)
+    request = ParsedRequest(tensors=arrays)
     failed: Future = Future()
     failed.set_exception(RuntimeError("owner failed"))
     monkeypatch.setattr(
-        predict,
-        "_cache_prepare",
+        cached,
+        "cache_prepare",
         lambda *_a: _fake_plan(cache, request, arrays, pending={0: failed}),
     )
-    monkeypatch.setattr(predict, "_infer", lambda _s, _f: ({"output_0": np.float32(1.0)}, 0.0))
+    monkeypatch.setattr(
+        cached, "run_inference", lambda _s, _f: ({"output_0": np.float32(1.0)}, 0.0)
+    )
 
     async def go():
-        return await predict._run_cached(
+        return await cached.run_cached(
             state,
             cache,
             request,
@@ -481,11 +488,11 @@ def test_a_waiter_that_retries_can_get_a_whole_response(monkeypatch):
 
 
 def _run_plan(state, cache, request, monkeypatch, plan, infer):
-    monkeypatch.setattr(predict, "_cache_prepare", lambda *_a: plan)
-    monkeypatch.setattr(predict, "_infer", infer)
+    monkeypatch.setattr(cached, "cache_prepare", lambda *_a: plan)
+    monkeypatch.setattr(cached, "run_inference", infer)
 
     async def go():
-        return await predict._run_cached(
+        return await cached.run_cached(
             state,
             cache,
             request,
@@ -507,9 +514,9 @@ def _run_plan(state, cache, request, monkeypatch, plan, infer):
 def test_a_failure_does_not_free_a_row_that_a_new_owner_claimed(monkeypatch):
     state = _state("clean_mlp")
     cache = state.result_cache
-    request = predict.ParsedRequest()
+    request = ParsedRequest()
     keys = [b"k0", b"k1"]
-    plan = predict.CachePlan(
+    plan = CachePlan(
         request, None, keys, cache.lookup(keys), {"x": np.zeros((2, 16), np.float32)}, list(keys)
     )
     real_complete = cache.complete
@@ -542,7 +549,7 @@ def test_an_output_without_a_row_axis_frees_the_claimed_rows(monkeypatch):
     state = _state("clean_mlp")
     cache = state.result_cache
     arrays = {"x": np.ones((1, 16), dtype=np.float32)}
-    request = predict.ParsedRequest(tensors=arrays)
+    request = ParsedRequest(tensors=arrays)
     plan = _fake_plan(cache, request, arrays, claim=[b"k0"])
     plan.feeds = arrays
 
@@ -562,13 +569,13 @@ def test_an_output_without_a_row_axis_frees_the_claimed_rows(monkeypatch):
 def test_a_request_past_its_deadline_claims_no_rows():
     state = _state("clean_mlp")
     cache = state.result_cache
-    request = predict.ParsedRequest(inputs={"x": _x(30.0)})
+    request = ParsedRequest(inputs={"x": _x(30.0)})
 
-    with pytest.raises(predict.ApiError) as raised:
-        predict._cache_prepare(state, cache, request, {}, True, time.monotonic() - 10)
+    with pytest.raises(ApiError) as raised:
+        cached.cache_prepare(state, cache, request, {}, True, time.monotonic() - 10)
 
     assert raised.value.status_code == 503
-    keys = predict.tensor_keys({"x": np.full((1, 16), 30.0, dtype=np.float32)}, 1)
+    keys = tensor_keys({"x": np.full((1, 16), 30.0, dtype=np.float32)}, 1)
     assert cache.lookup(keys).missing == [0]
 
 

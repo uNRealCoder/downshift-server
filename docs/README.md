@@ -44,7 +44,7 @@ All modules are in `src/downshift/`. The modules that the CLI imports at start d
 | `serve/__init__.py` | `app_for`. |
 | `entities/` | The data types: every dataclass, and the enums and aliases that they need. `entities/options.py` has `ServeOptions`, `BackendChoice` and `ExecutionChoice`. No module in it has logic of its own. |
 | `serve/engine.py`, `serve/reuse.py` | `ServingState`, the two boot builders, the backend selection and the warmup. `reuse.py` looks up the export cache. |
-| `serve/app.py` | `build_app`, the routes, the request-ID and API-key middleware, and the loading of `--middleware`. |
-| `serve/predict.py`, `serve/result_cache.py` | The request path of `/predict` and `/predict/graph`, and the result cache. |
+| `serve/app.py`, `serve/middleware.py` | `build_app` and the routes. The request-ID and API-key middleware, and the loading of `--middleware`, are in `middleware.py`. |
+| `serve/predict.py`, `serve/parse.py`, `serve/feeds.py`, `serve/stages.py`, `serve/encode.py`, `serve/cached.py`, `serve/result_cache.py` | The request path of `/predict` and `/predict/graph`: `run_predict` and its parts (parse, input feeds and checks, pool hops, response encoding, the cached path), and the result cache. |
 | `serve/describe.py`, `serve/schemas.py` | `GET /schema`, and the request and response models. |
 | `serve/backends.py`, `serve/codec.py`, `serve/graphs.py` | The two backends, the base64 and safetensors codecs, and graph batching. |

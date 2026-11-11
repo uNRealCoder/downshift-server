@@ -91,10 +91,10 @@ def test_batch_matches_single_requests(which, request):
 
 def test_batch_layout_counts(gcn_client):
     from downshift.entities.requests import ParsedRequest
-    from downshift.serve.predict import _prepare_feeds
+    from downshift.serve.feeds import prepare_feeds
 
     state = gcn_client.app.state.serving
-    _, _, layout = _prepare_feeds(state, ParsedRequest(graphs=_graphs()))
+    _, _, layout = prepare_feeds(state, ParsedRequest(graphs=_graphs()))
     assert layout is not None
     nodes, edges = layout[0], layout[1]
     assert (len(nodes), sum(nodes), sum(edges)) == (3, 15, 19)

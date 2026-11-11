@@ -13,7 +13,7 @@ from downshift.entities.options import OutputEncoding, RequestOutputEncoding
 
 @dataclass
 class ParsedRequest:
-    """A predict body, decoded and validated: what _prepare_feeds takes, plus the encoding."""
+    """A predict body, decoded and validated: what prepare_feeds takes, plus the encoding."""
 
     inputs: dict[str, Any] = field(default_factory=dict)
     text: list[str] | None = None
@@ -22,7 +22,7 @@ class ParsedRequest:
     graphs: list[dict[str, Any]] | None = None
     encoding: OutputEncoding | RequestOutputEncoding | None = None
     dimensions: int | None = None  # /v1/embeddings: keep the first values of each vector
-    tokens: list[int] | None = None  # set by _prepare_feeds for a text request
+    tokens: list[int] | None = None  # set by prepare_feeds for a text request
 
 
 @dataclass

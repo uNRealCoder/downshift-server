@@ -469,7 +469,7 @@ def test_default_prompt_name_applies_when_a_request_names_none(tmp_path):
 def test_token_counts_come_from_the_tokenizer_not_from_the_padded_model_inputs():
     from types import SimpleNamespace
 
-    from downshift.serve import predict
+    from downshift.serve import feeds as serve_feeds
 
     encoded = {
         "input_ids": np.array([[5, 6, 7, 0], [8, 9, 0, 0]]),
@@ -479,8 +479,8 @@ def test_token_counts_come_from_the_tokenizer_not_from_the_padded_model_inputs()
         text=SimpleNamespace(encode=lambda _text: encoded), input_names=["input_ids"]
     )
 
-    feeds, tokens = predict._text_feeds(state, ["a", "b"], {})
+    feeds, tokens = serve_feeds.text_feeds(state, ["a", "b"], {})
 
     assert list(feeds) == ["input_ids"]
     assert tokens == [3, 2]
-    assert predict._text_feeds(state, ["a", "b"], {}, count_tokens=False)[1] is None
+    assert serve_feeds.text_feeds(state, ["a", "b"], {}, count_tokens=False)[1] is None

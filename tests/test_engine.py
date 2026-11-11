@@ -210,7 +210,7 @@ def test_torch_backend_rejects_missing_input():
 
 
 def test_torch_backend_leaves_a_model_error_to_the_server():
-    # Downshift checks the shape of the client before infer (predict._shape_violation). An error
+    # Downshift checks the shape of the client before infer (feeds.shape_violation). An error
     # that the model raises after that is a 500 of the server. The message does not change the
     # class of the error.
     backend = TorchBackend(clean_mlp.make_model(), ("x",), device="cpu")

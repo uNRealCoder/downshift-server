@@ -11,17 +11,13 @@ from fastapi import Response
 from downshift.entities.options import OutputEncoding
 from downshift.entities.requests import ParsedRequest
 from downshift.entities.serving import ServingState
+from downshift.entities.signatures import GraphLayout
 from downshift.serve.backends import FIRST_OUTPUT_NAME
 from downshift.serve.codec import b64encode
+from downshift.serve.encode import NumpyJSONResponse, add_server_timing
 from downshift.serve.errors import ApiError
-from downshift.serve.predict import (
-    GraphLayout,
-    NumpyJSONResponse,
-    _validate_json,
-    add_server_timing,
-    as_batch,
-    resolve_prompt,
-)
+from downshift.serve.feeds import as_batch, resolve_prompt
+from downshift.serve.parse import _validate_json
 from downshift.serve.schemas import EmbeddingsRequest
 
 # The "created" time of each model: the time that the server process started.

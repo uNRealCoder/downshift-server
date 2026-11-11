@@ -19,6 +19,7 @@ from downshift.entities.loading import LoadedModel, LoadSpec
 from downshift.entities.options import ExecutionChoice, OutputEncoding
 from downshift.loading import load_model
 from downshift.serve import app_for
+from downshift.serve import encode as serve_encode
 from downshift.serve import predict as serve_predict
 from downshift.serve.app import _flag_stopping_on_signal, build_app
 from downshift.serve.engine import ServeOptions, prepare_serving
@@ -418,7 +419,7 @@ def test_predict_unsupported_dtype_falls_back_per_array(mlp_state, monkeypatch):
     # Simulate a dtype that this orjson cannot write natively (for example float128 on Linux)
     # without a dependency on the platform. Drop float32 from the supported set for this test
     # only.
-    monkeypatch.setattr(serve_predict, "_ORJSON_DTYPES", serve_predict._ORJSON_DTYPES - {"float32"})
+    monkeypatch.setattr(serve_encode, "ORJSON_DTYPES", serve_encode.ORJSON_DTYPES - {"float32"})
     fallback = np.array([[1.0, 2.0]], dtype=np.float32)
     native = np.array([[3, 4]], dtype=np.int64)
     client = _client_emitting(mlp_state, monkeypatch, {"a": fallback, "b": native})
@@ -850,11 +851,11 @@ def _loop_probe(state, monkeypatch) -> dict[str, list[bool]]:
         return probed
 
     monkeypatch.setattr(
-        serve_predict, "_prepare_feeds", wrap("prepare", serve_predict._prepare_feeds)
+        serve_predict, "prepare_feeds", wrap("prepare", serve_predict.prepare_feeds)
     )
-    monkeypatch.setattr(serve_predict, "_infer", wrap("infer", serve_predict._infer))
+    monkeypatch.setattr(serve_predict, "run_inference", wrap("infer", serve_predict.run_inference))
     monkeypatch.setattr(
-        serve_predict, "_encode_response", wrap("encode", serve_predict._encode_response)
+        serve_predict, "encode_response", wrap("encode", serve_predict.encode_response)
     )
     return seen
 
