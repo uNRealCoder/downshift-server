@@ -1,4 +1,8 @@
-"""Entities: cache."""
+"""The data of the two caches.
+
+ExportEntry is a verified export that a boot can reuse (core/memo.py and core/export_cache.py).
+Row and Lookup belong to the result cache of serve/result_cache.py.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +13,8 @@ from pathlib import Path
 import numpy as np
 
 
+# A verified export that a boot can reuse. core/memo.py keeps it in memory,
+# core/export_cache.py keeps it on disk, and a `--workers` worker gets it from the parent.
 @dataclass
 class ExportEntry:
     """What a boot needs to skip the export and the verification. A graph with external data
@@ -37,9 +43,12 @@ class ExportEntry:
         return tuple(self.feeds[name] for name in self.input_names)
 
 
+# The output of one row: output name -> array, with no batch axis. The result cache stores it.
 Row = dict[str, np.ndarray]  # output name -> the array of this row, with no batch axis
 
 
+# The answer of the result cache for the rows of one request: hits, rows that another
+# request computes, and rows that this request must compute (serve/result_cache.py).
 @dataclass
 class Lookup:
     """The answer for the rows of one request. `hits` and `pending` map a row index to its

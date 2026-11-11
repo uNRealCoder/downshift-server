@@ -1,4 +1,6 @@
-"""The type aliases of the request path."""
+"""The function types of the request path: how a route gives `run_predict` its own parser and
+response encoder. Used by serve/predict.py, serve/cached.py, serve/feeds.py and serve/encode.py.
+"""
 
 from __future__ import annotations
 
@@ -9,16 +11,15 @@ from fastapi import Response
 
 from downshift.entities.requests import ParsedRequest
 
-# The (node_counts, edge_counts) of each graph in a graph batch. The response is split by them.
+# The (node_counts, edge_counts) of each graph in a graph batch.
 GraphLayout = tuple[list[int], list[int]]
 
 
+# A function that builds the ParsedRequest. /v1/embeddings gives its own to `run_predict`.
 Parse = Callable[[], ParsedRequest]
 
 
-# (outputs, request, tokens, layout) -> the response. `tokens` is the count of tokens for each
-# row, only for a text request and only if run_predict was asked for it. `layout` is for a graph
-# batch.
+# A function that builds the response from the outputs. /v1/embeddings gives its own.
 Encode = Callable[
     [dict[str, np.ndarray], ParsedRequest, list[int] | None, GraphLayout | None], Response
 ]

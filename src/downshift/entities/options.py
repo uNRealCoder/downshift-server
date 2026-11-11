@@ -1,4 +1,9 @@
-"""Entities: options."""
+"""The serve options as data: the choices (backend, execution, output encoding) and ServeOptions.
+
+ServeOptions is the one record of all `serve` settings. The CLI fills it from its flags, `app_for()`
+fills it from keyword arguments, and both start from the defaults in settings.py.
+Used by cli/main.py, cli/options.py, serve/engine.py, serve/reuse.py, serve/app.py and core/memo.py.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +13,8 @@ from enum import StrEnum
 from downshift import settings
 
 
+# What the caller asked for with --backend. `auto` is never a running backend:
+# serve/engine.py `choose_backend` turns it into a BackendName.
 class BackendChoice(StrEnum):
     """What the caller asked for; "auto" defers to the verdict's recommendation."""
 
@@ -16,6 +23,8 @@ class BackendChoice(StrEnum):
     torch = "torch"
 
 
+# --execution: run the parse, the inference and the encoding on pool threads (threadpool),
+# or on the event loop for a small JSON body (inline). serve/app.py reads it.
 class ExecutionChoice(StrEnum):
     """Where a predict's parse, inference and encode run."""
 
@@ -23,6 +32,7 @@ class ExecutionChoice(StrEnum):
     inline = "inline"
 
 
+# The default encoding of response tensors (--output-encoding). A request can override it.
 class OutputEncoding(StrEnum):
     """How response tensors are written: nested lists, or {data, dtype, shape} base64 dicts."""
 
@@ -30,6 +40,7 @@ class OutputEncoding(StrEnum):
     base64 = "base64"
 
 
+# What the `output_encoding` field of a request can name: OutputEncoding, and safetensors.
 class RequestOutputEncoding(StrEnum):
     """What the `output_encoding` of a request can name: OutputEncoding plus safetensors.
     Safetensors is a format for the whole response (an `Accept` header can also ask for it).
@@ -40,6 +51,8 @@ class RequestOutputEncoding(StrEnum):
     safetensors = "safetensors"
 
 
+# All `serve` settings in one record. Add a field here for each new serve option. cli/main.py
+# copies each field from the `serve_cmd` parameter with the same name.
 @dataclass
 class ServeOptions:
     """The defaults come from downshift.settings. A DOWNSHIFT_* environment variable therefore

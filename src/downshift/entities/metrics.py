@@ -1,15 +1,18 @@
-"""Entities: metrics."""
+"""The counters behind GET /metrics. The event loop writes them, so there is no lock.
+serve/metrics.py reads them and prints the Prometheus text. Used by serve/app.py,
+serve/middleware.py and cli/render.py.
+"""
 
 from __future__ import annotations
 
 from bisect import bisect_left
 from dataclasses import dataclass, field
 
-# Seconds. The last bucket is +Inf.
+# The upper limits of the histogram buckets, in seconds. The last bucket is +Inf.
 BUCKETS = (0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10)
 
 
-# The stage label -> the timings_ms keys of predict that it adds up.
+# The stage label -> the timing keys of a predict that it adds up.
 STAGE_KEYS = {
     "queue": ("prep_wait", "infer_wait", "encode_wait"),
     "prep": ("parse", "prep"),
@@ -18,7 +21,7 @@ STAGE_KEYS = {
 }
 
 
-# The error codes (serve/errors.py) that count as a rejected request.
+# The error codes that count as a rejected request, and their label.
 REJECT_REASONS = {
     "at_capacity": "capacity",
     "request_timeout": "timeout",
@@ -26,9 +29,11 @@ REJECT_REASONS = {
 }
 
 
+# The values of the cache result label.
 CACHE_RESULTS = ("hit", "partial", "miss")
 
 
+# The counts of one histogram series.
 @dataclass
 class Histogram:
     counts: list[int] = field(default_factory=lambda: [0] * (len(BUCKETS) + 1))
@@ -39,6 +44,7 @@ class Histogram:
         self.total += seconds
 
 
+# The series of `key`. It makes the series on first use.
 def histogram(series: dict[str, Histogram], key: str) -> Histogram:
     hist = series.get(key)
     if hist is None:
@@ -46,6 +52,8 @@ def histogram(series: dict[str, Histogram], key: str) -> Histogram:
     return hist
 
 
+# The counters of one worker: requests, histograms, rejections and cache results.
+# serve/middleware.py and serve/app.py write them; serve/metrics.py prints them.
 @dataclass
 class Metrics:
     worker: str = "0"

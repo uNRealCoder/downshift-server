@@ -1,4 +1,7 @@
-"""Entities: requests."""
+"""The request path of /predict: a decoded request, and the plan of a request that uses the
+result cache. Used by serve/parse.py, serve/feeds.py, serve/cached.py, serve/predict.py and
+serve/openai.py.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +14,8 @@ from downshift.entities.cache import Lookup
 from downshift.entities.options import OutputEncoding, RequestOutputEncoding
 
 
+# A predict body after decoding and validation. serve/parse.py makes it, serve/feeds.py turns it
+# into arrays, and serve/encode.py reads its encoding.
 @dataclass
 class ParsedRequest:
     """A predict body, decoded and validated: what prepare_feeds takes, plus the encoding."""
@@ -25,6 +30,8 @@ class ParsedRequest:
     tokens: list[int] | None = None  # set by prepare_feeds for a text request
 
 
+# The prep result of a request that uses the result cache. serve/cached.py makes it and then
+# runs the rows that it must compute.
 @dataclass
 class CachePlan:
     """The prep result of a cached request: its row keys, the lookup, and the feeds of the rows

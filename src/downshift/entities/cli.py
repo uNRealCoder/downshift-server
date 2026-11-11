@@ -1,4 +1,6 @@
-"""Entities: cli."""
+"""The data that `serve --workers N` sends from the parent to each worker, as JSON.
+Used by cli/main.py and cli/runtime.py.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +16,8 @@ if TYPE_CHECKING:
     from downshift.entities.loading import LoadSpec
 
 
+# The parent's export for `--workers N`. A worker boots from it like from a cache hit.
+# cli/runtime.py makes it and reads it.
 @dataclass
 class ArtifactHandoff:
     """The parent's export for `--workers N`. A worker boots from it like from a cache hit. A
@@ -47,6 +51,8 @@ class ArtifactHandoff:
         )
 
 
+# Everything that is needed to build the ServingState and the app again. It goes to each
+# worker as JSON (to_json and from_json). cli/main.py makes it.
 @dataclass
 class ServeArgs:
     """Everything needed to build the ServingState and app again, as JSON for the workers."""

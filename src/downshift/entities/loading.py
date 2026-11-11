@@ -1,4 +1,6 @@
-"""Entities: loading."""
+"""How a model is loaded: the request (LoadSpec) and the result (LoadedModel).
+Used by loading.py (`load_model`), cli/main.py, cli/runtime.py and serve/engine.py.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +14,8 @@ if TYPE_CHECKING:
     from torch import nn
 
 
+# One MODEL argument and its flags. cli/main.py makes it from the command line, and it
+# goes to each `--workers` worker as JSON.
 @dataclass(frozen=True)
 class LoadSpec:
     """One MODEL argument and its flags. pooling and normalize apply to HF repos only."""
@@ -24,6 +28,8 @@ class LoadSpec:
     normalize: bool | None = None
 
 
+# What `load_model` found: the module, or the .onnx path, with the example inputs.
+# serve/engine.py takes it to build a ServingState.
 @dataclass
 class LoadedModel:
     source: str

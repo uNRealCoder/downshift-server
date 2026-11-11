@@ -1,4 +1,9 @@
-"""Entities: serving."""
+"""ServingState: everything that one server process holds, and the two small records next to it.
+
+This module is the one that is not light: ServingState starts the thread pools and the result
+cache, so it imports the backends and the cache. Used by serve/engine.py (it builds the state)
+and by every route and renderer that reads it.
+"""
 
 from __future__ import annotations
 
@@ -18,6 +23,8 @@ from downshift.settings import DEFAULT_RESULT_CACHE_ROWS
 from downshift.sources import UNKNOWN_SOURCE, display_source
 
 
+# The result of the serving check on a GPU: the serving backend against the CPU result.
+# serve/numerics.py makes it. /metadata shows it.
 @dataclass
 class ServingNumerics:
     provider: str  # the execution provider, or "torch"
@@ -40,6 +47,7 @@ class ServingNumerics:
         return f"max abs err {self.max_abs_err:.1e} over {self.samples}{of} samples{cosine}"
 
 
+# The count and the mean time of the warm-up inferences. serve/engine.py `warmup` makes it.
 @dataclass
 class WarmupStats:
     count: int
@@ -47,6 +55,9 @@ class WarmupStats:
     synthesized: bool  # True if there was no example input, so warmup() made one
 
 
+# Everything that one server process holds: the verdict, the backend, the options, the
+# thread pools, the result cache and the boot timings. serve/engine.py builds it at boot.
+# Every route, the banner and /metadata read it.
 @dataclass
 class ServingState:
     source: str

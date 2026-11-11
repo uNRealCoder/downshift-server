@@ -1,4 +1,7 @@
-"""Entities: adapters."""
+"""What the adapters produce: the `Prepared` model, and the Hugging Face recipe types
+(pooling, embedding recipe, text input and output).
+Used by adapters/*, core/verdict.py, hf_repo.py, serve/feeds.py and serve/engine.py.
+"""
 
 from __future__ import annotations
 
@@ -13,6 +16,7 @@ if TYPE_CHECKING:
     from torch import nn
 
 
+# The names of the built-in adapters. It is a plain string for a custom adapter.
 class Family(StrEnum):
     """The built-in adapter names. A custom adapter's `name` is a plain string."""
 
@@ -21,9 +25,13 @@ class Family(StrEnum):
     generic = "generic"
 
 
+# A function that gives the inputs of verification sample i. It makes samples with new shapes.
 VaryFn = Callable[[int], tuple]
 
 
+# The result of `adapter.prepare`: a module that takes flat tensors only, with its example
+# inputs, input names and dynamic shapes. core/verdict.py `prepare_model` makes it,
+# and capture and verify read it.
 @dataclass
 class Prepared:
     model: nn.Module  # the module that is ready for export. forward takes flat tensors
@@ -43,6 +51,8 @@ class Prepared:
         }
 
 
+# --pooling. How the token vectors of an encoder become one vector. cli/options.py and
+# hf_repo.py use it.
 class PoolingChoice(StrEnum):
     """--pooling: how the token vectors of an encoder-only repo become one embedding for each
     text. "none" serves the token vectors as they are. It ignores each recipe that the repo
@@ -57,6 +67,8 @@ class PoolingChoice(StrEnum):
     none = "none"
 
 
+# How a Hugging Face repo turns token vectors into an embedding: pooling, normalization,
+# length limit and prompts. hf_repo.py reads it from the repo. /schema shows it.
 @dataclass(frozen=True)
 class EmbeddingRecipe:
     pooling: str
@@ -80,13 +92,17 @@ class EmbeddingRecipe:
         }
 
 
+# The activation name of a classifier head. TextIO.predictions reads it.
 SOFTMAX = "softmax"
 
 
+# A text row that is longer than the model reads. serve/feeds.py turns it into a 400.
 class TextTooLongError(ValueError):
     """A text row has more tokens than the model reads."""
 
 
+# The text side of a Hugging Face model: tokenizer, token limit and labels. It makes /predict
+# accept `text` and gives classifier answers. hf_repo.py builds it; serve/feeds.py uses it.
 @dataclass
 class TextIO:
     tokenizer: Any

@@ -1,4 +1,10 @@
-"""Entities: verdict."""
+"""The verdict and the numbers behind it.
+
+ExportVerdict is the one object that all other code reads. It holds the status, the reason, the
+numerics, the axis facts and the recommended backend. core/capture.py makes a CaptureResult,
+core/verify.py makes a NumericsReport, and core/verdict.py combines them.
+Used by almost every module of core/, serve/ and cli/.
+"""
 
 from __future__ import annotations
 
@@ -18,6 +24,7 @@ if TYPE_CHECKING:
     import torch
 
 
+# The worst element of a failed comparison. NumericsReport keeps it.
 @dataclass
 class WorstMismatch:
     """The element with the largest absolute error, across all samples."""
@@ -30,6 +37,8 @@ class WorstMismatch:
     input_shapes: list[tuple[int, ...]]
 
 
+# The result of the numeric check: the error numbers, the samples that ran and the worst
+# mismatch. core/verify.py makes it, and ExportVerdict holds it.
 @dataclass
 class NumericsReport:
     samples_tested: int
@@ -73,6 +82,8 @@ class NumericsReport:
         return cls(**values)
 
 
+# What `torch.export` and the ONNX translation gave: the graph, or the error. core/capture.py
+# makes it and core/verdict.py reads it.
 @dataclass
 class CaptureResult:
     success: bool
@@ -89,6 +100,7 @@ class CaptureResult:
     stderr: str = ""  # what torch printed, for the debug log
 
 
+# The four verdicts: CLEAN, DEGRADED, FAILED, UNVERIFIED.
 class Status(StrEnum):
     CLEAN = "CLEAN"
     DEGRADED = "DEGRADED"
@@ -96,6 +108,7 @@ class Status(StrEnum):
     UNVERIFIED = "UNVERIFIED"
 
 
+# A running backend: ONNX Runtime or torch.
 class BackendName(StrEnum):
     """A concrete backend. "auto" is only a CLI choice (serve.options.BackendChoice)."""
 
@@ -103,9 +116,13 @@ class BackendName(StrEnum):
     torch = "torch"
 
 
+# The exit code of `check` and `export` for each status.
 EXIT_CODES = {Status.CLEAN: 0, Status.FAILED: 1, Status.DEGRADED: 2, Status.UNVERIFIED: 3}
 
 
+# The one object that all other code reads: status, reason, numerics, axis facts and the
+# recommended backend. core/verdict.py (`build_verdict`, `intake`) makes it. The server,
+# the CLI reports, the manifest and the export cache read it.
 @dataclass
 class ExportVerdict:
     status: Status
