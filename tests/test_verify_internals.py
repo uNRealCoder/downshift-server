@@ -8,7 +8,6 @@ import torch
 from downshift.core import verify as verify_mod
 from downshift.core.shapes import resize_axis
 from downshift.core.verify import (
-    NumericsReport,
     OnnxRuntimeError,
     as_tensor_list,
     compare_sample,
@@ -17,6 +16,7 @@ from downshift.core.verify import (
     make_shared_axis0_vary_fn,
     verify,
 )
+from downshift.entities.verdict import NumericsReport
 from tests.models import bf16_weights, clean_mlp
 
 

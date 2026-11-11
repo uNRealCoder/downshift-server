@@ -5,7 +5,8 @@ import onnxruntime as ort
 import pytest
 import torch
 
-from downshift.loading import LoadSpec, load_model
+from downshift.entities.loading import LoadSpec
+from downshift.loading import load_model
 from downshift.serve.engine import ServeOptions, prepare_serving
 
 pytestmark = pytest.mark.skipif(

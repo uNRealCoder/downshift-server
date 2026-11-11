@@ -14,15 +14,16 @@ from safetensors.numpy import save as st_save
 from transformers import BertForSequenceClassification
 
 from downshift import settings
-from downshift.adapters.text import TextIO
-from downshift.core.axes import DimBound
-from downshift.loading import LoadSpec, load_model
+from downshift.entities.adapters import TextIO
+from downshift.entities.axes import DimBound
+from downshift.entities.cache import Lookup
+from downshift.entities.loading import LoadSpec
+from downshift.entities.options import ServeOptions
+from downshift.loading import load_model
 from downshift.serve import predict
 from downshift.serve.app import build_app
 from downshift.serve.backends import InferenceInputError
 from downshift.serve.engine import prepare_serving
-from downshift.serve.options import ServeOptions
-from downshift.serve.result_cache import Lookup
 from downshift.settings import DEFAULT_RESULT_CACHE_ROWS
 from tests.conftest import with_options
 from tests.models import hf_repo
@@ -342,7 +343,7 @@ def _fake_plan(cache, request, arrays, *, pending=None, claim=()):
     if claim:
         found = cache.lookup(list(claim))
         owned = list(claim)
-    return predict._CachePlan(request, arrays, keys, found, None, owned)
+    return predict.CachePlan(request, arrays, keys, found, None, owned)
 
 
 def _encoder(state):
@@ -354,7 +355,7 @@ def _encoder(state):
 def test_a_request_that_leaves_during_the_prep_hop_releases_its_rows(monkeypatch):
     state = _state("clean_mlp")
     cache = state.result_cache
-    request = predict._Request()
+    request = predict.ParsedRequest()
 
     def slow_prepare(*_args):
         time.sleep(0.3)  # the thread claims the row after the client has left
@@ -449,7 +450,7 @@ def test_a_waiter_that_retries_can_get_a_whole_response(monkeypatch):
     state = _state("clean_mlp")
     cache = state.result_cache
     arrays = {"x": np.ones((1, 16), dtype=np.float32)}
-    request = predict._Request(tensors=arrays)
+    request = predict.ParsedRequest(tensors=arrays)
     failed: Future = Future()
     failed.set_exception(RuntimeError("owner failed"))
     monkeypatch.setattr(
@@ -506,9 +507,9 @@ def _run_plan(state, cache, request, monkeypatch, plan, infer):
 def test_a_failure_does_not_free_a_row_that_a_new_owner_claimed(monkeypatch):
     state = _state("clean_mlp")
     cache = state.result_cache
-    request = predict._Request()
+    request = predict.ParsedRequest()
     keys = [b"k0", b"k1"]
-    plan = predict._CachePlan(
+    plan = predict.CachePlan(
         request, None, keys, cache.lookup(keys), {"x": np.zeros((2, 16), np.float32)}, list(keys)
     )
     real_complete = cache.complete
@@ -541,7 +542,7 @@ def test_an_output_without_a_row_axis_frees_the_claimed_rows(monkeypatch):
     state = _state("clean_mlp")
     cache = state.result_cache
     arrays = {"x": np.ones((1, 16), dtype=np.float32)}
-    request = predict._Request(tensors=arrays)
+    request = predict.ParsedRequest(tensors=arrays)
     plan = _fake_plan(cache, request, arrays, claim=[b"k0"])
     plan.feeds = arrays
 
@@ -561,7 +562,7 @@ def test_an_output_without_a_row_axis_frees_the_claimed_rows(monkeypatch):
 def test_a_request_past_its_deadline_claims_no_rows():
     state = _state("clean_mlp")
     cache = state.result_cache
-    request = predict._Request(inputs={"x": _x(30.0)})
+    request = predict.ParsedRequest(inputs={"x": _x(30.0)})
 
     with pytest.raises(predict.ApiError) as raised:
         predict._cache_prepare(state, cache, request, {}, True, time.monotonic() - 10)

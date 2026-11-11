@@ -20,9 +20,11 @@ from fastapi.testclient import TestClient
 
 import downshift
 from downshift.core.memo import MEMO
-from downshift.loading import LoadSpec, load_model
+from downshift.entities.loading import LoadSpec
+from downshift.entities.serving import ServingState
+from downshift.loading import load_model
 from downshift.serve.app import build_app
-from downshift.serve.engine import ServeOptions, ServingState, prepare_serving
+from downshift.serve.engine import ServeOptions, prepare_serving
 from tests.models import clean_mlp
 
 REPO_ROOT = Path(__file__).resolve().parent.parent

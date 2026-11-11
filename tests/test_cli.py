@@ -15,11 +15,11 @@ from typer.testing import CliRunner
 import downshift
 from downshift.cli import main, runtime
 from downshift.cli.main import app
-from downshift.cli.runtime import ArtifactHandoff, ServeArgs
-from downshift.core.axes import DimBound, axis_bounds_from_json, axis_bounds_to_json
-from downshift.loading import LoadSpec
-from downshift.serve.options import BackendChoice, ServeOptions
-from downshift.serve.schemas import OutputEncoding
+from downshift.core.axes import axis_bounds_from_json, axis_bounds_to_json
+from downshift.entities.axes import DimBound
+from downshift.entities.cli import ArtifactHandoff, ServeArgs
+from downshift.entities.loading import LoadSpec
+from downshift.entities.options import BackendChoice, OutputEncoding, ServeOptions
 from tests.conftest import REPO_ROOT, TLS_KEY_PASSWORD
 from tests.models import clean_mlp
 
@@ -748,7 +748,7 @@ def test_check_bad_axis_max_is_usage_error(value):
 
 
 def test_serve_axis_max_round_trips_through_serve_args():
-    from downshift.cli.runtime import ServeArgs
+    from downshift.entities.cli import ServeArgs
 
     args = ServeArgs(
         load=LoadSpec(CLEAN),
@@ -784,8 +784,8 @@ def test_serve_rejects_an_unknown_execution_mode(monkeypatch):
 
 
 def test_serve_execution_round_trips_through_serve_args():
-    from downshift.cli.runtime import ServeArgs
-    from downshift.serve.options import ExecutionChoice
+    from downshift.entities.cli import ServeArgs
+    from downshift.entities.options import ExecutionChoice
 
     args = ServeArgs(
         load=LoadSpec(CLEAN),

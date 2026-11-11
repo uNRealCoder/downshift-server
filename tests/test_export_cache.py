@@ -15,12 +15,12 @@ from typer.testing import CliRunner
 
 import downshift
 from downshift.cli.main import app as cli_app
-from downshift.cli.runtime import ServeArgs
 from downshift.core import capture, export_cache
 from downshift.core.memo import MEMO
-from downshift.loading import LoadSpec
+from downshift.entities.cli import ServeArgs
+from downshift.entities.loading import LoadSpec
+from downshift.entities.options import ServeOptions
 from downshift.serve import app_for
-from downshift.serve.options import ServeOptions
 from tests.models import clean_mlp
 
 runner = CliRunner()
@@ -325,7 +325,7 @@ def test_a_worker_with_an_artifact_never_opens_the_cache(cache, monkeypatch, tmp
 
     built = SimpleNamespace(timings={}, verdict=SimpleNamespace(onnx_bytes=b"graph"))
     monkeypatch.setattr(engine, "state_from_entry", lambda *args, **kwargs: built)
-    from downshift.cli.runtime import ArtifactHandoff
+    from downshift.entities.cli import ArtifactHandoff
 
     args = ServeArgs(
         load=LoadSpec("m"),

@@ -6,14 +6,13 @@ import pytest
 
 import downshift
 from downshift.core.axes import (
-    AxisFact,
-    DimBound,
     axis_bounds_from_json,
     axis_bounds_to_json,
     axis_facts,
     classify_outputs,
 )
-from downshift.core.verdict import ExportVerdict
+from downshift.entities.axes import AxisFact, DimBound
+from downshift.entities.verdict import ExportVerdict
 from tests.models import clean_mlp, gnn_gcn, tiny_bert
 
 

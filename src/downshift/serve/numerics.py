@@ -1,36 +1,13 @@
 """The serving check: the backend that serves, on the device that serves, against the CPU
 result of the same model. The verdict is made on the CPU, so this check covers the GPU."""
 
-from dataclasses import asdict, dataclass
-
 import numpy as np
 import torch
 
 from downshift.core.verify import compare_sample, fold_cosine
+from downshift.entities.serving import ServingNumerics
 from downshift.serve.backends import Backend
 from downshift.settings import TOLERANCE_TF32
-
-
-@dataclass
-class ServingNumerics:
-    provider: str  # the execution provider, or "torch"
-    device: str
-    tf32: bool
-    samples: int  # the samples that the check replayed
-    samples_total: int  # the samples of the verification. Fewer replayed: a size limit
-    max_abs_err: float
-    min_cosine: float | None  # for an embedding model only
-    ok: bool
-    atol: float
-    rtol: float
-
-    def to_dict(self) -> dict:
-        return asdict(self)
-
-    def summary(self) -> str:
-        cosine = "" if self.min_cosine is None else f", min cosine {self.min_cosine:.6f}"
-        of = "" if self.samples_total == self.samples else f" of {self.samples_total}"
-        return f"max abs err {self.max_abs_err:.1e} over {self.samples}{of} samples{cosine}"
 
 
 def serves_off_cpu(backend: Backend) -> bool:

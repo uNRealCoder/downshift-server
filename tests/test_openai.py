@@ -14,13 +14,14 @@ pytest.importorskip("tokenizers")
 from fastapi.testclient import TestClient
 
 import downshift
-from downshift.cli.runtime import ServeArgs
-from downshift.loading import LoadSpec, load_model
+from downshift.entities.cli import ServeArgs
+from downshift.entities.loading import LoadSpec
+from downshift.entities.options import ServeOptions
+from downshift.loading import load_model
 from downshift.serve.app import build_app
 from downshift.serve.engine import prepare_serving
 from downshift.serve.errors import ApiError
 from downshift.serve.openai import _check_dimensions, _matryoshka_cut
-from downshift.serve.options import ServeOptions
 from tests.conftest import with_options
 from tests.models import hf_repo
 

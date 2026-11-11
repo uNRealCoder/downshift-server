@@ -11,7 +11,8 @@ from types import SimpleNamespace
 
 import downshift
 from downshift.cli import main
-from downshift.loading import LoadError, LoadSpec, load_model
+from downshift.entities.loading import LoadSpec
+from downshift.loading import LoadError, load_model
 from downshift.serve.engine import ServeOptions, prepare_serving
 from tests.models import hf_repo, tiny_bert
 
@@ -57,7 +58,7 @@ def test_bert_at_max_position_embeddings_is_clean():
 
 
 def test_bert_at_max_position_embeddings_serves():
-    from downshift.loading import LoadedModel
+    from downshift.entities.loading import LoadedModel
 
     model = tiny_bert.make_model()
     inputs = tiny_bert.make_inputs(batch=1, seq=64)

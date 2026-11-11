@@ -16,10 +16,12 @@ import urllib.request
 
 import uvicorn
 
-from downshift.cli.runtime import ServeArgs, _build_serving_state, _tls_config, release_graph
-from downshift.core.memo import MEMO, ExportEntry
-from downshift.loading import LoadSpec
-from downshift.serve.options import ServeOptions
+from downshift.cli.runtime import _build_serving_state, _tls_config, release_graph
+from downshift.core.memo import MEMO
+from downshift.entities.cache import ExportEntry
+from downshift.entities.cli import ServeArgs
+from downshift.entities.loading import LoadSpec
+from downshift.entities.options import ServeOptions
 from tests.conftest import subprocess_env
 
 MODEL = "tests.models.clean_mlp:make_model"

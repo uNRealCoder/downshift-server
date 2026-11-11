@@ -9,15 +9,11 @@ from collections.abc import Callable
 import numpy as np
 import torch
 
-from downshift.adapters.base import Family, Prepared
 from downshift.adapters.embedding import PADDING_SIDE_ATTR
 from downshift.core.shapes import dim_name
-from downshift.core.verify import (
-    NumericsReport,
-    as_tensor_list,
-    make_shared_axis0_vary_fn,
-    tensor_to_numpy,
-)
+from downshift.core.verify import as_tensor_list, make_shared_axis0_vary_fn, tensor_to_numpy
+from downshift.entities.adapters import Family, Prepared
+from downshift.entities.verdict import NumericsReport
 
 # Runs a tuple of input tensors, gives one numpy array for each output.
 Runner = Callable[[tuple], list[np.ndarray]]

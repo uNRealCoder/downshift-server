@@ -41,13 +41,8 @@ def app_for(
     the same model and options is reused from the in-process memo and from
     `export_cache_dir`; `cache=False` skips both.
     """
-    from downshift.loading import (
-        LoadedModel,
-        LoadSpec,
-        hf_repo_dir,
-        load_model,
-        resolve_tokenizer_source,
-    )
+    from downshift.entities.loading import LoadedModel, LoadSpec
+    from downshift.loading import hf_repo_dir, load_model, resolve_tokenizer_source
     from downshift.serve.app import build_app
     from downshift.serve.engine import ServeOptions
     from downshift.serve.reuse import prepare_serving_reusing

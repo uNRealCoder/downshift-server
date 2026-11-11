@@ -16,14 +16,9 @@ from transformers import (
     PreTrainedModel,
 )
 
-from downshift.adapters.embedding import (
-    EMBEDDING_ATTR,
-    PADDING_SIDE_ATTR,
-    EmbeddingRecipe,
-    resolve_recipe,
-)
-from downshift.adapters.pooling import PoolingChoice
-from downshift.adapters.text import SIGMOID, SOFTMAX, TextIO
+from downshift.adapters.embedding import EMBEDDING_ATTR, PADDING_SIDE_ATTR, resolve_recipe
+from downshift.adapters.text import SIGMOID
+from downshift.entities.adapters import SOFTMAX, EmbeddingRecipe, PoolingChoice, TextIO
 
 logger = logging.getLogger("downshift.hf_repo")
 

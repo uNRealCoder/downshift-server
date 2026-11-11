@@ -245,7 +245,7 @@ A bad value (for example `DOWNSHIFT_PORT=abc`) stops the process at start with a
 ## Add a `serve` option
 
 1. If the option has an environment variable, add its default to `settings.py`.
-2. Add a field to `ServeOptions` in `serve/options.py`. Take the default from `settings.py`.
+2. Add a field to `ServeOptions` in `entities/options.py`. Take the default from `settings.py`.
 3. Add an `Annotated` option type to `cli/options.py`.
 4. Add a parameter to `serve_cmd` in `cli/main.py`, and pass it to `ServeOptions(...)`.
    An option for uvicorn (like `--ssl-certfile`, `--root-path`, `--forwarded-allow-ips` and `--timeout-graceful-shutdown`) has no `ServeOptions` field. Put it in `uvicorn_kwargs` in `serve_cmd`. The kwargs reach `uvicorn.run` and so each worker.

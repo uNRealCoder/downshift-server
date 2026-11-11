@@ -23,10 +23,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from downshift import __version__, settings
-from downshift.core.phase import Phase
+from downshift.entities.options import ExecutionChoice
+from downshift.entities.phase import Phase
 from downshift.logs import REPORT_LOGGER
 from downshift.serve.codec import BASE64_CODEC
-from downshift.serve.options import ExecutionChoice
 from downshift.sources import (
     HF_REPO_DIR,
     IN_PROCESS_MODULE,
@@ -37,8 +37,8 @@ from downshift.sources import (
 )
 
 if TYPE_CHECKING:
-    from downshift.core.verdict import ExportVerdict
-    from downshift.serve.engine import ServingState
+    from downshift.entities.serving import ServingState
+    from downshift.entities.verdict import ExportVerdict
 
 report_logger = logging.getLogger(REPORT_LOGGER)
 logger = logging.getLogger("downshift.cli")

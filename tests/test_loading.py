@@ -8,7 +8,8 @@ from torch import nn
 
 import downshift
 from downshift import hf_repo
-from downshift.loading import LoadError, LoadSpec, _instantiate, import_object, load_model
+from downshift.entities.loading import LoadSpec
+from downshift.loading import LoadError, _instantiate, import_object, load_model
 from tests.models import clean_mlp, tiny_bert
 
 MLP_FACTORY = "tests.models.clean_mlp:make_model"

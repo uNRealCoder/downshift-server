@@ -10,18 +10,16 @@ import pytest
 import torch
 
 import downshift
-from downshift.core.phase import CURRENT_PROGRESS, LoadProgress, Phase, report
-from downshift.core.verdict import ExportVerdict, prepare_model
-from downshift.loading import LoadedModel, LoadSpec, load_model
+from downshift.core.phase import CURRENT_PROGRESS, report
+from downshift.core.verdict import prepare_model
+from downshift.entities.loading import LoadedModel, LoadSpec
+from downshift.entities.phase import LoadProgress, Phase
+from downshift.entities.serving import WarmupStats
+from downshift.entities.verdict import ExportVerdict
+from downshift.loading import load_model
 from downshift.serve import backends as backends_mod
 from downshift.serve.backends import InferenceInputError, OnnxRuntimeBackend, TorchBackend
-from downshift.serve.engine import (
-    ServeOptions,
-    WarmupStats,
-    choose_backend,
-    prepare_serving,
-    synthesize_feeds,
-)
+from downshift.serve.engine import ServeOptions, choose_backend, prepare_serving, synthesize_feeds
 from tests.conftest import with_options
 from tests.models import clean_mlp
 
@@ -614,8 +612,8 @@ def test_a_failed_serving_check_keeps_onnx_with_force_onnx(off_onnx, serve_fixtu
 
 
 def test_a_failed_serving_check_of_torch_warns_and_keeps_serving(caplog):
+    from downshift.entities.serving import ServingNumerics
     from downshift.serve.engine import _falls_back
-    from downshift.serve.numerics import ServingNumerics
 
     failed = ServingNumerics("torch", "cuda", True, 1, 1, 0.5, None, False, 1e-3, 1e-2)
     with caplog.at_level(logging.WARNING, logger="downshift.serve"):
@@ -626,7 +624,7 @@ def test_a_failed_serving_check_of_torch_warns_and_keeps_serving(caplog):
 
 
 def test_a_reused_export_falls_back_to_torch_after_a_failed_serving_check(off_onnx, exported_mlp):
-    from downshift.core.memo import ExportEntry
+    from downshift.entities.cache import ExportEntry
     from downshift.serve.engine import state_from_entry
 
     path, model, verdict = exported_mlp
@@ -670,7 +668,7 @@ def test_tf32_off_sets_the_torch_flags_of_a_cuda_backend(monkeypatch):
 
 def test_a_cache_hit_replays_all_the_verification_samples(off_onnx, exported_mlp, tmp_path):
     from downshift.core.export_cache import ExportCache
-    from downshift.core.memo import ExportEntry
+    from downshift.entities.cache import ExportEntry
     from downshift.serve.engine import state_from_entry
 
     path, model, verdict = exported_mlp

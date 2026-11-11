@@ -9,12 +9,13 @@ import tempfile
 import threading
 from collections import Counter
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import onnx
 import torch
+
+from downshift.entities.verdict import CaptureResult
 
 _STRATEGIES: tuple[tuple[str, bool], ...] = (("strict=False", False), ("strict=True", True))
 
@@ -54,22 +55,6 @@ def _capture_torch_output(sink: io.StringIO) -> Iterator[None]:
         yield
     finally:
         torch_logger.removeHandler(handler)
-
-
-@dataclass
-class CaptureResult:
-    success: bool
-    capture_strategy: str | None  # a _STRATEGIES name. None if nothing traced
-    onnx_program: "torch.onnx.ONNXProgram | None" = None
-    onnx_bytes: bytes = field(default=b"", repr=False)
-    # In place of onnx_bytes if the weights went to external data. `tmpdir` owns the files.
-    onnx_path: Path | None = None
-    tmpdir: tempfile.TemporaryDirectory | None = field(default=None, repr=False)
-    opset: int | None = None
-    op_types: dict[str, int] = field(default_factory=dict)  # histogram, highest count first
-    exception: Exception | None = None  # quoted as the reason
-    exceptions: list[tuple[str, Exception]] = field(default_factory=list)  # each strategy tried
-    stderr: str = ""  # what torch printed, for the debug log
 
 
 def op_type_histogram(nodes: Iterable[Any]) -> dict[str, int]:

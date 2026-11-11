@@ -3,41 +3,11 @@ turns the model into a module with a flat tensor signature, with dynamic shapes 
 for verification.
 """
 
-from collections.abc import Callable
-from dataclasses import dataclass
-from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
 from torch import nn
 
-VaryFn = Callable[[int], tuple]
-
-
-class Family(StrEnum):
-    """The built-in adapter names. A custom adapter's `name` is a plain string."""
-
-    hf = "hf"
-    pyg = "pyg"
-    generic = "generic"
-
-
-@dataclass
-class Prepared:
-    model: nn.Module  # the module that is ready for export. forward takes flat tensors
-    inputs: tuple  # flat example inputs, one for each entry of input_names
-    input_names: tuple[str, ...]
-    dynamic_shapes: tuple  # for each input: {axis: torch.export.Dim} or None
-    vary_fn: VaryFn | None  # sample i -> inputs. None means: use the shared-axis-0 default
-    family: str  # the `name` of the adapter. ExportVerdict.model_family reports it
-    embedding: bool = False  # True: the first output is a pooled embedding, one row for each text
-
-    @property
-    def dynamic_dims(self) -> dict[str, list[int]]:
-        return {
-            name: sorted(spec)
-            for name, spec in zip(self.input_names, self.dynamic_shapes, strict=True)
-            if spec
-        }
+from downshift.entities.adapters import Prepared
 
 
 @runtime_checkable

@@ -42,7 +42,7 @@ All modules are in `src/downshift/`. The modules that the CLI imports at start d
 | `core/manifest.py`, `core/feeds.py`, `core/phase.py` | The manifest of `export`, example feeds, and the boot phases. |
 | `adapters/` | The `Adapter` protocol (`base.py`), the registry, and the `generic`, `pyg` and `hf` adapters. `embedding.py`, `pooling.py` and `text.py` are the Hugging Face parts. |
 | `serve/__init__.py` | `app_for`. |
-| `serve/options.py` | `ServeOptions`, `BackendChoice` and `ExecutionChoice`. |
+| `entities/` | The data types: every dataclass, and the enums and aliases that they need. `entities/options.py` has `ServeOptions`, `BackendChoice` and `ExecutionChoice`. No module in it has logic of its own. |
 | `serve/engine.py`, `serve/reuse.py` | `ServingState`, the two boot builders, the backend selection and the warmup. `reuse.py` looks up the export cache. |
 | `serve/app.py` | `build_app`, the routes, the request-ID and API-key middleware, and the loading of `--middleware`. |
 | `serve/predict.py`, `serve/result_cache.py` | The request path of `/predict` and `/predict/graph`, and the result cache. |

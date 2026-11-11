@@ -6,15 +6,15 @@ have shapes that the exporter did not see. This finds a graph that froze a shape
 
 import logging
 import math
-from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 import numpy as np
 import onnxruntime as ort
 import torch
 
-from downshift.adapters.base import VaryFn
 from downshift.core.shapes import alternative_sizes, dim_bounds, pick_size, resize_axis
+from downshift.entities.adapters import VaryFn
+from downshift.entities.verdict import NumericsReport, WorstMismatch
 from downshift.logs import REPORT_LOGGER
 from downshift.settings import DEFAULT_SAMPLES, TOLERANCE_COSINE, TOLERANCES
 
@@ -23,61 +23,6 @@ report_logger = logging.getLogger(REPORT_LOGGER)
 
 class OnnxRuntimeError(RuntimeError):
     """ONNX Runtime could not load the graph or run a sample. A numeric mismatch is not this."""
-
-
-@dataclass
-class WorstMismatch:
-    """The element with the largest absolute error, across all samples."""
-
-    sample: int
-    output: int
-    index: tuple[int, ...]
-    expected: float
-    got: float
-    input_shapes: list[tuple[int, ...]]
-
-
-@dataclass
-class NumericsReport:
-    samples_tested: int
-    max_abs_err: float
-    max_rel_err: float
-    failures: int
-    # None if the baseline sample failed, False if only a varied shape failed.
-    shape_generalization: bool | None
-    tolerance_abs: float
-    tolerance_rel: float
-    tolerance_dtype: str = "float32"  # the dtype whose default tolerances applied
-    tolerance_overridden: bool = False  # --atol or --rtol set the values
-    baseline_failed: bool = False
-    # For an embedding model: the smallest cosine between a torch row and an ONNX Runtime row.
-    min_cosine: float | None = None
-    tolerance_cosine: float | None = None
-    worst: WorstMismatch | None = None
-    sample_shapes: list[list[tuple[int, ...]]] = field(default_factory=list)
-    output_shapes: list[list[tuple[int, ...]]] = field(default_factory=list)  # [sample][output]
-    seed: int = 0
-    notes: list[str] = field(default_factory=list)
-
-    @property
-    def passed(self) -> bool:
-        return self.failures == 0
-
-    def to_dict(self) -> dict:
-        return asdict(self) | {"passed": self.passed}
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "NumericsReport":
-        """The inverse of to_dict()."""
-        values = {f.name: data[f.name] for f in fields(cls) if f.name in data}
-        if values.get("worst") is not None:
-            worst = dict(values["worst"])
-            worst["index"] = tuple(worst["index"])
-            worst["input_shapes"] = [tuple(s) for s in worst["input_shapes"]]
-            values["worst"] = WorstMismatch(**worst)
-        for name in ("sample_shapes", "output_shapes"):
-            values[name] = [[tuple(s) for s in sample] for sample in values.get(name, [])]
-        return cls(**values)
 
 
 def default_tolerances(model: torch.nn.Module) -> tuple[str, float, float]:

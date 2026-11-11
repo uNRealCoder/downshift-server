@@ -78,7 +78,6 @@ from downshift.cli.options import (
     WorkersOpt,
 )
 from downshift.cli.runtime import (
-    ServeArgs,
     _build_serving_state,
     _load,
     _run_workers,
@@ -86,12 +85,12 @@ from downshift.cli.runtime import (
     _tls_config,
     release_graph,
 )
-from downshift.serve.options import BackendChoice, ExecutionChoice, ServeOptions
-from downshift.serve.schemas import OutputEncoding
+from downshift.entities.cli import ServeArgs
+from downshift.entities.options import BackendChoice, ExecutionChoice, OutputEncoding, ServeOptions
 
 if TYPE_CHECKING:
-    from downshift.core.verdict import ExportVerdict
-    from downshift.serve.engine import ServingState
+    from downshift.entities.serving import ServingState
+    from downshift.entities.verdict import ExportVerdict
 
 EXIT_USAGE = 4  # a bad model spec, a bad option, a file that cannot load
 EXIT_CRASH = 5
@@ -225,7 +224,7 @@ def check_cmd(
 ) -> None:
     """Export in memory and verify the numbers. The exit code is the verdict."""
     from downshift.core.shapes import parse_dynamic_spec
-    from downshift.loading import LoadSpec
+    from downshift.entities.loading import LoadSpec
 
     _setup_logging(log_level, stderr=json_out)
     with _exit_on_error(log_level is LogLevel.debug):
@@ -302,7 +301,8 @@ def export_cmd(
     """Export to DIR/NAME.onnx with a NAME.manifest.json file. If the verdict is FAILED, nothing is written."""
     from downshift.core.manifest import manifest_path_for
     from downshift.core.shapes import parse_dynamic_spec
-    from downshift.loading import LoadError, LoadSpec
+    from downshift.entities.loading import LoadSpec
+    from downshift.loading import LoadError
 
     _setup_logging(log_level, stderr=json_out)
     with _exit_on_error(log_level is LogLevel.debug):
@@ -463,7 +463,7 @@ def serve_cmd(
             # The backend default would oversubscribe the cores N times: split them.
             intra_op_threads = max(1, settings.usable_cpus() // workers)
         from downshift.core.shapes import parse_dynamic_spec
-        from downshift.loading import LoadSpec
+        from downshift.entities.loading import LoadSpec
 
         # Step 2: put the options in three objects. LoadSpec says how to load the model,
         # ServeOptions how to serve it, and ServeArgs both, in a form that a worker can get as JSON.

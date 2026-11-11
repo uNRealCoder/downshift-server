@@ -18,16 +18,12 @@ from downshift._version import __version__
 _FROM_ENV: Any = object()
 
 if TYPE_CHECKING:
-    from downshift.adapters.base import Adapter, Prepared, VaryFn
-    from downshift.core.memo import ExportEntry
-    from downshift.core.verdict import (
-        ExportVerdict,
-        build_verdict,
-        check,
-        intake,
-        prepare_model,
-    )
-    from downshift.core.verify import NumericsReport, OnnxRuntimeError
+    from downshift.adapters.base import Adapter
+    from downshift.core.verdict import build_verdict, check, intake, prepare_model
+    from downshift.core.verify import OnnxRuntimeError
+    from downshift.entities.adapters import Prepared, VaryFn
+    from downshift.entities.cache import ExportEntry
+    from downshift.entities.verdict import ExportVerdict, NumericsReport
     from downshift.serve.app import build_app
 
 # A literal list, so ruff sees the TYPE_CHECKING imports as exported. Keep it in step with _LAZY.
@@ -184,7 +180,7 @@ def _copy_external_graph(source: Path, output: Path) -> None:
 def _export_from_entry(entry: ExportEntry, output: Path, source_path: Path | None) -> ExportVerdict:
     """export() from a reused export: write the cached graph and a manifest."""
     from downshift.core.manifest import write_manifest
-    from downshift.core.verdict import ExportVerdict
+    from downshift.entities.verdict import ExportVerdict
 
     verdict = ExportVerdict.from_dict(entry.verdict)
     if verdict.status == "FAILED":

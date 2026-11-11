@@ -27,14 +27,8 @@ from typing import Any
 
 import numpy as np
 
-from downshift.core.memo import (
-    FORMAT_VERSION,
-    MEMO,
-    STORED_STATUSES,
-    ExportEntry,
-    file_identity,
-    sha256_file,
-)
+from downshift.core.memo import FORMAT_VERSION, MEMO, STORED_STATUSES, file_identity, sha256_file
+from downshift.entities.cache import ExportEntry
 
 logger = logging.getLogger("downshift.export_cache")
 
@@ -227,7 +221,7 @@ class ExportCache:
         """Save a CLEAN or DEGRADED entry. Raises OSError if the directory cannot be written."""
         from downshift._version import __version__
         from downshift.core.manifest import external_data_files, write_manifest
-        from downshift.core.verdict import ExportVerdict
+        from downshift.entities.verdict import ExportVerdict
 
         if entry.status not in STORED_STATUSES:
             return

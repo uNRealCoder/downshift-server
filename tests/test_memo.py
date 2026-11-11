@@ -14,7 +14,8 @@ from fastapi.testclient import TestClient
 
 import downshift
 from downshift.core import capture, memo, verdict
-from downshift.core.memo import MEMO, ExportEntry, ExportMemo
+from downshift.core.memo import MEMO, ExportMemo
+from downshift.entities.cache import ExportEntry
 from downshift.serve import app_for
 from tests.models import clean_mlp
 
@@ -344,7 +345,8 @@ def test_editing_a_repo_file_misses(tmp_path, monkeypatch):
 
 def test_the_banner_boot_row_says_reused(tmp_path):
     from downshift.cli import render
-    from downshift.serve.engine import ServeOptions, ServingState
+    from downshift.entities.serving import ServingState
+    from downshift.serve.engine import ServeOptions
 
     state = ServingState.__new__(ServingState)
     state.timings = {"load": 0.0, "session": 0.1, "warmup": 0.1}

@@ -9,8 +9,8 @@ from typing import Any
 
 import torch
 
-from downshift.adapters.base import VaryFn
-from downshift.core.axes import AxisBounds, DimBound
+from downshift.entities.adapters import VaryFn
+from downshift.entities.axes import AxisBounds, DimBound
 
 # The default maximum of each Dim that downshift makes itself (the default rule, --dynamic,
 # PyG). --axis-max can raise it.

@@ -12,7 +12,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from downshift import settings
-from downshift.loading import LoadSpec, load_model
+from downshift.entities.loading import LoadSpec
+from downshift.loading import load_model
 from downshift.logs import request_id_var, setup_logging
 from downshift.serve.app import build_app
 from downshift.serve.engine import ServeOptions, prepare_serving

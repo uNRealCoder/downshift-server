@@ -7,14 +7,9 @@ import torch
 from torch import nn
 from transformers import PreTrainedModel
 
-from downshift.adapters.base import Family, Prepared, VaryFn
-from downshift.adapters.embedding import (
-    EMBEDDING_ATTR,
-    PADDING_SIDE_ATTR,
-    EmbeddingRecipe,
-    PoolingHead,
-)
+from downshift.adapters.embedding import EMBEDDING_ATTR, PADDING_SIDE_ATTR, PoolingHead
 from downshift.core.shapes import alternative_sizes, lower_axis_max, pick_size
+from downshift.entities.adapters import EmbeddingRecipe, Family, Prepared, VaryFn
 from downshift.hf_repo import position_limit
 
 INPUT_NAMES = ("input_ids", "attention_mask")

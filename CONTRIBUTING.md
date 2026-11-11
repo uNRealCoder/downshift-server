@@ -82,7 +82,7 @@ Follow "Add a `serve` option" in [`docs/cli.md`](docs/cli.md#add-a-serve-option)
 | `src/downshift/settings.py` | The default, and the `DOWNSHIFT_*` variable. |
 | `src/downshift/cli/options.py` | The `Annotated` option type. |
 | `src/downshift/cli/main.py` | A parameter of `serve_cmd`, passed to `ServeOptions(...)`. |
-| `src/downshift/serve/options.py` | The field of `ServeOptions`. |
+| `src/downshift/entities/options.py` | The field of `ServeOptions`. |
 | `src/downshift/cli/runtime.py` | `ServeArgs.from_json`, if the field is an enum. |
 | `docs/cli.md`, `docs/production.md` | The table row and the description. |
 | `tests/` and `CHANGELOG.md` | A test and a changelog entry. |

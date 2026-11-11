@@ -15,7 +15,7 @@ import torch
 import downshift
 from downshift.core import verdict as verdict_mod
 from downshift.core import verify as verify_mod
-from downshift.core.capture import CaptureResult
+from downshift.entities.verdict import CaptureResult
 from tests.models import (
     bf16_weights,
     clean_mlp,

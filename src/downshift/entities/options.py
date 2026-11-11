@@ -1,15 +1,11 @@
-"""The serving options and the backend choice. This module has no torch import. The CLI can
-therefore parse `--backend` and `--output-encoding` without the import cost of torch, only to
-print `--help`.
-"""
+"""Entities: options."""
+
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
 
 from downshift import settings
-from downshift.serve.schemas import OutputEncoding
-
-__all__ = ["BackendChoice", "ExecutionChoice", "ServeOptions"]
 
 
 class BackendChoice(StrEnum):
@@ -25,6 +21,23 @@ class ExecutionChoice(StrEnum):
 
     threadpool = "threadpool"
     inline = "inline"
+
+
+class OutputEncoding(StrEnum):
+    """How response tensors are written: nested lists, or {data, dtype, shape} base64 dicts."""
+
+    json = "json"
+    base64 = "base64"
+
+
+class RequestOutputEncoding(StrEnum):
+    """What the `output_encoding` of a request can name: OutputEncoding plus safetensors.
+    Safetensors is a format for the whole response (an `Accept` header can also ask for it).
+    It is therefore not a default of the server."""
+
+    json = "json"
+    base64 = "base64"
+    safetensors = "safetensors"
 
 
 @dataclass

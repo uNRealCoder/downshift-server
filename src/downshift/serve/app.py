@@ -39,9 +39,12 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 import downshift
 from downshift import settings
 from downshift._imports import import_object
-from downshift.core.phase import CURRENT_PROGRESS, LoadProgress
+from downshift.core.phase import CURRENT_PROGRESS
+from downshift.entities.metrics import Metrics
+from downshift.entities.options import ExecutionChoice
+from downshift.entities.phase import LoadProgress
+from downshift.entities.serving import ServingState
 from downshift.logs import request_id_var
-from downshift.serve.engine import ServingState
 from downshift.serve.errors import (
     ApiError,
     error_response,
@@ -49,14 +52,13 @@ from downshift.serve.errors import (
     route_path,
     validation_error_handler,
 )
-from downshift.serve.metrics import CONTENT_TYPE, Metrics, render
+from downshift.serve.metrics import CONTENT_TYPE, render
 from downshift.serve.openai import (
     embeddings_response,
     model_card,
     parse_embeddings,
     require_model,
 )
-from downshift.serve.options import ExecutionChoice
 from downshift.serve.predict import (
     BINARY_REQUEST_TYPES,
     SAFETENSORS_MEDIA_TYPE,

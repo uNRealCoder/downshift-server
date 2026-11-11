@@ -14,12 +14,15 @@ from fastapi.testclient import TestClient
 from torch import nn
 
 from downshift import settings
-from downshift.core.phase import Phase, report
-from downshift.loading import LoadSpec, load_model
+from downshift.core.phase import report
+from downshift.entities.loading import LoadSpec
+from downshift.entities.options import BackendChoice
+from downshift.entities.phase import Phase
+from downshift.entities.serving import ServingState
+from downshift.loading import load_model
 from downshift.serve.app import build_app
 from downshift.serve.backends import OnnxRuntimeBackend, TorchBackend
-from downshift.serve.engine import ServeOptions, ServingState, prepare_serving
-from downshift.serve.options import BackendChoice
+from downshift.serve.engine import ServeOptions, prepare_serving
 from tests.conftest import with_options
 
 MLP_INPUT = {"inputs": {"x": [[0.0] * 16]}}
@@ -554,7 +557,7 @@ def test_device_cuda_without_cuda_fails_at_construction(monkeypatch, device):
 def test_a_slow_text_encode_does_not_hold_the_inference_slot(tmp_path, monkeypatch):
     pytest.importorskip("transformers")
     pytest.importorskip("tokenizers")
-    from downshift.adapters.text import TextIO
+    from downshift.entities.adapters import TextIO
     from tests.models import hf_repo
 
     repo = hf_repo.write_encoder_repo(tmp_path)

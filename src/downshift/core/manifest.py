@@ -10,7 +10,7 @@ import torch
 from onnx.external_data_helper import ExternalDataInfo, uses_external_data
 
 from downshift.core.memo import FORMAT_VERSION, sha256_file
-from downshift.core.verdict import ExportVerdict
+from downshift.entities.verdict import ExportVerdict
 from downshift.sources import path_basename
 
 # The ONNX float dtype codes that the manifest labels.

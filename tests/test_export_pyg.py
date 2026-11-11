@@ -11,7 +11,7 @@ answer. GAT does not.
 import pytest
 
 import downshift
-from downshift.core.verdict import ExportVerdict
+from downshift.entities.verdict import ExportVerdict
 from tests.models import gnn_gat, gnn_gcn, gnn_output_kinds, gnn_sage
 
 FIXTURES = [gnn_gcn, gnn_sage, gnn_gat]

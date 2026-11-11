@@ -4,11 +4,12 @@ from fastapi.testclient import TestClient
 from safetensors.numpy import load as st_load
 from safetensors.numpy import save as st_save
 
-from downshift.loading import LoadSpec, load_model
+from downshift.entities.loading import LoadSpec
+from downshift.entities.options import ServeOptions
+from downshift.loading import load_model
 from downshift.serve import graphs as graph_mod
 from downshift.serve.app import build_app
 from downshift.serve.engine import prepare_serving
-from downshift.serve.options import ServeOptions
 
 ST = "application/vnd.safetensors"
 KINDS = "tests.models.gnn_output_kinds"
@@ -57,7 +58,7 @@ def test_a_failed_export_still_classifies_outputs_for_the_torch_fallback(
 ):
     # torch 2.5 cannot export this GCN. The fallback must batch in the same way as --backend torch.
     from downshift.core import verdict as verdict_mod
-    from downshift.core.capture import CaptureResult
+    from downshift.entities.verdict import CaptureResult
 
     failed = CaptureResult(success=False, capture_strategy=None, exception=RuntimeError("no"))
     monkeypatch.setattr(verdict_mod, "capture", lambda *a, **k: failed)
@@ -89,10 +90,11 @@ def test_batch_matches_single_requests(which, request):
 
 
 def test_batch_layout_counts(gcn_client):
-    from downshift.serve.predict import _prepare_feeds, _Request
+    from downshift.entities.requests import ParsedRequest
+    from downshift.serve.predict import _prepare_feeds
 
     state = gcn_client.app.state.serving
-    _, _, layout = _prepare_feeds(state, _Request(graphs=_graphs()))
+    _, _, layout = _prepare_feeds(state, ParsedRequest(graphs=_graphs()))
     assert layout is not None
     nodes, edges = layout[0], layout[1]
     assert (len(nodes), sum(nodes), sum(edges)) == (3, 15, 19)

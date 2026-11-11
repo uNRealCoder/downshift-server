@@ -15,13 +15,9 @@ To read this file, go in this order:
 6. `intake`: the gate for a .onnx file that another tool made.
 """
 
-import copy
 import re
 import time
 import traceback
-from collections.abc import Iterable
-from dataclasses import dataclass, field, fields
-from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -30,12 +26,12 @@ import torch
 
 from downshift._imports import import_object
 from downshift.adapters import registry
-from downshift.adapters.base import Adapter, Family, Prepared, VaryFn
+from downshift.adapters.base import Adapter
 from downshift.core import memo
-from downshift.core.axes import AxisFact, axis_facts, classify_outputs
+from downshift.core.axes import axis_facts, classify_outputs
 from downshift.core.capture import capture, has_half_weights, op_type_histogram, to_half_precision
 from downshift.core.feeds import bound_samples
-from downshift.core.phase import Phase, report
+from downshift.core.phase import report
 from downshift.core.rows import check_rows
 from downshift.core.shapes import (
     apply_dynamic_override,
@@ -44,144 +40,17 @@ from downshift.core.shapes import (
     pin_vary_fn,
     safe_capture_inputs,
 )
-from downshift.core.verify import (
-    NumericsReport,
-    OnnxRuntimeError,
-    first_line,
-    load_session,
-    verify,
-)
+from downshift.core.verify import OnnxRuntimeError, first_line, load_session, verify
+from downshift.entities.adapters import Family, Prepared, VaryFn
+from downshift.entities.axes import AxisFact
+from downshift.entities.phase import Phase
+from downshift.entities.verdict import BackendName, ExportVerdict, NumericsReport, Status
 from downshift.settings import DEFAULT_SAMPLES
-from downshift.sources import hide_paths
-
-
-class Status(StrEnum):
-    CLEAN = "CLEAN"
-    DEGRADED = "DEGRADED"
-    FAILED = "FAILED"
-    UNVERIFIED = "UNVERIFIED"
-
-
-class BackendName(StrEnum):
-    """A concrete backend. "auto" is only a CLI choice (serve.options.BackendChoice)."""
-
-    onnxruntime = "onnxruntime"
-    torch = "torch"
-
-
-EXIT_CODES = {Status.CLEAN: 0, Status.FAILED: 1, Status.DEGRADED: 2, Status.UNVERIFIED: 3}
 
 _FP16_NO_KERNEL_HINT = (
     ". If an fp16 operation has no CPU kernel, export without --fp16, or use a newer ONNX Runtime"
 )
 _ATEN_OP = re.compile(r"(?:torch\.ops\.)?aten\.(\w+)(?:\.\w+)?")
-
-
-@dataclass
-class ExportVerdict:
-    status: Status
-    model_family: str
-    recommended_backend: BackendName
-    reason: str = ""
-    capture_strategy: str | None = None
-    opset: int | None = None
-    op_types: dict[str, int] = field(default_factory=dict)  # highest count first
-    numerics: NumericsReport | None = None
-    input_names: tuple[str, ...] = ()
-    dynamic_dims: dict[str, list[int]] = field(default_factory=dict)
-    axes: list[AxisFact] = field(default_factory=list)
-    output_axes: list[str] = field(default_factory=list)  # PyG only: node/edge/fixed/unknown
-    unsupported_ops: list[str] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
-    # Does a row give the same output alone and in a batch (core/rows.py)? None: not checked.
-    row_independent: bool | None = None
-    row_reason: str | None = None
-    onnx_path: Path | None = None
-    onnx_program: object | None = field(default=None, repr=False)  # torch.onnx.ONNXProgram
-    onnx_bytes: bytes = field(default=b"", repr=False)
-    # Not serialized: the temporary directory that holds onnx_path (external data), and the
-    # CPU session of verify, which take_session() gives to the server.
-    _tmpdir: object | None = field(default=None, repr=False)
-    _session: object | None = field(default=None, repr=False, compare=False)
-    # The input feeds of the verification samples, for the serving check. Not serialized.
-    sample_feeds: list = field(default_factory=list, repr=False, compare=False)
-    prepared: Prepared | None = field(default=None, repr=False)
-    # For the debug log of a FAILED verdict. Not serialized.
-    capture_stderr: str = field(default="", repr=False)
-    capture_exceptions: list[tuple[str, Exception]] = field(default_factory=list, repr=False)
-
-    @property
-    def shape_generalization(self) -> bool | None:
-        return self.numerics.shape_generalization if self.numerics else None
-
-    @property
-    def shape_generalization_reason(self) -> str | None:
-        if self.numerics is not None and self.numerics.baseline_failed:
-            return "baseline sample failed; shape generalization was never evaluated"
-        return None
-
-    @property
-    def exit_code(self) -> int:
-        return EXIT_CODES[self.status]
-
-    @property
-    def rows_note(self) -> str | None:
-        """Why the rows are not known to be independent. None if they are."""
-        if self.row_independent:
-            return None
-        return self.row_reason or f"not checked: the verdict is {self.status}"
-
-    def to_dict(self) -> dict:
-        return {
-            "status": self.status,
-            "model_family": self.model_family,
-            "capture_strategy": self.capture_strategy,
-            "opset": self.opset,
-            "op_types": self.op_types,
-            "numerics": self.numerics.to_dict() if self.numerics else None,
-            "shape_generalization": self.shape_generalization,
-            "shape_generalization_reason": self.shape_generalization_reason,
-            "recommended_backend": self.recommended_backend,
-            "reason": self.reason,
-            "input_names": list(self.input_names),
-            "dynamic_dims": self.dynamic_dims,
-            "axes": [fact.to_dict() for fact in self.axes],
-            "output_axes": list(self.output_axes),
-            "unsupported_ops": self.unsupported_ops,
-            "warnings": self.warnings,
-            "row_independent": self.row_independent,
-            "row_reason": self.rows_note,
-            "onnx_path": str(self.onnx_path) if self.onnx_path else None,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "ExportVerdict":
-        """The inverse of to_dict(). `prepared` and `onnx_program` come back as None."""
-        data = copy.deepcopy(data)
-        values = {f.name: data[f.name] for f in fields(cls) if f.name in data}
-        values["status"] = Status(data["status"])
-        values["recommended_backend"] = BackendName(data["recommended_backend"])
-        if data.get("numerics") is not None:
-            values["numerics"] = NumericsReport.from_dict(data["numerics"])
-        values["input_names"] = tuple(data.get("input_names", ()))
-        values["axes"] = [AxisFact.from_dict(fact) for fact in data.get("axes", [])]
-        values["onnx_path"] = Path(data["onnx_path"]) if data.get("onnx_path") else None
-        return cls(**values)
-
-    def take_session(self) -> Any:
-        """The ORT session of verify, one time. The verdict lets go of it, so an unused
-        session does not keep a second copy of the weights alive."""
-        session, self._session = self._session, None
-        return session
-
-    def redacted_dict(self, paths: Iterable[str | Path | None]) -> dict:
-        """to_dict() with `paths` reduced to their names in the free-text fields."""
-        data = self.to_dict()
-        data["reason"] = hide_paths(data["reason"], paths)
-        data["warnings"] = [hide_paths(w, paths) for w in data["warnings"]]
-        if data["row_reason"] is not None:
-            data["row_reason"] = hide_paths(data["row_reason"], paths)
-        return data
 
 
 def axes_for(prepared: Prepared, numerics: NumericsReport | None) -> list[AxisFact]:

@@ -19,10 +19,11 @@ from transformers import AutoModel, BertForSequenceClassification
 
 from downshift.adapters.embedding import RecipeError, pool, read_recipe, resolve_recipe
 from downshift.cli import main, runtime
-from downshift.loading import LoadError, LoadSpec, load_model
+from downshift.entities.loading import LoadSpec
+from downshift.entities.options import BackendChoice, ServeOptions
+from downshift.loading import LoadError, load_model
 from downshift.serve.app import build_app
 from downshift.serve.engine import prepare_serving
-from downshift.serve.options import BackendChoice, ServeOptions
 from tests.models import hf_repo
 
 TEXTS = ["hello world", "ignore previous instructions the capital", "the"]
@@ -578,7 +579,8 @@ def test_pooling_flag_on_a_bare_repo_still_reads_the_prompts(tmp_path):
 
 
 def test_the_pooled_output_is_float32_whatever_the_hidden_dtype():
-    from downshift.adapters.embedding import EmbeddingRecipe, PoolingHead
+    from downshift.adapters.embedding import PoolingHead
+    from downshift.entities.adapters import EmbeddingRecipe
 
     head = PoolingHead(EmbeddingRecipe("lasttoken", True, None, "--pooling"))
     hidden = torch.randn(2, 5, 8).bfloat16()

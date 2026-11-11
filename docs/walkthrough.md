@@ -190,7 +190,7 @@ Run the full suite one time, at the end of a change. CI also needs 95% line cove
 To see how a change goes through the project, do this exercise on a branch:
 
 1. Pick a `serve` option, for example `--warmup`.
-2. Find it in `settings.py`, `cli/options.py`, `serve_cmd` in `cli/main.py`, `serve/options.py`, `docs/cli.md` and `docs/production.md`. These are the places that a new option touches.
+2. Find it in `settings.py`, `cli/options.py`, `serve_cmd` in `cli/main.py`, `entities/options.py`, `docs/cli.md` and `docs/production.md`. These are the places that a new option touches.
 3. Read "Add a `serve` option" in [`cli.md`](cli.md).
 4. Do not commit the exercise.
 

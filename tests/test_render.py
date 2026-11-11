@@ -11,16 +11,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from downshift.adapters.embedding import EmbeddingRecipe
-from downshift.adapters.text import TextIO
 from downshift.cli import render
-from downshift.core.verdict import ExportVerdict
-from downshift.core.verify import NumericsReport, WorstMismatch
-from downshift.serve.backends import BackendMeta
-from downshift.serve.engine import ServeOptions, ServingState, WarmupStats
-from downshift.serve.numerics import ServingNumerics
-from downshift.serve.options import ExecutionChoice
-from downshift.serve.schemas import OutputEncoding
+from downshift.entities.adapters import EmbeddingRecipe, TextIO
+from downshift.entities.backend import BackendMeta
+from downshift.entities.options import ExecutionChoice, OutputEncoding
+from downshift.entities.serving import ServingNumerics, ServingState, WarmupStats
+from downshift.entities.verdict import ExportVerdict, NumericsReport, WorstMismatch
+from downshift.serve.engine import ServeOptions
 
 
 @pytest.fixture(autouse=True)
@@ -538,7 +535,7 @@ def test_print_ready_without_timings(caplog):
 
 
 def _fact(name: str, served_max: int, sampled_max: int | None, input: str = "x"):
-    from downshift.core.axes import AxisFact
+    from downshift.entities.axes import AxisFact
 
     return AxisFact(input, 0, name, 1, served_max, None if sampled_max is None else 2, sampled_max)
 

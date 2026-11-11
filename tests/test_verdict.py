@@ -99,9 +99,9 @@ def test_intake_with_different_reference_is_degraded(exported_mlp):
 
 def test_intake_serves_an_onnx_with_an_external_data_file(tmp_path, monkeypatch):
     from downshift.core import capture as capture_mod
-    from downshift.core.memo import ExportEntry
+    from downshift.entities.cache import ExportEntry
+    from downshift.entities.options import ServeOptions
     from downshift.serve.engine import state_from_entry
-    from downshift.serve.options import ServeOptions
 
     monkeypatch.setattr(capture_mod, "EXTERNAL_DATA_THRESHOLD", 0)
     path = tmp_path / "ext.onnx"

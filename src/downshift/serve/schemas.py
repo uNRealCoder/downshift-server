@@ -2,35 +2,18 @@
 
 import math
 import re
-from enum import StrEnum
 from typing import Annotated, Any, Literal
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from downshift.entities.options import RequestOutputEncoding
 from downshift.serve.codec import b64decode
 from downshift.settings import DEFAULT_MAX_INPUT_BYTES
 
 # --------------------------------------------------------------------------------------------------
 # Output encodings
 # --------------------------------------------------------------------------------------------------
-
-
-class OutputEncoding(StrEnum):
-    """How response tensors are written: nested lists, or {data, dtype, shape} base64 dicts."""
-
-    json = "json"
-    base64 = "base64"
-
-
-class RequestOutputEncoding(StrEnum):
-    """What the `output_encoding` of a request can name: OutputEncoding plus safetensors.
-    Safetensors is a format for the whole response (an `Accept` header can also ask for it).
-    It is therefore not a default of the server."""
-
-    json = "json"
-    base64 = "base64"
-    safetensors = "safetensors"
 
 
 OutputEncodingField = Annotated[

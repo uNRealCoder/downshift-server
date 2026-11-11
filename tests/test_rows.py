@@ -4,9 +4,10 @@ import pytest
 
 pytest.importorskip("transformers")
 
-from downshift.adapters.embedding import EMBEDDING_ATTR, PADDING_SIDE_ATTR, EmbeddingRecipe
+from downshift.adapters.embedding import EMBEDDING_ATTR, PADDING_SIDE_ATTR
 from downshift.core import rows
 from downshift.core.verdict import build_verdict, prepare_model
+from downshift.entities.adapters import EmbeddingRecipe
 from tests.models import clean_mlp, cross_row, tiny_bert
 
 
@@ -121,7 +122,7 @@ def test_generic_rows_need_one_row_shape():
 
 def test_the_verdict_carries_the_row_facts_through_a_round_trip():
     import downshift
-    from downshift.core.verdict import ExportVerdict
+    from downshift.entities.verdict import ExportVerdict
 
     clean = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(2), samples=3)
     mixed = downshift.check(cross_row.make_model(), cross_row.make_inputs(), samples=3)
@@ -145,7 +146,7 @@ def test_a_verdict_without_numerics_says_that_the_rows_were_not_checked():
 
 def test_a_verdict_from_0_5_reads_as_not_independent():
     import downshift
-    from downshift.core.verdict import ExportVerdict
+    from downshift.entities.verdict import ExportVerdict
 
     data = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(2), samples=3).to_dict()
     del data["row_independent"], data["row_reason"]

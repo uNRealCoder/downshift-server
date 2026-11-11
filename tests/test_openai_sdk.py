@@ -14,7 +14,8 @@ pytest.importorskip("tokenizers")
 
 from fastapi.testclient import TestClient
 
-from downshift.loading import LoadSpec, load_model
+from downshift.entities.loading import LoadSpec
+from downshift.loading import load_model
 from downshift.serve.app import build_app
 from downshift.serve.engine import prepare_serving
 from tests.models import hf_repo

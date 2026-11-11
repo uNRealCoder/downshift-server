@@ -12,7 +12,8 @@ from typing import Any
 from torch import nn
 
 from downshift._imports import LoadError
-from downshift.adapters.base import Adapter, Family
+from downshift.adapters.base import Adapter
+from downshift.entities.adapters import Family
 
 ENTRY_POINT_GROUP = "downshift.adapters"
 

@@ -15,13 +15,13 @@ from fastapi.testclient import TestClient
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import downshift
-from downshift.loading import LoadedModel, LoadSpec, load_model
+from downshift.entities.loading import LoadedModel, LoadSpec
+from downshift.entities.options import ExecutionChoice, OutputEncoding
+from downshift.loading import load_model
 from downshift.serve import app_for
 from downshift.serve import predict as serve_predict
 from downshift.serve.app import _flag_stopping_on_signal, build_app
 from downshift.serve.engine import ServeOptions, prepare_serving
-from downshift.serve.options import ExecutionChoice
-from downshift.serve.schemas import OutputEncoding
 from tests.conftest import b64_input, b64_output, with_options
 from tests.models import clean_mlp
 
@@ -959,7 +959,7 @@ def test_metadata_has_no_serving_numerics_on_the_cpu(mlp_client):
 
 
 def test_metadata_shows_the_serving_numerics(mlp_state, monkeypatch):
-    from downshift.serve.numerics import ServingNumerics
+    from downshift.entities.serving import ServingNumerics
 
     check = ServingNumerics(
         "CUDAExecutionProvider", "cuda", False, 1, 1, 2e-6, None, True, 1e-4, 1e-3

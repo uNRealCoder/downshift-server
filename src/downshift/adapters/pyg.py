@@ -8,7 +8,6 @@ from torch_geometric.data import Data
 from torch_geometric.nn import MessagePassing
 
 from downshift.adapters._flatten import build_shim_class
-from downshift.adapters.base import Family, Prepared, VaryFn
 from downshift.core.shapes import (
     DEFAULT_DIM_MAX,
     alternative_sizes,
@@ -16,6 +15,7 @@ from downshift.core.shapes import (
     lower_axis_max,
     pick_size,
 )
+from downshift.entities.adapters import Family, Prepared, VaryFn
 
 BASE_FIELD_NAMES = ("x", "edge_index")  # edge_attr is added if the input Data has it
 _GUESS_NODES = 8

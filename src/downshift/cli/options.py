@@ -1,5 +1,5 @@
 """Typer option types that the commands share: the `Annotated` aliases and the enums that they
-name. This module imports only the standard library, typer, and downshift.serve.options and
+name. This module imports only the standard library, typer, and downshift.entities.options and
 schemas. Both of these are free of torch. An import of this module therefore never pays the
 import cost of torch, and `--help` and `--version` stay fast.
 """
@@ -9,9 +9,8 @@ from typing import Annotated
 
 import typer
 
-from downshift.adapters.pooling import PoolingChoice
-from downshift.serve.options import ExecutionChoice
-from downshift.serve.schemas import OutputEncoding
+from downshift.entities.adapters import PoolingChoice
+from downshift.entities.options import ExecutionChoice, OutputEncoding
 
 
 class LogLevel(StrEnum):

@@ -8,12 +8,13 @@ from fastapi.testclient import TestClient
 from safetensors.numpy import load as st_load
 from safetensors.numpy import save as st_save
 
-from downshift.loading import LoadSpec, load_model
+from downshift.entities.loading import LoadSpec
+from downshift.entities.options import ExecutionChoice
+from downshift.loading import load_model
 from downshift.serve import codec
 from downshift.serve.app import build_app
 from downshift.serve.codec import decode_safetensors, encode_safetensors
 from downshift.serve.engine import prepare_serving
-from downshift.serve.options import ExecutionChoice
 from tests.conftest import with_options
 from tests.models import hf_repo
 

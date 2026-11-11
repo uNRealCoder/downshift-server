@@ -9,13 +9,15 @@ from prometheus_client.parser import text_string_to_metric_families
 import downshift
 from downshift import settings
 from downshift.cli import render
-from downshift.loading import LoadSpec, load_model
+from downshift.entities.loading import LoadSpec
+from downshift.entities.metrics import BUCKETS, Histogram, Metrics
+from downshift.entities.options import ServeOptions
+from downshift.loading import load_model
 from downshift.serve.app import RequestIdMiddleware, build_app
 from downshift.serve.engine import prepare_serving
 from downshift.serve.errors import error_response
-from downshift.serve.metrics import BUCKETS, CONTENT_TYPE, Histogram, Metrics
+from downshift.serve.metrics import CONTENT_TYPE
 from downshift.serve.metrics import render as render_text
-from downshift.serve.options import ServeOptions
 from tests.conftest import with_options
 from tests.test_cli import _serve_captured
 from tests.test_render import _serving_state, _verdict

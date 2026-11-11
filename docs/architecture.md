@@ -49,6 +49,7 @@ core/verdict.py       ExportVerdict: status, reason, numerics, axes, recommended
 |---|---|---|---|
 | CLI | `src/downshift/cli/` | Parse options. Call the library. Print the report. | No, until a command body runs |
 | Settings | `settings.py` | Defaults and the `DOWNSHIFT_*` variables. | No |
+| Entities | `entities/` | The data types: the dataclasses and the enums that they need. | No, except `serving.py` |
 | Loading | `loading.py`, `hf_repo.py`, `sources.py` | Turn `MODEL` into a `LoadedModel`. | Inside functions |
 | Adapters | `adapters/` | One class for each model family. | Yes |
 | Core | `core/` | Export, verify, verdict, caches. | Yes |

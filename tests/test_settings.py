@@ -206,10 +206,10 @@ def test_the_body_and_timeout_defaults():
 
 def _serve_options_in_a_child(**env: str) -> dict:
     """ServeOptions() as a new interpreter sees it. Downshift reads its defaults from settings
-    when downshift.serve.options is first imported. A reload in the same process cannot show
+    when downshift.entities.options is first imported. A reload in the same process cannot show
     them."""
     code = (
-        "import json; from downshift.serve.options import ServeOptions; o = ServeOptions(); "
+        "import json; from downshift.entities.options import ServeOptions; o = ServeOptions(); "
         "print(json.dumps({'max_body_bytes': o.max_body_bytes, 'request_timeout': o.request_timeout}))"
     )
     child_env = {k: v for k, v in subprocess_env().items() if not k.startswith("DOWNSHIFT_")}

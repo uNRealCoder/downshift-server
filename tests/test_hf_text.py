@@ -13,10 +13,12 @@ from fastapi.testclient import TestClient
 from transformers import BertForSequenceClassification, BertModel
 
 import downshift
-from downshift.adapters.text import SIGMOID, SOFTMAX, TextIO
-from downshift.core.memo import ExportEntry
+from downshift.adapters.text import SIGMOID
+from downshift.entities.adapters import SOFTMAX, TextIO
+from downshift.entities.cache import ExportEntry
+from downshift.entities.loading import LoadedModel, LoadSpec
 from downshift.hf_repo import load_pretrained
-from downshift.loading import LoadedModel, LoadSpec, load_model
+from downshift.loading import load_model
 from downshift.serve import app_for
 from downshift.serve.app import build_app
 from downshift.serve.engine import ServeOptions, prepare_serving, state_from_entry

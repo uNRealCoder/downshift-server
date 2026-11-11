@@ -8,20 +8,21 @@ from typing import Any
 import numpy as np
 from fastapi import Response
 
+from downshift.entities.options import OutputEncoding
+from downshift.entities.requests import ParsedRequest
+from downshift.entities.serving import ServingState
 from downshift.serve.backends import FIRST_OUTPUT_NAME
 from downshift.serve.codec import b64encode
-from downshift.serve.engine import ServingState
 from downshift.serve.errors import ApiError
 from downshift.serve.predict import (
     GraphLayout,
     NumpyJSONResponse,
-    _Request,
     _validate_json,
     add_server_timing,
     as_batch,
     resolve_prompt,
 )
-from downshift.serve.schemas import EmbeddingsRequest, OutputEncoding
+from downshift.serve.schemas import EmbeddingsRequest
 
 # The "created" time of each model: the time that the server process started.
 CREATED = int(time.time())
@@ -70,8 +71,10 @@ def _matryoshka_cut(vectors: np.ndarray, dimensions: int) -> np.ndarray:
     return scaled
 
 
-def parse_embeddings(state: ServingState, body: bytes, timings_ms: dict[str, float]) -> _Request:
-    """The body of /v1/embeddings as a text _Request, or a 422, 404 or 400."""
+def parse_embeddings(
+    state: ServingState, body: bytes, timings_ms: dict[str, float]
+) -> ParsedRequest:
+    """The body of /v1/embeddings as a text ParsedRequest, or a 422, 404 or 400."""
     start = time.perf_counter()
     req = _validate_json(EmbeddingsRequest, body)
     # pooling "none" gives the vector of each token, so it is not an embedding model.
@@ -96,7 +99,7 @@ def parse_embeddings(state: ServingState, body: bytes, timings_ms: dict[str, flo
         raise ApiError(400, "invalid_input", "'input' is an empty list. Send at least one text")
     encoding = OutputEncoding.base64 if req.encoding_format == "base64" else OutputEncoding.json
     timings_ms["parse"] = round((time.perf_counter() - start) * 1000, 2)
-    return _Request(
+    return ParsedRequest(
         text=text,
         prompt=resolve_prompt(state, None, True),
         encoding=encoding,
@@ -108,7 +111,7 @@ def embeddings_response(
     state: ServingState,
     timings_ms: dict[str, float],
     outputs: dict[str, np.ndarray],
-    request: _Request,
+    request: ParsedRequest,
     tokens: list[int] | None,
     layout: GraphLayout | None,
 ) -> Response:

@@ -11,7 +11,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from downshift.adapters.text import TextTooLongError
+from downshift.entities.adapters import TextTooLongError
 from downshift.serve.app import build_app
 from downshift.serve.errors import ERROR_CODES, http_error_handler
 from tests.conftest import with_options

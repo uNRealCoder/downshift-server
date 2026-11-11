@@ -17,24 +17,12 @@ import hashlib
 import threading
 from collections import OrderedDict
 from concurrent.futures import Future
-from dataclasses import dataclass, field
 
 import numpy as np
 
-Row = dict[str, np.ndarray]  # output name -> the array of this row, with no batch axis
+from downshift.entities.cache import Lookup, Row
 
 _MIN_DOORKEEPER = 1024
-
-
-@dataclass
-class Lookup:
-    """The answer for the rows of one request. `hits` and `pending` map a row index to its
-    result (or to a Future of it). `missing` lists the rows that this request must compute. It
-    has claimed them: it must call complete() or fail() for each of them."""
-
-    hits: dict[int, Row] = field(default_factory=dict)
-    pending: dict[int, "Future[Row]"] = field(default_factory=dict)
-    missing: list[int] = field(default_factory=list)
 
 
 class ResultCache:

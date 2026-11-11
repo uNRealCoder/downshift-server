@@ -8,7 +8,7 @@ To read this file, go in this order:
 2. `_parse`, `_prepare_feeds`, `_violation`: decode the body, make the arrays, check them.
    Each client error is a 400 here, so the model never sees a bad input.
 3. `_infer`, `_encode_response`: the backend call, and the JSON, base64 or safetensors body.
-4. `_run_cached`, `_cache_prepare`, `_CachePlan`: the same path with the result cache.
+4. `_run_cached`, `_cache_prepare`, `CachePlan`: the same path with the result cache.
 """
 
 import asyncio
@@ -17,7 +17,6 @@ import logging
 import time
 from collections.abc import Callable
 from concurrent.futures import Executor, Future
-from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -28,11 +27,14 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError
 
 from downshift import settings
-from downshift.adapters.text import TextTooLongError
-from downshift.core.axes import DimBound
+from downshift.entities.adapters import TextTooLongError
+from downshift.entities.axes import DimBound
+from downshift.entities.cache import Lookup, Row
+from downshift.entities.options import OutputEncoding, RequestOutputEncoding
+from downshift.entities.requests import CachePlan, ParsedRequest
+from downshift.entities.serving import ServingState
 from downshift.serve.backends import FIRST_OUTPUT_NAME, InferenceInputError
 from downshift.serve.codec import b64encode, decode_safetensors, encode_safetensors
-from downshift.serve.engine import ServingState
 from downshift.serve.errors import ApiError
 from downshift.serve.graphs import (
     GRAPH_COUNTS,
@@ -45,15 +47,8 @@ from downshift.serve.graphs import (
     split_outputs,
     split_refusal,
 )
-from downshift.serve.result_cache import Lookup, ResultCache, Row, tensor_keys, text_keys
-from downshift.serve.schemas import (
-    GraphPredictRequest,
-    OutputEncoding,
-    PredictRequest,
-    RequestOutputEncoding,
-    normalize_dtype,
-    to_numpy,
-)
+from downshift.serve.result_cache import ResultCache, tensor_keys, text_keys
+from downshift.serve.schemas import GraphPredictRequest, PredictRequest, normalize_dtype, to_numpy
 
 logger = logging.getLogger("downshift.serve")
 
@@ -233,7 +228,7 @@ def _binary_feeds(
     return feeds
 
 
-def _tensor_feeds(state: ServingState, request: "_Request") -> dict[str, np.ndarray]:
+def _tensor_feeds(state: ServingState, request: "ParsedRequest") -> dict[str, np.ndarray]:
     """The arrays of an `inputs` or safetensors request."""
     declared = state.declared_dtypes
     if request.tensors is not None:
@@ -285,25 +280,13 @@ def _batch_feeds(
     return {n: feeds[n] for n in state.input_names}, (node_counts, edge_counts)
 
 
-@dataclass
-class _Request:
-    """A predict body, decoded and validated: what _prepare_feeds takes, plus the encoding."""
-
-    inputs: dict[str, Any] = field(default_factory=dict)
-    text: list[str] | None = None
-    prompt: str = ""
-    tensors: dict[str, np.ndarray] | None = None
-    graphs: list[dict[str, Any]] | None = None
-    encoding: OutputEncoding | RequestOutputEncoding | None = None
-    dimensions: int | None = None  # /v1/embeddings: keep the first values of each vector
-    tokens: list[int] | None = None  # set by _prepare_feeds for a text request
-
-
-Parse = Callable[[], _Request]
+Parse = Callable[[], ParsedRequest]
 # (outputs, request, tokens, layout) -> the response. `tokens` is the count of tokens for each
 # row, only for a text request and only if run_predict was asked for it. `layout` is for a graph
 # batch.
-Encode = Callable[[dict[str, np.ndarray], _Request, list[int] | None, GraphLayout | None], Response]
+Encode = Callable[
+    [dict[str, np.ndarray], ParsedRequest, list[int] | None, GraphLayout | None], Response
+]
 
 # The key of the token count in a cached text row. The encoders never see it as an output.
 TOKENS_KEY = "__tokens__"
@@ -325,7 +308,7 @@ def _input_error(exc: Exception) -> ApiError:
 
 def _prepare_feeds(
     state: ServingState,
-    request: _Request,
+    request: ParsedRequest,
     skip_batch_axis: bool = False,
     count_tokens: bool = False,
 ) -> tuple[dict[str, np.ndarray], float, GraphLayout | None]:
@@ -501,7 +484,7 @@ def _validate_json[ModelT: BaseModel](model: type[ModelT], body: bytes) -> Model
         ) from None
 
 
-def _json_request(state: ServingState, graph: bool, body: bytes) -> _Request:
+def _json_request(state: ServingState, graph: bool, body: bytes) -> ParsedRequest:
     if graph:
         graph_req = _validate_json(GraphPredictRequest, body)
         if graph_req.graphs is not None:
@@ -509,11 +492,11 @@ def _json_request(state: ServingState, graph: bool, body: bytes) -> _Request:
                 {"x": g.x, "edge_index": g.edge_index, "edge_attr": g.edge_attr}
                 for g in graph_req.graphs
             ]
-            return _Request(graphs=graphs, encoding=graph_req.output_encoding)
+            return ParsedRequest(graphs=graphs, encoding=graph_req.output_encoding)
         inputs = {"x": graph_req.x, "edge_index": graph_req.edge_index}
         if graph_req.edge_attr is not None:
             inputs["edge_attr"] = graph_req.edge_attr
-        return _Request(inputs=inputs, encoding=graph_req.output_encoding)
+        return ParsedRequest(inputs=inputs, encoding=graph_req.output_encoding)
 
     req = _validate_json(PredictRequest, body)
     if req.text is not None and state.text is None:
@@ -526,7 +509,7 @@ def _json_request(state: ServingState, graph: bool, body: bytes) -> _Request:
     text = as_batch(req.text) if req.text is not None else None
     if text == []:
         raise ApiError(400, "invalid_input", "'text' is an empty list. Send at least one text")
-    return _Request(
+    return ParsedRequest(
         inputs=req.inputs,
         text=text,
         prompt=resolve_prompt(state, req.prompt_name, req.text is not None),
@@ -534,7 +517,7 @@ def _json_request(state: ServingState, graph: bool, body: bytes) -> _Request:
     )
 
 
-def _binary_request(state: ServingState, graph: bool, body: bytes) -> _Request:
+def _binary_request(state: ServingState, graph: bool, body: bytes) -> ParsedRequest:
     """A safetensors body: its arrays and the output_encoding of its __metadata__."""
     try:
         arrays, metadata = decode_safetensors(body, max_input_bytes=state.options.max_input_bytes)
@@ -554,7 +537,7 @@ def _binary_request(state: ServingState, graph: bool, body: bytes) -> _Request:
         )
     encoding = metadata.get("output_encoding")
     try:
-        return _Request(
+        return ParsedRequest(
             tensors=arrays, encoding=RequestOutputEncoding(encoding) if encoding else None
         )
     except ValueError:
@@ -568,8 +551,8 @@ def _binary_request(state: ServingState, graph: bool, body: bytes) -> _Request:
 
 def _parse(
     state: ServingState, body: bytes, graph: bool, binary: bool, timings_ms: dict[str, float]
-) -> _Request:
-    """The body (JSON or safetensors) as a validated _Request, or a 422 or 400."""
+) -> ParsedRequest:
+    """The body (JSON or safetensors) as a validated ParsedRequest, or a 422 or 400."""
     start = time.perf_counter()
     if graph and not GRAPH_INPUTS.issubset(state.input_names):
         raise ApiError(
@@ -609,21 +592,6 @@ async def _run_in(
     return await loop.run_in_executor(executor, contextvars.copy_context().run, call)
 
 
-@dataclass
-class _CachePlan:
-    """The prep result of a cached request: its row keys, the lookup, and the feeds of the rows
-    that this request must compute."""
-
-    request: _Request
-    arrays: dict[str, np.ndarray] | None  # the full input arrays of a tensor request
-    keys: list[bytes]
-    found: Lookup
-    feeds: dict[str, np.ndarray] | None  # for the missing rows only. None if there are none
-    owned: list[bytes] = field(default_factory=list)  # the keys that this request claimed
-    passthrough: bool = False  # an empty batch: run the model once and skip the cache
-    tokens: list[int] | None = None  # the token count of each row of `feeds`, for a text request
-
-
 def _row_count_violation(state: ServingState, rows: int) -> str | None:
     """The batch-axis bound for a text request, whose hit rows are never tokenized."""
     for name, bounds in state.axis_bounds.items():
@@ -633,22 +601,24 @@ def _row_count_violation(state: ServingState, rows: int) -> str | None:
     return None
 
 
-def _subset(request: _Request, arrays: dict[str, np.ndarray] | None, rows: list[int]) -> _Request:
+def _subset(
+    request: ParsedRequest, arrays: dict[str, np.ndarray] | None, rows: list[int]
+) -> ParsedRequest:
     """A request with only `rows` of the batch."""
     if request.text is not None:
-        return _Request(text=[request.text[i] for i in rows], prompt=request.prompt)
+        return ParsedRequest(text=[request.text[i] for i in rows], prompt=request.prompt)
     assert arrays is not None
-    return _Request(tensors={n: a[rows] for n, a in arrays.items()})
+    return ParsedRequest(tensors={n: a[rows] for n, a in arrays.items()})
 
 
 def _cache_prepare(
     state: ServingState,
     cache: ResultCache,
-    request: _Request,
+    request: ParsedRequest,
     timings_ms: dict[str, float],
     use_lookup: bool = True,
     deadline: float | None = None,
-) -> _CachePlan:
+) -> CachePlan:
     """The prep hop of a cached request. A tensor request is checked whole before the lookup,
     so a hit never hides a client error. Only text rows that missed are tokenized. The lookup
     claims the missed rows; a later failure in this hop releases them. A request that is past
@@ -673,7 +643,7 @@ def _cache_prepare(
 
     if not keys:
         whole, _, _ = _prepare_feeds(state, request)
-        return _CachePlan(request, arrays, keys, Lookup(), whole, passthrough=True)
+        return CachePlan(request, arrays, keys, Lookup(), whole, passthrough=True)
     _check_timeout(state, deadline)
     cache_start = time.perf_counter()
     # Cache-Control: no-cache reads and claims nothing. The rows are still stored.
@@ -696,10 +666,10 @@ def _cache_prepare(
         cache.fail(claimed)
         raise
     timings_ms["prep"] = round((time.perf_counter() - start) * 1000, 2)
-    return _CachePlan(request, arrays, keys, found, feeds, claimed, tokens=tokens)
+    return CachePlan(request, arrays, keys, found, feeds, claimed, tokens=tokens)
 
 
-def _release_claims(cache: ResultCache, prep: asyncio.Future[_CachePlan]) -> None:
+def _release_claims(cache: ResultCache, prep: asyncio.Future[CachePlan]) -> None:
     """The request left before its plan arrived: fail its claimed rows, so the waiters compute
     them themselves."""
     if not prep.cancelled() and prep.exception() is None:
@@ -717,7 +687,7 @@ async def _await_row(future: Future[Row]) -> Row:
 async def _run_cached(
     state: ServingState,
     cache: ResultCache,
-    parsed: _Request | None,
+    parsed: ParsedRequest | None,
     *,
     body: bytes,
     graph: bool,
@@ -736,7 +706,7 @@ async def _run_cached(
     text row keeps its token count under TOKENS_KEY."""
     pool = None if run_here else state.prep_executor
 
-    def prepare() -> _CachePlan:
+    def prepare() -> CachePlan:
         request = parsed or (
             parse() if parse is not None else _parse(state, body, graph, binary, timings_ms)
         )
@@ -745,7 +715,7 @@ async def _run_cached(
     # If the client leaves during prep, the thread still finishes and claims rows: release them.
     prep = asyncio.ensure_future(_run_in(pool, "prep_wait", timings_ms, prepare))
     try:
-        plan: _CachePlan = await asyncio.shield(prep)
+        plan: CachePlan = await asyncio.shield(prep)
     except asyncio.CancelledError:
         prep.add_done_callback(lambda t: _release_claims(cache, t))
         raise
@@ -871,13 +841,13 @@ async def run_predict(
     of it on the event loop, except tokenization. `timings_ms` collects the milliseconds of
     each stage for the access log and the optional Server-Timing header.
 
-    `parse` (None: decode `body` as a /predict body) builds the _Request, and `encode` (None: the
+    `parse` (None: decode `body` as a /predict body) builds the ParsedRequest, and `encode` (None: the
     /predict response) builds the response. /v1/embeddings sets both and has the same admission,
     pools, timeout, cache and row checks. `with_tokens` gives `encode` the token count of each
     text row. `deadline` is a time.monotonic value (None for no limit).
     """
     # Path 1, inline: parse here, on the event loop (a small JSON body only).
-    parsed: _Request | None = None
+    parsed: ParsedRequest | None = None
     if inline:
         parsed = parse() if parse is not None else _parse(state, body, graph, binary, timings_ms)
     # A text request still goes to the prep pool, because the tokenizer can be slow.
@@ -903,7 +873,7 @@ async def run_predict(
 
     # Path 3, plain: hop 1 (prep pool) parses and checks, hop 2 (inference pool) infers and
     # encodes. The event loop does neither, so /health and /ready never wait.
-    def prepare() -> tuple[_Request, dict[str, np.ndarray], GraphLayout | None]:
+    def prepare() -> tuple[ParsedRequest, dict[str, np.ndarray], GraphLayout | None]:
         request = parsed or (
             parse() if parse is not None else _parse(state, body, graph, binary, timings_ms)
         )

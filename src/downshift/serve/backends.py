@@ -2,7 +2,6 @@
 so the HTTP layer does not know which one serves."""
 
 import logging
-from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -12,8 +11,9 @@ import torch
 from torch import nn
 
 from downshift.core.feeds import WIDEN_DTYPES, example_feeds, to_feed, widen_for_wire
-from downshift.core.verdict import BackendName
 from downshift.core.verify import OrtProvider, first_line, new_session
+from downshift.entities.backend import BackendMeta, IOSpec
+from downshift.entities.verdict import BackendName
 
 logger = logging.getLogger("downshift.serve")
 
@@ -30,31 +30,10 @@ class InferenceInputError(ValueError):
     dtypes, ranks and bounds before the inference."""
 
 
-@dataclass
-class IOSpec:
-    name: str
-    dtype: str | None
-    shape: list[int | str | None] | None
-
-    def to_dict(self) -> dict:
-        return asdict(self)
-
-
 def concrete_dim(dim: object) -> int:
     """A fixed axis keeps its size. A dynamic axis (a name, None or a placeholder) becomes 1, so
     the warmup feeds and the /schema example agree."""
     return dim if isinstance(dim, int) and dim > 0 else 1
-
-
-@dataclass
-class BackendMeta:
-    name: BackendName
-    device: str
-    inputs: list[IOSpec]
-    outputs: list[IOSpec]
-
-    def to_dict(self) -> dict:
-        return asdict(self)
 
 
 class Backend(Protocol):

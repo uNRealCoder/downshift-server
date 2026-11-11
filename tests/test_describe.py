@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from downshift import sources
-from downshift.serve.backends import IOSpec
+from downshift.entities.backend import IOSpec
 from downshift.serve.describe import (
     DYNAMIC_AXIS,
     MAX_EXAMPLE_ELEMENTS,
@@ -219,7 +219,7 @@ def test_describe_has_no_axes_for_a_verdict_without_them(mlp_state, monkeypatch)
 def test_embedding_block_lists_the_named_prompts_and_the_default():
     from types import SimpleNamespace
 
-    from downshift.adapters.embedding import EmbeddingRecipe
+    from downshift.entities.adapters import EmbeddingRecipe
     from downshift.serve import describe as describe_mod
 
     recipe = EmbeddingRecipe(
