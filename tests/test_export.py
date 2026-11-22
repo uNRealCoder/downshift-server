@@ -132,7 +132,7 @@ def test_export_with_fp16_and_external_data_writes_the_converted_graph(
     assert {init.data_type for init in proto.graph.initializer} == {onnx.TensorProto.FLOAT16}
 
 
-def test_fp16_graph_that_onnx_runtime_cannot_run_points_to_cuda(monkeypatch) -> None:
+def test_fp16_graph_that_onnx_runtime_cannot_run_gives_the_fp16_hint(monkeypatch) -> None:
     def boom(onnx_model):
         raise RuntimeError("Could not find an implementation for Foo(1)")
 

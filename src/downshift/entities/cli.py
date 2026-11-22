@@ -9,7 +9,12 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from downshift.entities.options import BackendChoice, ExecutionChoice, OutputEncoding, ServeOptions
+from downshift.entities.options import (
+    BackendChoice,
+    ExecutionChoice,
+    OutputEncoding,
+    ServeOptions,
+)
 
 if TYPE_CHECKING:
     from downshift.entities.cache import ExportEntry

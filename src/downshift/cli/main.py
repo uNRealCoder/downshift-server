@@ -276,7 +276,11 @@ def export_cmd(
         str | None, typer.Option("--name", help="The artifact name. Default: the model slug")
     ] = None,
     fp16: Annotated[
-        bool, typer.Option("--fp16", help="Cast the model to fp16 before the export")
+        bool,
+        typer.Option(
+            "--fp16",
+            help="After the export, change the fp32 graph to fp16 weights. Inputs and outputs stay fp32",
+        ),
     ] = False,
     no_verify: Annotated[
         bool, typer.Option("--no-verify", help="Skip the numerics check. The verdict is UNVERIFIED")

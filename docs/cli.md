@@ -249,7 +249,7 @@ A bad value (for example `DOWNSHIFT_PORT=abc`) stops the process at start with a
 3. Add an `Annotated` option type to `cli/options.py`.
 4. Add a parameter to `serve_cmd` in `cli/main.py`. Give it the same name as the field. `serve_cmd` copies each `ServeOptions` field from the parameter with that name, so you add no other line. `tests/test_cli.py` fails if a field has no parameter, or if a parameter has no field and is not in its list of other parameters.
    An option for uvicorn (like `--ssl-certfile`, `--root-path`, `--forwarded-allow-ips` and `--timeout-graceful-shutdown`) has no `ServeOptions` field. Put it in `uvicorn_kwargs` in `serve_cmd`. The kwargs reach `uvicorn.run` and so each worker.
-5. If the field is an enum, convert it in `ServeArgs.from_json` (`cli/runtime.py`). `--workers N` sends `ServeOptions` to each worker as JSON.
+5. If the field is an enum, convert it in `ServeArgs.from_json` (`entities/cli.py`). `--workers N` sends `ServeOptions` to each worker as JSON.
 6. Add a row to the `serve` table and to "Environment variables" on this page, and describe the option in [`production.md`](production.md).
 7. Add a test, and record the option in `CHANGELOG.md`.
 

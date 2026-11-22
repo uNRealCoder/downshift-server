@@ -97,7 +97,8 @@ class ResultCache:
 
 
 def _digest(kind: bytes) -> hashlib.blake2b:
-    return hashlib.blake2b(kind, digest_size=16)
+    """A 256-bit key. A collision gives the output of another row, so the key must not collide."""
+    return hashlib.blake2b(kind, digest_size=32)
 
 
 def text_keys(prompt: str, rows: list[str]) -> list[bytes]:

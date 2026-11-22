@@ -319,7 +319,7 @@ def _loader_lifespan(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        progress = LoadProgress()
+    progress = LoadProgress()
         app.state.load_progress = progress
         _flag_stopping_on_signal(app)
 
