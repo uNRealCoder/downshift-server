@@ -469,7 +469,7 @@ Base64 does not help below about 100 KiB of tensor data. Above that, the gain in
 `output_encoding` is a field in both request bodies. It is not a URL parameter. It controls only the encoding of the response. It does not depend on the format of the request.
 
 - `"json"` writes nested lists. This is the default. `DOWNSHIFT_OUTPUT_ENCODING` or `--output-encoding` sets the default for the whole server, when the field is not in the request.
-- `"base64"` writes `{"data", "dtype", "shape"}` dicts. This agrees with `_base64_ready` in `serve/predict.py`:
+- `"base64"` writes `{"data", "dtype", "shape"}` dicts. This agrees with `_base64_ready` in `serve/encode.py`:
 
 ```python
 {
