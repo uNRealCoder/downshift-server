@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "downshift-server"
-version = "1.0.0rc1"
+version = "1.0.0"
 description = "Serve PyTorch models over HTTP through ONNX Runtime. Downshift verifies each export against PyTorch before it serves, and it falls back to eager PyTorch."
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
@@ -110,9 +110,12 @@ testpaths = ["tests"]
 python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
+pythonpath = ["src"]
+addopts = "--cov --cov-report=term-missing"
 
 [tool.coverage.run]
 source = ["src/downshift"]
 
 [tool.coverage.report]
 show_missing = true
+fail_under = 95

@@ -7,7 +7,7 @@ A set of static pages that show the benchmark data of `bench/` to an outside rea
 | File | Contents |
 |---|---|
 | `index.html` | Start here. What downshift verifies, a flow diagram, and links to all pages. |
-| `throughput.html` | Requests per second and latency against hand-rolled servers, 0.5.1 and 1.0.0rc1. |
+| `throughput.html` | Requests per second and latency against hand-rolled servers, 0.5.1 and 1.0.0. |
 | `time-breakdown.html` | Where the time of one request goes. |
 | `torch-vs-ort.html` | ONNX Runtime against eager PyTorch, in-process and over HTTP. |
 | `wire-formats.html` | Batches, JSON and safetensors. |
@@ -15,7 +15,7 @@ A set of static pages that show the benchmark data of `bench/` to an outside rea
 | `correctness.html` | Every response against eager PyTorch. |
 | `compatibility.html` | 14 hazard fixtures and 8 real models. |
 | `boot-time.html` | The seconds before the first request. |
-| `scaling.html` | The `--workers` sweep (0.5.0 data; not run for 1.0.0rc1). |
+| `scaling.html` | The `--workers` sweep (0.5.1 and 1.0.0). |
 | `releases.html` | Release to release, inside one run each. |
 | `../CAPABILITIES.md` | Not a page of this folder. One table: each capability, the result file that shows it, and one number. |
 | `SUMMARY.html` | One page for print or screenshot. |
@@ -43,7 +43,7 @@ python bench/showcase/build_showcase.py
 - If a source file is missing, the page shows a "Missing data" note and the script exits with code 1.
 - Some sentences depend on the data. The script checks them (`claim(...)`). If the data change and a sentence is no longer true, the build stops with an error. Change the sentence, then build again.
 - To show a new run, change the paths `R1`, `R5` and `R6` at the top of the script.
-- `results/v1.0.0/` holds data of 1.0.0rc1. The hardware (CPU model, RAM) is not recorded in any run. The pages say so.
+- `results/v1.0.0/` holds data of 1.0.0. The hardware (CPU model, RAM) is not recorded in any run. The pages say so.
 
 ## Rules of the pages
 

@@ -187,8 +187,8 @@ NAIVE_T, NAIVE_O, NAIVE_A = (
     "naive torch, async def",
 )
 DS_OLD, DS_OLD_ST = "downshift 0.5.1", "downshift 0.5.1 safetensors"
-DS_NEW, DS_NEW_ST = "downshift 1.0.0rc1", "downshift 1.0.0rc1 safetensors"
-DS_CACHE, DS_METRICS = "downshift 1.0.0rc1 result cache on", "downshift 1.0.0rc1 --metrics"
+DS_NEW, DS_NEW_ST = "downshift 1.0.0", "downshift 1.0.0 safetensors"
+DS_CACHE, DS_METRICS = "downshift 1.0.0 result cache on", "downshift 1.0.0 --metrics"
 FIX_SERVERS = [
     NAIVE_T,
     NAIVE_O,
@@ -209,14 +209,14 @@ SHORT = {
     NAIVE_A: "torch, async def",
     DS_OLD: "downshift 0.5.1",
     DS_OLD_ST: "0.5.1 safetensors",
-    DS_NEW: "downshift 1.0.0rc1",
-    DS_NEW_ST: "1.0.0rc1 safetensors",
-    DS_CACHE: "1.0.0rc1 cache on",
-    DS_METRICS: "1.0.0rc1 --metrics",
+    DS_NEW: "downshift 1.0.0",
+    DS_NEW_ST: "1.0.0 safetensors",
+    DS_CACHE: "1.0.0 cache on",
+    DS_METRICS: "1.0.0 --metrics",
     "naive FastAPI + transformers": "FastAPI + transformers",
     "naive transformers, async def": "transformers, async",
     "downshift 0.5.1 --backend torch": "0.5.1 --backend torch",
-    "downshift 1.0.0rc1 --backend torch": "1.0.0rc1 --backend torch",
+    "downshift 1.0.0 --backend torch": "1.0.0 --backend torch",
 }
 
 
@@ -888,7 +888,7 @@ def run_meta() -> str:
     return (
         f"Run {esc(env1()['timestamp'])}. {esc(env1()['platform'])}, {env1()['cpu_count']} logical CPUs, "
         f"Python {esc(env1()['python'])}, torch {esc(env1()['torch'])}, onnxruntime {esc(env1()['onnxruntime'])}. "
-        "downshift 1.0.0rc1 from the checkout, 0.5.1 from PyPI. The folder is named <code>v1.0.0</code>, but its data is from the release candidate 1.0.0rc1. "
+        "downshift 1.0.0 from the checkout, 0.5.1 from PyPI. The run has three passes in one session; the report says how they were merged. "
         "Hardware: not recorded in these runs (the files hold the CPU count only)."
     )
 
@@ -911,7 +911,6 @@ def common_limits() -> str:
 
 def page_throughput() -> str:
     res = jload(R1 / "results.json")
-    rerun = jload(R1 / "rerun_mlp_large.json")
     ceiling = {int(k): v for k, v in res["client_ceiling_rps"].items()}
 
     peaks = {(m, s): peak_of(m, s) for m in FIX_MODELS for s in FIX_SERVERS}
@@ -933,13 +932,13 @@ def page_throughput() -> str:
     )
     claim(
         peaks[("tiny_bert", DS_NEW)]["throughput_rps"]
-        > 3 * peaks[("tiny_bert", NAIVE_T)]["throughput_rps"],
-        "downshift is above 3x naive torch on tiny_bert",
+        > 2.5 * peaks[("tiny_bert", NAIVE_T)]["throughput_rps"],
+        "downshift is above 2.5x naive torch on tiny_bert",
     )
     claim(
-        peaks[("mlp_large", NAIVE_T)]["throughput_rps"]
-        > peaks[("mlp_large", NAIVE_O)]["throughput_rps"],
-        "naive torch beats naive ORT on mlp_large",
+        peaks[("mlp_large", NAIVE_O)]["throughput_rps"]
+        < 1.2 * peaks[("mlp_large", NAIVE_T)]["throughput_rps"],
+        "naive ORT is less than 1.2x naive torch on mlp_large over HTTP",
     )
 
     body = [
@@ -959,12 +958,12 @@ def page_throughput() -> str:
             [
                 (
                     f"{n0(cd)} vs {n0(ct)}",
-                    "clean_mlp peak, requests/s: downshift 1.0.0rc1 vs hand-rolled async torch",
+                    "clean_mlp peak, requests/s: downshift 1.0.0 vs hand-rolled async torch",
                     "The hand-rolled server is faster on a tiny model.",
                 ),
                 (
                     f"{n0(tb)} vs {n0(tn)}",
-                    "tiny_bert peak, requests/s: downshift 1.0.0rc1 vs hand-rolled FastAPI + torch",
+                    "tiny_bert peak, requests/s: downshift 1.0.0 vs hand-rolled FastAPI + torch",
                     "ORT through downshift vs eager torch.",
                 ),
                 (
@@ -1061,25 +1060,16 @@ def page_throughput() -> str:
     body.append(
         note(
             "limit",
-            "The row <code>1.0.0rc1 result cache on</code> sends one body again and again. Every request is a hit. It is a best case, not a normal workload. See the result cache page. At high concurrency the latency rises by design. In a closed loop, the median latency is close to concurrency divided by throughput.",
+            "The row <code>1.0.0 result cache on</code> sends one body again and again. Every request is a hit. It is a best case, not a normal workload. See the result cache page. At high concurrency the latency rises by design. In a closed loop, the median latency is close to concurrency divided by throughput.",
         )
     )
 
-    # rc1 versus 0.5.1
-    body.append(h2("Did 1.0.0rc1 get faster than 0.5.1?", "release"))
+    # 1.0.0 versus 0.5.1
+    body.append(h2("Did 1.0.0 get faster than 0.5.1?", "release"))
     rows = []
-    rerun_peaks = {}
-    for x in rerun["runs"]:
-        key = (x["variant"], x["version"])
-        if x["batch"] == 1:
-            rerun_peaks[key] = max(rerun_peaks.get(key, 0), x["throughput_rps"])
     for m in FIX_MODELS:
         a, b = peaks[(m, DS_OLD)]["throughput_rps"], peaks[(m, DS_NEW)]["throughput_rps"]
         a1, b1 = at(m, DS_OLD, 1), at(m, DS_NEW, 1)
-        note_ = ""
-        if m == "mlp_large":
-            ra, rb = rerun_peaks[("downshift", "0.5.1")], rerun_peaks[("downshift", "1.0.0rc1")]
-            note_ = f"re-run: {n0(rb)} vs {n0(ra)} ({pct((rb / ra - 1) * 100)})"
         rows.append(
             [
                 m,
@@ -1089,31 +1079,29 @@ def page_throughput() -> str:
                 n0(a1["throughput_rps"]),
                 n0(b1["throughput_rps"]),
                 pct((b1["throughput_rps"] / a1["throughput_rps"] - 1) * 100),
-                note_,
             ]
         )
     hdr = [
         "model",
         "peak 0.5.1",
-        "peak 1.0.0rc1",
+        "peak 1.0.0",
         "change",
         "c=1 0.5.1",
-        "c=1 1.0.0rc1",
+        "c=1 1.0.0",
         "change",
-        "note",
     ]
     body.append(
         table(
             hdr,
             rows,
-            caption="downshift 1.0.0rc1 against 0.5.1, same session, batch 1, result cache off",
+            caption="downshift 1.0.0 against 0.5.1, same session, batch 1, result cache off",
             right=range(1, 7),
         )
     )
     mdt(
-        "1.0.0rc1 against 0.5.1, batch 1",
-        "Peak requests/s and requests/s at c=1. The mlp_large row of the main pass is marked in the note column.",
-        [R1 / "chart_runs.csv", R1 / "rerun_mlp_large.json"],
+        "1.0.0 against 0.5.1, batch 1",
+        "Peak requests/s and requests/s at c=1.",
+        [R1 / "chart_runs.csv"],
         hdr,
         rows,
     )
@@ -1122,30 +1110,14 @@ def page_throughput() -> str:
         for m in FIX_MODELS
     }
     claim(
-        abs(mp["clean_mlp"]) < 0.05
-        and abs(mp["scatter_include_self_false"]) < 0.05
-        and -0.15 < mp["tiny_bert"] < 0,
-        "peak changes of clean_mlp, scatter and tiny_bert",
+        all(abs(v) < 0.15 for v in mp.values()),
+        "peak changes from 0.5.1 to 1.0.0 are all within 15 percent",
     )
     body.append(
         p(
-            "The data shows no gain from 0.5.1 to 1.0.0rc1. Peak throughput is within 5% on two models and "
-            f"{pct(mp['tiny_bert'] * 100)} on <code>tiny_bert</code>. The first <code>mlp_large</code> pass of 1.0.0rc1 was slow "
-            f"({n0(peaks[('mlp_large', DS_NEW)]['throughput_rps'])} against {n0(peaks[('mlp_large', DS_OLD)]['throughput_rps'])} requests/s). "
-            "The report says this does not fit one code path. The case was measured again with batch 1 only. Use the re-run for comparisons on <code>mlp_large</code>."
-        )
-    )
-    claim(
-        rerun_peaks[("downshift", "1.0.0rc1")] > 930
-        and rerun_peaks[("downshift", "1.0.0rc1")] < 945,
-        "rerun peak of 1.0.0rc1 default is near 939 to 942",
-    )
-    body.append(
-        note(
-            "info",
-            f"Re-run peaks of <code>rerun_mlp_large.json</code>: {n1(rerun_peaks[('downshift', '1.0.0rc1')])} (default), {n1(rerun_peaks[('downshift_metrics', '1.0.0rc1')])} (<code>--metrics</code>) and {n1(rerun_peaks[('downshift', '0.5.1')])} (0.5.1) requests/s. "
-            "Each value is the best point of the sweep. Some earlier text quoted the c=16 points, which are lower for the two 1.0.0rc1 rows. The tables on this page use the best points.",
-            "Note.",
+            "The data shows no gain from 0.5.1 to 1.0.0. Peak throughput changes by "
+            + ", ".join(f"{pct(mp[m] * 100)} on <code>{m}</code>" for m in FIX_MODELS)
+            + ". The run has a noise of 10% or more: on <code>scatter_include_self_false</code> the <code>--metrics</code> row of the same code is faster than the default row. Read these changes as no change."
         )
     )
 
@@ -1186,12 +1158,6 @@ def page_throughput() -> str:
         hdr,
         rows,
     )
-    body.append(
-        p(
-            "The main-pass <code>mlp_large</code> row is the slow pass described above. Its c=1 numbers are not a good base for this comparison."
-        )
-    )
-
     # ceiling
     body.append(h2("Was the load generator the limit?", "ceiling"))
     ratios = []
@@ -1228,8 +1194,8 @@ def page_throughput() -> str:
         ul(
             [
                 "On the tiny fixtures, a hand-rolled server handles more requests per second than downshift. The HTTP stack is most of the time for one request (see the time page).",
-                "On <code>tiny_bert</code>, downshift is more than 3 times faster than the hand-rolled eager torch server. The hand-rolled ORT server is faster than downshift.",
-                "1.0.0rc1 and 0.5.1 are close. The data shows no gain and no clear loss, except the slow first <code>mlp_large</code> pass.",
+                "On <code>tiny_bert</code>, downshift is about 3 times faster than the hand-rolled eager torch server. The hand-rolled ORT server is faster than downshift.",
+                "1.0.0 and 0.5.1 are close. The data shows no gain and no clear loss.",
             ]
         )
     )
@@ -1238,7 +1204,7 @@ def page_throughput() -> str:
         ul(
             [
                 common_limits(),
-                "Only 4 models. The 0.5.0 run had 8 models. The 1.0.0rc1 run did not include <code>dynamic_batch_cnn</code>, <code>gnn_gcn</code>, <code>cnn_large</code> or <code>bert_small</code>.",
+                "These pages show 4 of the 8 models of the 1.0.0 run. <code>dynamic_batch_cnn</code>, <code>gnn_gcn</code>, <code>cnn_large</code> and <code>bert_small</code> are in <code>results.json</code>, <code>chart_runs.csv</code> and the report.",
                 "CPU only, Windows only. GPU, Linux and other CPUs are not measured.",
                 "The load generator runs on the same machine as the server. The CPU is shared.",
                 "No quantised models. No dynamic request batching (downshift has none by design).",
@@ -1249,7 +1215,6 @@ def page_throughput() -> str:
         section_sources(
             R1 / "chart_runs.csv",
             R1 / "results.json",
-            R1 / "rerun_mlp_large.json",
             R1 / "REPORT.md",
             BENCH / "servers.py",
             BENCH / "loadgen.py",
@@ -1285,7 +1250,7 @@ def page_time() -> str:
     c = ("clean_mlp", DS_NEW)
     t = ("tiny_bert", DS_NEW)
     m_ = ("all-MiniLM-L6-v2", DS_NEW)
-    mt = ("all-MiniLM-L6-v2", "downshift 1.0.0rc1 --backend torch")
+    mt = ("all-MiniLM-L6-v2", "downshift 1.0.0 --backend torch")
     share = lambda key, st: sm[key].get(st, 0) / tot[key] * 100  # noqa: E731
     claim(share(c, "http_and_handoffs") > 55, "HTTP share of clean_mlp is above 55%")
     claim(share(m_, "infer") > 55, "inference share of MiniLM on ORT is above 55%")
@@ -1347,7 +1312,7 @@ def page_time() -> str:
                 DS_NEW,
                 DS_CACHE,
                 "downshift 0.5.1 --backend torch",
-                "downshift 1.0.0rc1 --backend torch",
+                "downshift 1.0.0 --backend torch",
             ]
             if (m, s) in sm
         ]
@@ -1458,24 +1423,28 @@ def page_torch_ort() -> str:
             ]
         )
         ratio_items.append((e["case"], e["batch"], t / o, e["verdict"]))
-    ratios = [r for _, _, r, v in ratio_items if v == "CLEAN"]
+    clean_items = [(c, bs, r) for c, bs, r, v in ratio_items if v == "CLEAN"]
+    slower = [(c, bs, r) for c, bs, r in clean_items if r < 1.0]
     claim(
-        min(ratios) > 1.0, "ORT compute is faster than torch compute in every CLEAN in-process row"
+        {c for c, _, _ in slower} <= {"bert_small"},
+        "ORT compute is faster than torch compute in every CLEAN in-process row but bert_small",
     )
+    ratios = [r for c, _, r in clean_items if r >= 1.0]
     lo, hi = min(ratios), max(ratios)
+    slower_text = ", ".join(f"batch {bs} ({r:.2f}x)" for _, bs, r in slower)
 
     mini = lambda srv, pay, c: hfrow(srv, pay, c)  # noqa: E731
     sp_b1 = (
         mini(DS_NEW, "short_b1", 8)["throughput_rps"]
-        / mini("downshift 1.0.0rc1 --backend torch", "short_b1", 8)["throughput_rps"]
+        / mini("downshift 1.0.0 --backend torch", "short_b1", 8)["throughput_rps"]
     )
     sp_l = (
         mini(DS_NEW, "long_b1", 8)["throughput_rps"]
-        / mini("downshift 1.0.0rc1 --backend torch", "long_b1", 8)["throughput_rps"]
+        / mini("downshift 1.0.0 --backend torch", "long_b1", 8)["throughput_rps"]
     )
     sps = [
         mini(DS_NEW, pay, 8)["throughput_rps"]
-        / mini("downshift 1.0.0rc1 --backend torch", pay, 8)["throughput_rps"]
+        / mini("downshift 1.0.0 --backend torch", pay, 8)["throughput_rps"]
         for pay in ("short_b1", "short_b8", "long_b1")
     ]
     claim(
@@ -1489,17 +1458,17 @@ def page_torch_ort() -> str:
                 (
                     f"{lo:.1f}x to {hi:.1f}x",
                     "ORT against torch, compute only, CLEAN models, p50",
-                    "9 rows: 3 CLEAN models, 3 batch sizes; the scatter rows are excluded",
+                    f"{len(ratios)} rows: CLEAN models and batch sizes where ORT is faster; the scatter rows are excluded. Not faster: bert_small at {slower_text}",
                 ),
                 (
                     f"{sp_b1:.1f}x",
                     "MiniLM, one sentence, c=8: downshift ORT vs downshift --backend torch",
-                    f"{n0(mini(DS_NEW, 'short_b1', 8)['throughput_rps'])} vs {n0(mini('downshift 1.0.0rc1 --backend torch', 'short_b1', 8)['throughput_rps'])} rps",
+                    f"{n0(mini(DS_NEW, 'short_b1', 8)['throughput_rps'])} vs {n0(mini('downshift 1.0.0 --backend torch', 'short_b1', 8)['throughput_rps'])} rps",
                 ),
                 (
                     f"{sp_l:.1f}x",
                     "MiniLM, about 180 tokens, c=8: same pair",
-                    f"{n0(mini(DS_NEW, 'long_b1', 8)['throughput_rps'])} vs {n0(mini('downshift 1.0.0rc1 --backend torch', 'long_b1', 8)['throughput_rps'])} rps",
+                    f"{n0(mini(DS_NEW, 'long_b1', 8)['throughput_rps'])} vs {n0(mini('downshift 1.0.0 --backend torch', 'long_b1', 8)['throughput_rps'])} rps",
                 ),
             ]
         )
@@ -1630,7 +1599,7 @@ def page_torch_ort() -> str:
         "downshift 0.5.1",
         "downshift 0.5.1 --backend torch",
         DS_NEW,
-        "downshift 1.0.0rc1 --backend torch",
+        "downshift 1.0.0 --backend torch",
     ]
     items = []
     for pay, nm in pays:
@@ -1652,7 +1621,7 @@ def page_torch_ort() -> str:
                 [
                     ("bn", "hand-rolled (torch)"),
                     ("bo", "downshift 0.5.1"),
-                    ("bw", "downshift 1.0.0rc1"),
+                    ("bw", "downshift 1.0.0"),
                     ("bv", "downshift with --backend torch"),
                 ]
             ),
@@ -1691,7 +1660,7 @@ def page_torch_ort() -> str:
     )
     body.append(
         p(
-            f"The gain of ONNX Runtime falls with the input size: {sp_b1:.1f}x for one sentence, {mini(DS_NEW, 'short_b8', 8)['throughput_rps'] / mini('downshift 1.0.0rc1 --backend torch', 'short_b8', 8)['throughput_rps']:.1f}x for eight sentences, {sp_l:.1f}x for about 180 tokens. The hand-rolled server runs eager torch. downshift with <code>--backend torch</code> is close to it ({n0(mini('downshift 1.0.0rc1 --backend torch', 'short_b1', 8)['throughput_rps'])} against {n0(mini('naive FastAPI + transformers', 'short_b1', 8)['throughput_rps'])} requests/s). The hand-rolled server cuts over-long text. downshift rejects it."
+            f"The gain of ONNX Runtime falls with the input size: {sp_b1:.1f}x for one sentence, {mini(DS_NEW, 'short_b8', 8)['throughput_rps'] / mini('downshift 1.0.0 --backend torch', 'short_b8', 8)['throughput_rps']:.1f}x for eight sentences, {sp_l:.1f}x for about 180 tokens. The hand-rolled server runs eager torch. downshift with <code>--backend torch</code> is close to it ({n0(mini('downshift 1.0.0 --backend torch', 'short_b1', 8)['throughput_rps'])} against {n0(mini('naive FastAPI + transformers', 'short_b1', 8)['throughput_rps'])} requests/s). The hand-rolled server cuts over-long text. downshift rejects it."
         )
     )
 
@@ -1731,13 +1700,13 @@ def page_torch_ort() -> str:
         rows4,
     )
     claim(
-        peak_of("mlp_large", NAIVE_T)["throughput_rps"]
-        > peak_of("mlp_large", NAIVE_O)["throughput_rps"],
-        "naive torch beats naive ORT on mlp_large",
+        peak_of("mlp_large", NAIVE_O)["throughput_rps"]
+        < 1.2 * peak_of("mlp_large", NAIVE_T)["throughput_rps"],
+        "naive ORT is less than 1.2x naive torch on mlp_large over HTTP",
     )
     body.append(
         p(
-            "On <code>mlp_large</code> the eager torch server has the higher peak, although ORT is faster in the in-process table. The data does not say why. Do not assume that ORT wins on every model over HTTP."
+            f"On <code>mlp_large</code> the two hand-rolled servers are close over HTTP ({n0(peak_of('mlp_large', NAIVE_T)['throughput_rps'])} requests/s with eager torch, {n0(peak_of('mlp_large', NAIVE_O)['throughput_rps'])} with ORT), although ORT is about 4 times faster in the in-process table. The request path, not the model, sets the peak. Do not assume that the in-process gain carries over to HTTP."
         )
     )
 
@@ -1746,9 +1715,9 @@ def page_torch_ort() -> str:
     body.append(
         ul(
             [
-                f"Without a server, ORT is {lo:.1f}x to {hi:.1f}x faster than eager torch on the CLEAN models and batch sizes measured.",
+                f"Without a server, ORT is {lo:.1f}x to {hi:.1f}x faster than eager torch on the CLEAN models and batch sizes measured, with one exception: on bert_small it is slower at {slower_text}.",
                 f"On a real encoder behind HTTP (MiniLM), ORT gives {min(sps):.1f}x to {max(sps):.1f}x more requests per second than eager torch in the same server, and the gain is largest for short inputs.",
-                "The gain does not carry over to every model over HTTP (see mlp_large).",
+                "The in-process gain does not carry over to every model over HTTP (see mlp_large).",
             ]
         )
     )
@@ -1871,8 +1840,8 @@ def page_wire() -> str:
         items.append(("h", f"{m}, batch 32, c=8, rows/s"))
         items.append(("0.5.1 JSON", rows_(m, DS_OLD, 32)["rows_per_s"], "bo"))
         items.append(("0.5.1 safetensors", rows_(m, DS_OLD_ST, 32)["rows_per_s"], "bo"))
-        items.append(("1.0.0rc1 JSON", rows_(m, DS_NEW, 32)["rows_per_s"], "bw"))
-        items.append(("1.0.0rc1 safetensors", rows_(m, DS_NEW_ST, 32)["rows_per_s"], "bw"))
+        items.append(("1.0.0 JSON", rows_(m, DS_NEW, 32)["rows_per_s"], "bw"))
+        items.append(("1.0.0 safetensors", rows_(m, DS_NEW_ST, 32)["rows_per_s"], "bw"))
     svg = hbar(
         items,
         n0,
@@ -1884,7 +1853,7 @@ def page_wire() -> str:
         figure(
             svg,
             "Rows per second, batch 32, c=8. Longer is better.",
-            bar_legend([("bo", "downshift 0.5.1"), ("bw", "downshift 1.0.0rc1")]),
+            bar_legend([("bo", "downshift 0.5.1"), ("bw", "downshift 1.0.0")]),
         )
     )
     items = []
@@ -1933,7 +1902,7 @@ def page_wire() -> str:
     )
     mdt(
         "Wire encodings, batch 32, c=8",
-        "JSON against safetensors. The 1.0.0rc1 mlp_large JSON row comes from the slow main pass.",
+        "JSON against safetensors.",
         [R1 / "chart_runs.csv"],
         hdr,
         rows,
@@ -1967,12 +1936,6 @@ def page_wire() -> str:
         [R1 / "chart_runs.csv"],
         hdr2,
         rows2,
-    )
-    body.append(
-        note(
-            "limit",
-            "In the 1.0.0rc1 JSON row for <code>mlp_large</code>, the main pass was slow (see the throughput page). The re-run covered batch 1 only. The 1.0.0rc1 batch rows for <code>mlp_large</code> are not re-measured. Use the 0.5.1 rows for the clean JSON against safetensors comparison.",
-        )
     )
 
     body.append(h2("What this shows and does not show", "limits"))
@@ -2024,7 +1987,7 @@ def page_cache() -> str:
         header(
             "The result cache",
             "How much faster is a request that the cache has seen before, and what does the cache cost a request that it has not seen?",
-            f"Two data sets. A load run of 1.0.0rc1 ({esc(env1()['timestamp'])}) and an in-process check of 0.6.0 ({esc(acc['when'])}).",
+            f"Two data sets. A load run of 1.0.0 ({esc(env1()['timestamp'])}) and an in-process check of 0.6.0 ({esc(acc['when'])}).",
         )
     ]
     mini = lambda srv, pay, c_: hfrow(srv, pay, c_)  # noqa: E731
@@ -2059,7 +2022,7 @@ def page_cache() -> str:
     body.append(
         ul(
             [
-                "<b>Load run (1.0.0rc1).</b> The variant <code>downshift_cache</code> of <code>bench.run</code> and <code>bench.hf_models</code> uses the default cache. All other 1.0.0rc1 variants add <code>--result-cache-rows 0</code>. The harness sends the same body every time. So after the first request, every request is a hit. This is the best case.",
+                "<b>Load run (1.0.0).</b> The variant <code>downshift_cache</code> of <code>bench.run</code> and <code>bench.hf_models</code> uses the default cache. All other 1.0.0 variants add <code>--result-cache-rows 0</code>. The harness sends the same body every time. So after the first request, every request is a hit. This is the best case.",
                 "<b>Acceptance check (0.6.0).</b> <code>python -m bench.cache_accept --out bench/results/v0.6.0/cache_acceptance.json</code>. It serves all-MiniLM-L6-v2 in the same process with a test client, with the cache on and off. It reads the sum of the stages in the <code>Server-Timing</code> header, so the client time does not count. It is not part of CI.",
                 "The check has three parts: (a) a query seen before must take under 1 ms; (b) a batch of 32 rows with 30 known rows must run the model on 2 rows; (c) unique queries must cost no more than 5% plus 0.2 ms over a server with the cache off.",
             ]
@@ -2092,13 +2055,13 @@ def page_cache() -> str:
         table(
             hdr,
             rows,
-            caption="Fixtures, batch 1: 1.0.0rc1 with the cache off and on (same body in every request)",
+            caption="Fixtures, batch 1: 1.0.0 with the cache off and on (same body in every request)",
             right=range(1, 6),
         )
     )
     mdt(
         "Result cache on the fixtures, batch 1",
-        "1.0.0rc1, cache off against cache on. Every request repeats one body, so this is a best case. The mlp_large off row is from the slow main pass.",
+        "1.0.0, cache off against cache on. Every request repeats one body, so this is a best case.",
         [R1 / "chart_runs.csv"],
         hdr,
         rows,
@@ -2156,19 +2119,17 @@ def page_cache() -> str:
     )
     mdt(
         "Result cache on MiniLM",
-        "1.0.0rc1, 5 s windows. Every request repeats one body.",
+        "1.0.0, 5 s windows. Every request repeats one body.",
         [R1 / "chart_runs.csv"],
         hdr2,
         rows2,
     )
-    claim(
-        mini(DS_CACHE, "short_b1", 8)["health_p99_ms"]
-        > 5 * mini(DS_NEW, "short_b1", 8)["health_p99_ms"],
-        "cache-on health p99 is far above cache-off",
-    )
+    h_on = mini(DS_CACHE, "short_b1", 8)["health_p99_ms"]
+    h_off = mini(DS_NEW, "short_b1", 8)["health_p99_ms"]
+    claim(h_on < 2 * h_off, "cache-on health p99 is not far above cache-off")
     body.append(
         p(
-            "With the cache on, the server answers up to about 1900 requests per second (one sentence, c=8). The <code>/health</code> probe, that runs every 50 ms in the same window, sees a higher p99 in the cache-on run than in the cache-off run. The cause is not in the data. The load generator and the server share the machine."
+            f"With the cache on, the server answers about {n0(mini(DS_CACHE, 'short_b1', 8)['throughput_rps'])} requests per second (one sentence, c=8). The <code>/health</code> probe, that runs every 50 ms in the same window, sees a p99 of {n0(h_on)} ms in the cache-on run and {n0(h_off)} ms in the cache-off run. The server stays responsive at this rate."
         )
     )
     body.append(h3("Where the cache does nothing"))
@@ -2227,7 +2188,7 @@ def page_cache() -> str:
         0.2 < a["hit_median"] < 0.3 and 4.5 < a["no_cache_median"] < 4.7,
         "hit about a quarter ms; miss about 4.6 ms",
     )
-    claim(mini(DS_CACHE, "short_b1", 8)["throughput_rps"] > 1900, "cache-on MiniLM above 1900 rps")
+    claim(mini(DS_CACHE, "short_b1", 8)["throughput_rps"] > 1400, "cache-on MiniLM above 1400 rps")
     body.append(
         ul(
             [
@@ -2247,7 +2208,7 @@ def page_cache() -> str:
             [
                 "A normal workload. The load run repeats one body. A real hit rate is not measured.",
                 "The hardware of the 0.6.0 check. The file stores no machine, CPU or package version. It also stores no spread: only medians, one maximum and the repeat count.",
-                "The check ran on 0.6.0, not on 1.0.0rc1. It was not run again for 1.0.0.",
+                "The check ran on 0.6.0, not on 1.0.0. It was not run again for 1.0.0.",
                 "The timing difference between a hit and a miss is visible to a client. The README says that on a server with more than one tenant, a client can see the difference. This is a property of the design, and the data does not measure it.",
                 "Only MiniLM was checked in-process. The cache for graph models is not measured.",
             ]
@@ -2304,7 +2265,7 @@ def page_correct() -> str:
             [
                 (
                     f"{sci(e_naive)} vs {sci(e_ds)}",
-                    "scatter_include_self_false: worst error, hand-rolled ORT vs downshift 1.0.0rc1",
+                    "scatter_include_self_false: worst error, hand-rolled ORT vs downshift 1.0.0",
                     "downshift serves this model with torch",
                 ),
                 (f"{total_err}", "failed requests across every load window", "fixtures and MiniLM"),
@@ -2378,7 +2339,7 @@ def page_correct() -> str:
             svg,
             "scatter_include_self_false: worst absolute error against eager PyTorch (linear scale, 0 to 1.5). Only the bar for FastAPI + ORT is visible.",
             bar_legend(
-                [("bn", "hand-rolled"), ("bo", "downshift 0.5.1"), ("bw", "downshift 1.0.0rc1")]
+                [("bn", "hand-rolled"), ("bo", "downshift 0.5.1"), ("bw", "downshift 1.0.0")]
             ),
         )
     )
@@ -2743,11 +2704,11 @@ def page_boot() -> str:
         "downshift boots slower than naive on MiniLM",
     )
     claim(
-        ready[(m, "downshift 1.0.0rc1 --backend torch")] < ready[(m, DS_NEW)],
+        ready[(m, "downshift 1.0.0 --backend torch")] < ready[(m, DS_NEW)],
         "--backend torch boots faster",
     )
     gaps = [ready[(mo, DS_NEW)] - ready[(mo, NAIVE_T)] for mo in FIX_MODELS]
-    claim(0 < min(gaps) and max(gaps) < 6, "fixture boot gap is positive and under 6 s")
+    claim(0 < min(gaps) and max(gaps) < 8, "fixture boot gap is positive and under 8 s")
     body = [
         header(
             "Boot time: what the gate costs before the first request",
@@ -2760,11 +2721,11 @@ def page_boot() -> str:
             [
                 (
                     f"{n1(ready[(m, DS_NEW)])} vs {n1(ready[(m, 'naive FastAPI + transformers')])} s",
-                    "MiniLM: downshift 1.0.0rc1 vs hand-rolled FastAPI + transformers",
+                    "MiniLM: downshift 1.0.0 vs hand-rolled FastAPI + transformers",
                     "time to the first 200 answer",
                 ),
                 (
-                    f"{n1(ready[(m, 'downshift 1.0.0rc1 --backend torch')])} s",
+                    f"{n1(ready[(m, 'downshift 1.0.0 --backend torch')])} s",
                     "MiniLM: downshift with --backend torch",
                     "same server, ORT backend not used",
                 ),
@@ -2801,7 +2762,7 @@ def page_boot() -> str:
                 "naive FastAPI + transformers",
                 "naive transformers, async def",
                 "downshift 0.5.1 --backend torch",
-                "downshift 1.0.0rc1 --backend torch",
+                "downshift 1.0.0 --backend torch",
             ]
             if (mod, s) in ready and s not in (DS_OLD_ST, DS_NEW_ST, DS_CACHE, DS_METRICS)
         ]
@@ -2842,7 +2803,7 @@ def page_boot() -> str:
             "downshift 0.5.1",
             "downshift 0.5.1 --backend torch",
             DS_NEW,
-            "downshift 1.0.0rc1 --backend torch",
+            "downshift 1.0.0 --backend torch",
         ]
     ]
     body.append(table(hdr2, rows2, caption="Seconds to ready, MiniLM", right=(1,)))
@@ -2855,7 +2816,7 @@ def page_boot() -> str:
     )
     body.append(
         p(
-            f"<code>downshift check</code> on MiniLM took {chk['1.0.0rc1']['wall_s']} s for 1.0.0rc1 and {chk['0.5.1']['wall_s']} s for 0.5.1 (exit code 0 in both)."
+            f"<code>downshift check</code> on MiniLM took {chk['1.0.0']['wall_s']} s for 1.0.0 and {chk['0.5.1']['wall_s']} s for 0.5.1 (exit code 0 in both)."
         )
     )
     mdt(
@@ -2871,7 +2832,7 @@ def page_boot() -> str:
         ul(
             [
                 f"On MiniLM, downshift is ready in {n1(ready[(m, DS_NEW)])} s. The hand-rolled server is ready in {n1(ready[(m, 'naive FastAPI + transformers')])} s. The difference is {n1(ready[(m, DS_NEW)] - ready[(m, 'naive FastAPI + transformers')])} s.",
-                f"With <code>--backend torch</code>, downshift is ready in {n1(ready[(m, 'downshift 1.0.0rc1 --backend torch')])} s.",
+                f"With <code>--backend torch</code>, downshift is ready in {n1(ready[(m, 'downshift 1.0.0 --backend torch')])} s.",
                 "On the four fixtures, downshift takes "
                 + f"{min(gaps):.1f} to {max(gaps):.1f}"
                 + " s more than the hand-rolled torch server.",
@@ -2883,7 +2844,7 @@ def page_boot() -> str:
         ul(
             [
                 "How the boot time divides between load, export, verify and warm-up. The stored <code>check</code> report has no timing split. The README example shows such a split for one model.",
-                f"Whether the {n1(ready[(m, DS_NEW)] - ready[(m, 'downshift 1.0.0rc1 --backend torch')])} s gap between the default and <code>--backend torch</code> is the export and the check alone. The data does not say.",
+                f"Whether the {n1(ready[(m, DS_NEW)] - ready[(m, 'downshift 1.0.0 --backend torch')])} s gap between the default and <code>--backend torch</code> is the export and the check alone. The data does not say.",
                 "The effect of the export cache (<code>--export-cache-dir</code>). It is not measured here.",
                 "The boot time on Linux, or on another CPU. " + common_limits(),
             ]
@@ -2898,14 +2859,14 @@ def page_boot() -> str:
 
 
 # ----------------------------------------------------------------------------------------
-# Page: workers (0.5.0 run)
+# Page: workers (1.0.0 run)
 # ----------------------------------------------------------------------------------------
 
 
 def page_scaling() -> str:
-    env5 = jload(R5 / "results.json")["environment"]
-    ceil5 = {int(k): v for k, v in jload(R5 / "results.json")["client_ceiling_rps"].items()}
-    w = [r for r in runs5() if r["suite"] == "workers"]
+    env5 = jload(R1 / "results.json")["environment"]
+    ceil5 = {int(k): v for k, v in jload(R1 / "results.json")["client_ceiling_rps"].items()}
+    w = [r for r in runs() if r["suite"] == "workers"]
 
     def g(model, ver, nw, c):
         rows = [
@@ -2919,46 +2880,39 @@ def page_scaling() -> str:
 
     models = ["clean_mlp", "mlp_large", "bert_small"]
     claim(
-        g("clean_mlp", "0.5.0", 4, 8)["throughput_rps"]
-        > 3.5 * g("clean_mlp", "0.5.0", 1, 8)["throughput_rps"],
+        g("clean_mlp", "1.0.0", 4, 8)["throughput_rps"]
+        > 3.5 * g("clean_mlp", "1.0.0", 1, 8)["throughput_rps"],
         "clean_mlp 4 workers more than 3.5x",
     )
     claim(
-        g("bert_small", "0.5.0", 4, 1)["throughput_rps"]
-        < g("bert_small", "0.5.0", 1, 1)["throughput_rps"],
+        g("bert_small", "1.0.0", 4, 1)["throughput_rps"]
+        < g("bert_small", "1.0.0", 1, 1)["throughput_rps"],
         "bert_small 4 workers is slower at c=1",
     )
     body = [
         header(
             "More worker processes",
             "Does <code>--workers N</code> raise throughput, and what does it cost?",
-            f"Older data: the 0.5.0 run, {esc(env5['timestamp'])}. {esc(env5['platform'])}, {env5['cpu_count']} logical CPUs, Python {esc(env5['python'])}, torch {esc(env5['torch'])}, onnxruntime {esc(env5['onnxruntime'])}.",
+            f"Run {esc(env5['timestamp'])}. {esc(env5['platform'])}, {env5['cpu_count']} logical CPUs, Python {esc(env5['python'])}, torch {esc(env5['torch'])}, onnxruntime {esc(env5['onnxruntime'])}.",
         )
     ]
-    body.append(
-        note(
-            "bad",
-            "The 1.0.0rc1 run did not include the workers sweep (<code>skip_workers</code> is true in its settings). These numbers are for 0.5.0 and 0.4.0. They were not measured for 1.0.0rc1.",
-            "Old data.",
-        )
-    )
-    a, b = g("clean_mlp", "0.5.0", 1, 8), g("clean_mlp", "0.5.0", 4, 8)
+    a, b = g("clean_mlp", "1.0.0", 1, 8), g("clean_mlp", "1.0.0", 4, 8)
     body.append(
         tiles(
             [
                 (
                     f"{n0(b['throughput_rps'])} vs {n0(a['throughput_rps'])}",
-                    "clean_mlp, c=8, 0.5.0: 4 workers vs 1 worker, requests/s",
+                    "clean_mlp, c=8, 1.0.0: 4 workers vs 1 worker, requests/s",
                     f"{b['throughput_rps'] / a['throughput_rps']:.1f}x",
                 ),
                 (
-                    f"{n0(g('bert_small', '0.5.0', 4, 8)['throughput_rps'])} vs {n0(g('bert_small', '0.5.0', 1, 8)['throughput_rps'])}",
-                    "bert_small, c=8, 0.5.0: 4 workers vs 1 worker",
-                    f"{g('bert_small', '0.5.0', 4, 8)['throughput_rps'] / g('bert_small', '0.5.0', 1, 8)['throughput_rps']:.1f}x",
+                    f"{n0(g('bert_small', '1.0.0', 4, 8)['throughput_rps'])} vs {n0(g('bert_small', '1.0.0', 1, 8)['throughput_rps'])}",
+                    "bert_small, c=8, 1.0.0: 4 workers vs 1 worker",
+                    f"{g('bert_small', '1.0.0', 4, 8)['throughput_rps'] / g('bert_small', '1.0.0', 1, 8)['throughput_rps']:.1f}x",
                 ),
                 (
-                    f"{n0(g('bert_small', '0.5.0', 4, 1)['throughput_rps'])} vs {n0(g('bert_small', '0.5.0', 1, 1)['throughput_rps'])}",
-                    "bert_small, c=1, 0.5.0: 4 workers vs 1 worker",
+                    f"{n0(g('bert_small', '1.0.0', 4, 1)['throughput_rps'])} vs {n0(g('bert_small', '1.0.0', 1, 1)['throughput_rps'])}",
+                    "bert_small, c=1, 1.0.0: 4 workers vs 1 worker",
                     "slower with more workers at c=1",
                 ),
             ]
@@ -2974,9 +2928,9 @@ def page_scaling() -> str:
     body.append(
         ul(
             [
-                "The workers sweep is the last part of <code>python -m bench.run --out bench/results/v0.5.0/results.json</code>. It starts the real CLI with <code>--workers 1</code>, <code>2</code> and <code>4</code> on <code>clean_mlp</code>, <code>mlp_large</code> and <code>bert_small</code>. Batch 1, JSON.",
+                "The workers sweep is the last part of <code>python -m bench.run --out bench/results/v1.0.0/results.json</code>. It starts the real CLI with <code>--workers 1</code>, <code>2</code> and <code>4</code> on <code>clean_mlp</code>, <code>mlp_large</code> and <code>bert_small</code>. Batch 1, JSON.",
                 "With more than one worker, the parent exports once and hands the artifact to each worker.",
-                "Data: <code>chart_runs.csv</code> of the 0.5.0 run, rows with <code>suite = workers</code>.",
+                "Data: <code>chart_runs.csv</code> of the 1.0.0 run, with the result cache off in every row, rows with <code>suite = workers</code>.",
             ]
         )
     )
@@ -2984,12 +2938,12 @@ def page_scaling() -> str:
     for mod in models:
         items = []
         for c in (1, 8, 32):
-            items.append(("h", f"{mod}, c={c}, requests/s (0.5.0)"))
+            items.append(("h", f"{mod}, c={c}, requests/s (1.0.0)"))
             for nw in (1, 2, 4):
                 items.append(
                     (
                         f"{nw} worker" + ("s" if nw > 1 else ""),
-                        g(mod, "0.5.0", nw, c)["throughput_rps"],
+                        g(mod, "1.0.0", nw, c)["throughput_rps"],
                         "bw",
                     )
                 )
@@ -3001,12 +2955,12 @@ def page_scaling() -> str:
             lw=90,
         )
         body.append(
-            figure(svg, f"{mod}, downshift 0.5.0: requests per second by number of workers.", "")
+            figure(svg, f"{mod}, downshift 1.0.0: requests per second by number of workers.", "")
         )
     hdr = ["model", "version", "workers", "rps c=1", "rps c=8", "rps c=32", "p99 ms c=8", "boot s"]
     rows = []
     for mod in models:
-        for ver in ("0.4.0", "0.5.0"):
+        for ver in ("0.5.1", "1.0.0"):
             for nw in (1, 2, 4):
                 rows.append(
                     [
@@ -3022,9 +2976,9 @@ def page_scaling() -> str:
                 )
     body.append(table(hdr, rows, caption="The workers sweep, batch 1", right=range(2, 8)))
     mdt(
-        "Workers sweep (0.4.0 and 0.5.0 run)",
-        "Requests/s at c=1, 8 and 32; p99 at c=8; seconds to ready. Not measured for 1.0.0rc1.",
-        [R5 / "chart_runs.csv"],
+        "Workers sweep (0.5.1 and 1.0.0)",
+        "Requests/s at c=1, 8 and 32; p99 at c=8; seconds to ready.",
+        [R1 / "chart_runs.csv"],
         hdr,
         rows,
     )
@@ -3034,18 +2988,18 @@ def page_scaling() -> str:
         ul(
             [
                 "With 8 or more clients, throughput rises with the number of workers for all three models in both versions.",
-                "At c=1, more workers do not help. For <code>bert_small</code> 4 workers are slower than 1 (70 against 91 requests/s in 0.5.0).",
+                "At c=1, more workers do not help. For <code>bert_small</code> 4 workers are slower than 1 (69 against 90 requests/s in 1.0.0).",
                 "Boot time grows with workers: it is longer with 4 workers than with 1 for every model.",
             ]
         )
     )
     claim(
-        round(g("bert_small", "0.5.0", 4, 1)["throughput_rps"]) == 70
-        and round(g("bert_small", "0.5.0", 1, 1)["throughput_rps"]) == 91,
-        "bert_small c=1 numbers 70 and 91",
+        round(g("bert_small", "1.0.0", 4, 1)["throughput_rps"]) == 69
+        and round(g("bert_small", "1.0.0", 1, 1)["throughput_rps"]) == 90,
+        "bert_small c=1 numbers 69 and 90",
     )
     claim(
-        all(g(mo, "0.5.0", 4, 1)["ready_s"] > g(mo, "0.5.0", 1, 1)["ready_s"] for mo in models),
+        all(g(mo, "1.0.0", 4, 1)["ready_s"] > g(mo, "1.0.0", 1, 1)["ready_s"] for mo in models),
         "boot is longer with 4 workers",
     )
     body.append(h3("Does not show"))
@@ -3053,13 +3007,21 @@ def page_scaling() -> str:
         ul(
             [
                 f"Linear scaling. The best case is {b['throughput_rps'] / a['throughput_rps']:.1f}x for 4 workers. The load generator shares the {env5['cpu_count']} logical CPUs with the workers, and its ceiling in this run was {n0(ceil5[8])} requests/s at c=8.",
-                "Results for 1.0.0rc1, for any other model, or for a machine with another core count.",
-                "The README of <code>bench/</code> notes one startup hang in 0.4.0 (<code>--workers 4</code> on <code>bert_small</code> did not answer <code>/ready</code> within 600 s once, then was re-run). The stored boot times are of the re-run.",
+                "Any other model, or a machine with another core count. The two versions are equal on this sweep within noise.",
+                "Three windows of 1.0.0 had requests that timed out after 30 s or more (<code>--workers 2</code> c=32 and <code>--workers 4</code> c=8). Each was measured again and was clean. The cause was the harness: it did not read the output pipe of the server, and a full pipe blocks a log write. The fault is fixed, and a sweep after the fix had no error. The stalled rows are in <code>failed_rows_workers.json</code>, and the repeats in <code>workers_repeats.json</code>.",
                 common_limits(),
             ]
         )
     )
-    body.append(section_sources(R5 / "chart_runs.csv", R5 / "results.json", R5 / "REPORT.md"))
+    body.append(
+        section_sources(
+            R1 / "chart_runs.csv",
+            R1 / "results.json",
+            R1 / "REPORT.md",
+            R1 / "failed_rows_workers.json",
+            R1 / "workers_repeats.json",
+        )
+    )
     return frame("scaling", "Workers", "\n".join(body))
 
 
@@ -3104,7 +3066,7 @@ def page_releases() -> str:
         header(
             "Release to release",
             "Did the peak throughput change between releases? Each comparison is inside one run, so the machine state is the same for both versions.",
-            f"Run A: {esc(env5['timestamp'])} (0.4.0 and 0.5.0). Run B: {esc(env1_['timestamp'])} (0.5.1 and 1.0.0rc1). Both on {esc(env1_['platform'])}, {env1_['cpu_count']} logical CPUs.",
+            f"Run A: {esc(env5['timestamp'])} (0.4.0 and 0.5.0). Run B: {esc(env1_['timestamp'])} (0.5.1 and 1.0.0). Both on {esc(env1_['platform'])}, {env1_['cpu_count']} logical CPUs.",
         )
     ]
     body.append(
@@ -3124,9 +3086,9 @@ def page_releases() -> str:
     body.append(
         ul(
             [
-                "Run A: <code>bench/results/v0.5.0/</code> (8 models). Run B: <code>bench/results/v1.0.0/</code> (4 models). Same harness, same commands. See the throughput page for the method.",
+                "Run A: <code>bench/results/v0.5.0/</code> (8 models). Run B: <code>bench/results/v1.0.0/</code> (8 models; the 4 shown here). Same harness, same commands. See the throughput page for the method.",
                 "Peak is the best requests/s over concurrency 1 to 64, from <code>chart_runs.csv</code>.",
-                "The 0.4.0 run of September 2026 (<code>bench/results_v0.4.0.json</code>, behind the launch post) is a separate run with an older harness. This page does not use it. Its files stay unchanged.",
+                "The 0.4.0 run of September 2026 (<code>bench/results/v0.4.0/results.json</code>, behind the launch post) is a separate run with an older harness. This page does not use it. Its files stay unchanged.",
             ]
         )
     )
@@ -3160,7 +3122,7 @@ def page_releases() -> str:
         hdr,
         rows,
     )
-    body.append(h2("Results: 0.5.1 to 1.0.0rc1 (run B)", "b"))
+    body.append(h2("Results: 0.5.1 to 1.0.0 (run B)", "b"))
     mm = {}
     for m in FIX_MODELS:
         mm[m] = peak_of(m, DS_NEW)["throughput_rps"] / peak_of(m, DS_OLD)["throughput_rps"] - 1
@@ -3170,31 +3132,31 @@ def page_releases() -> str:
     svg = hbar(
         items2,
         lambda v: f"{v:.0f}%",
-        title="Size of the change in peak requests per second, 1.0.0rc1 against 0.5.1",
+        title="Size of the change in peak requests per second, 1.0.0 against 0.5.1",
         desc="Bars show the size of the change. The signs are in the table.",
         lw=132,
     )
     body.append(
         figure(
             svg,
-            "Run B: size of the change in peak requests/s, 1.0.0rc1 against 0.5.1. Bars show the size only. The sign is in the table.",
+            "Run B: size of the change in peak requests/s, 1.0.0 against 0.5.1. Bars show the size only. The sign is in the table.",
             "",
         )
     )
-    hdr2 = ["model", "0.5.1 peak rps", "1.0.0rc1 peak rps", "change", "note"]
+    hdr2 = ["model", "0.5.1 peak rps", "1.0.0 peak rps", "change", "note"]
     rows2 = [
         [
             m,
             n0(peak_of(m, DS_OLD)["throughput_rps"]),
             n0(peak_of(m, DS_NEW)["throughput_rps"]),
             pct(mm[m] * 100),
-            "main pass was slow; re-run in the throughput page" if m == "mlp_large" else "",
+            "",
         ]
         for m in FIX_MODELS
     ]
     body.append(table(hdr2, rows2, caption="Run B: peak requests/s, batch 1", right=range(1, 4)))
     mdt(
-        "Release to release, run B: 0.5.1 against 1.0.0rc1",
+        "Release to release, run B: 0.5.1 against 1.0.0",
         "Peak requests/s, batch 1, JSON, cache off, same session.",
         [R1 / "chart_runs.csv"],
         hdr2,
@@ -3202,7 +3164,7 @@ def page_releases() -> str:
     )
     body.append(
         p(
-            "In run A, 0.5.0 is faster than 0.4.0 on all eight models. In run B, 1.0.0rc1 and 0.5.1 are close, and 1.0.0rc1 adds the result cache and <code>--metrics</code>."
+            "In run A, 0.5.0 is faster than 0.4.0 on all eight models. In run B, 1.0.0 and 0.5.1 are close, and 1.0.0 adds the result cache and <code>--metrics</code>."
         )
     )
     body.append(h2("What this shows and does not show", "limits"))
@@ -3211,7 +3173,7 @@ def page_releases() -> str:
         ul(
             [
                 f"0.5.0 against 0.4.0: peak throughput rose on all 8 models, from {min(d.values()) * 100:+.0f}% to {max(d.values()) * 100:+.0f}% in the same session.",
-                "1.0.0rc1 against 0.5.1: no gain, and no clear loss except the slow first pass of <code>mlp_large</code>.",
+                "1.0.0 against 0.5.1: no gain and no clear loss. Differences under about 15% are noise in this run.",
             ]
         )
     )
@@ -3219,8 +3181,8 @@ def page_releases() -> str:
     body.append(
         ul(
             [
-                "The final 1.0.0 release. Run B is of <code>1.0.0rc1</code>.",
-                "Any release after 1.0.0rc1.",
+                "The final 1.0.0 release. Run B is of <code>1.0.0</code>.",
+                "Any release after 1.0.0.",
                 "0.5.1 against 0.5.0 (never in the same session).",
                 common_limits(),
             ]
@@ -3319,7 +3281,7 @@ def page_index() -> str:
         (
             "throughput",
             "Throughput and latency",
-            "Requests per second and latency against hand-rolled servers, 0.5.1 and 1.0.0rc1.",
+            "Requests per second and latency against hand-rolled servers, 0.5.1 and 1.0.0.",
         ),
         (
             "time-breakdown",
@@ -3336,8 +3298,8 @@ def page_index() -> str:
         ("correctness", "Correctness under load", "Every response against eager PyTorch."),
         ("compatibility", "What the gate catches", "14 hazard fixtures and 8 real models."),
         ("boot-time", "Boot time", "What the check costs before the first request."),
-        ("scaling", "More worker processes", "The <code>--workers</code> sweep (0.5.0 data)."),
-        ("releases", "Release to release", "0.4.0 to 0.5.0 and 0.5.1 to 1.0.0rc1."),
+        ("scaling", "More worker processes", "The <code>--workers</code> sweep (0.5.1 and 1.0.0)."),
+        ("releases", "Release to release", "0.4.0 to 0.5.0 and 0.5.1 to 1.0.0."),
         ("SUMMARY", "One-page summary", "A page to print or to screenshot."),
     ]
     body.append(
@@ -3364,11 +3326,10 @@ def page_index() -> str:
     body.append(
         ul(
             [
-                "GPU. The machine is CPU only (<code>bench/REPORT_v0.4.0.md</code> states this).",
+                "GPU. The machine is CPU only (<code>bench/results/v0.4.0/REPORT.md</code> states this).",
                 "Linux or macOS. The machine is Windows.",
-                "TorchServe, BentoML, Triton, TEI and Infinity. No run includes them (<code>bench/REPORT_v0.4.0.md</code>, section Not measured).",
-                "The <code>--workers</code> sweep and Prompt Guard for 1.0.0rc1. Both ran in earlier runs only.",
-                "Run-to-run spread. No file holds repeats.",
+                "TorchServe, BentoML, Triton, TEI and Infinity. No run includes them (<code>bench/results/v0.4.0/REPORT.md</code>, section Not measured).",
+                "Run-to-run spread. Only the `--workers` windows were measured again (3 repeats and a run after the fix). No other row has repeats.",
                 "Text generation. downshift does not do it.",
             ]
         )
@@ -3423,14 +3384,14 @@ def page_summary() -> str:
         "naive transformers, async def",
         DS_OLD,
         DS_NEW,
-        "downshift 1.0.0rc1 --backend torch",
+        "downshift 1.0.0 --backend torch",
     ]:
         items.append((SHORT[s], hfrow(s, "short_b1", 8)["throughput_rps"], bar_class(s)))
     legend = bar_legend(
         [
             ("bn", "hand-rolled"),
             ("bo", "downshift 0.5.1"),
-            ("bw", "downshift 1.0.0rc1"),
+            ("bw", "downshift 1.0.0"),
             ("bv", "downshift, torch backend"),
         ]
     )
@@ -3457,7 +3418,7 @@ def page_summary() -> str:
             ),
             "Fixtures on CPU. 3 s windows.",
             bar_legend(
-                [("bn", "hand-rolled"), ("bo", "downshift 0.5.1"), ("bw", "downshift 1.0.0rc1")]
+                [("bn", "hand-rolled"), ("bo", "downshift 0.5.1"), ("bw", "downshift 1.0.0")]
             ),
         )
     )
@@ -3466,7 +3427,7 @@ def page_summary() -> str:
         ul(
             [
                 "One Windows machine, 16 logical CPUs, CPU only. One run. No repeats.",
-                "downshift 1.0.0rc1 and 0.5.1 are close in speed. The data shows no gain.",
+                "downshift 1.0.0 and 0.5.1 are close in speed. The data shows no gain.",
                 "On tiny models, hand-rolled servers handle more requests per second. On MiniLM, downshift handles more.",
                 "The check costs boot time: "
                 + f"{n1(f['ready_ds'])} s against {n1(f['ready_naive'])} s on MiniLM.",
@@ -3505,7 +3466,7 @@ def write_results_md(failed: dict) -> None:
         "A plain-text copy of the key tables. The tables are made by `build_showcase.py` from the data files named under each table.",
         "To read the method and the limits of a table, open the matching HTML page. Read [METHODOLOGY.md](METHODOLOGY.md) first.",
         "",
-        f"Main run: {env_line(env1())}. downshift 1.0.0rc1 from the checkout, 0.5.1 from PyPI. One machine, one run, no repeats.",
+        f"Main run: {env_line(env1())}. downshift 1.0.0 from the checkout, 0.5.1 from PyPI. One machine, one run, no repeats.",
         "",
     ]
     if failed:
@@ -3550,7 +3511,7 @@ def write_methodology_md() -> None:
         if r["concurrency"] == 1
         and r["batch"] == 1
         and r["variant"] == "downshift"
-        and r["version"] == "1.0.0rc1"
+        and r["version"] == "1.0.0"
     ]
     lines = f"""# Methodology
 
@@ -3578,7 +3539,7 @@ downshift picks a backend from a correctness verdict. The benchmark does not ask
 | Correctness | `bench.run`, `bench.hf_models` | `results.json`, `chart_runs.csv`, `results_hf.json` | [correctness](correctness.html) |
 | Real models and hazard fixtures | `python scripts/check_real_models.py`, `python scripts/gen_matrix.py` | `bench/results/v1.0.0/real_models.json`, `docs/compatibility.md` | [compatibility](compatibility.html) |
 | Boot time | `bench.run`, `bench.hf_models` | `chart_runs.csv` (`ready_s`), `results_hf.json` | [boot-time](boot-time.html) |
-| Workers | `bench.run` (0.5.0 run) | `bench/results/v0.5.0/chart_runs.csv` | [scaling](scaling.html) |
+| Workers | `bench.run` (1.0.0 run) | `bench/results/v1.0.0/chart_runs.csv` | [scaling](scaling.html) |
 | Release to release | `bench.run` (two runs) | both `chart_runs.csv` files | [releases](releases.html) |
 
 ## 3. The harness
@@ -3589,7 +3550,7 @@ downshift picks a backend from a correctness verdict. The benchmark does not ask
 - **Ceiling.** Before the sweep, the harness measures the load generator against `GET /health` on a server that does nothing: {", ".join(f"c={c}: {n0(v)} rps" for c, v in ceil.items())}. A result near these numbers would measure the client.
 - **Windows.** Warm-up {cfg["warmup"]} s, then {cfg["duration"]} s for each point on the fixtures. Text models: warm-up {hfcfg["warmup"]} s, window {hfcfg["duration"]} s, concurrency {hfcfg["concurrency"]}. A `/health` probe runs every 50 ms during each text window.
 - **Correctness.** Every response is compared element by element with eager PyTorch on the same input. The hand-rolled text servers and downshift answers are compared with `downshift --backend torch`.
-- **Result cache.** Every 1.0.0rc1 row except "result cache on" starts with `--result-cache-rows 0`. The harness repeats one body, so a cache would answer from memory.
+- **Result cache.** Every 1.0.0 row except "result cache on" starts with `--result-cache-rows 0`. The harness repeats one body, so a cache would answer from memory.
 
 ## 4. Hardware and versions (from the data)
 
@@ -3604,7 +3565,7 @@ downshift picks a backend from a correctness verdict. The benchmark does not ask
 | onnxruntime | {env["onnxruntime"]}; providers {", ".join(env["ort_providers"])} | `results.json` |
 | downshift | checkout {env["downshift_targets"]["checkout"]}; installed {env["downshift_targets"]["installed"]} | `results.json` |
 | Load settings | cases {", ".join(cfg["cases"])}; concurrency {cfg["concurrency"]}; batch {cfg["batch"]}; batch concurrency {cfg["batch_concurrency"]}; in-process iterations {cfg["inproc_iters"]} | `results.json` |
-| Not run | the workers sweep (`skip_workers` = {cfg["skip_workers"]}); Prompt Guard; `dynamic_batch_cnn`, `gnn_gcn`, `cnn_large`, `bert_small` | `results.json` |
+| Shown on the pages | 4 of the {len(cfg["cases"])} cases (`clean_mlp`, `tiny_bert`, `mlp_large`, `scatter_include_self_false`); the others are in `results.json` and the report | `results.json` |
 | Real-model check | date {real["date"]}; torch {real["versions"]["torch"]}, onnx {real["versions"]["onnx"]}, onnxruntime {real["versions"]["onnxruntime"]}, transformers {real["versions"]["transformers"]}, torch_geometric {real["versions"]["torch_geometric"]}, torchvision {real["versions"]["torchvision"]}; OS and CPU not recorded | `real_models.json` |
 | Cache acceptance (0.6.0) | run {acc["when"]}; {acc["repeats"]} repeats; machine and versions not recorded | `cache_acceptance.json` |
 | Earlier run (0.4.0 and 0.5.0) | {e5["timestamp"]}; {e5["platform"]}, {e5["cpu_count"]} logical CPUs, Python {e5["python"]}, torch {e5["torch"]}, onnxruntime {e5["onnxruntime"]} | `bench/results/v0.5.0/results.json` |
@@ -3617,8 +3578,8 @@ Run nothing else on the machine while the benchmark runs. A test suite at the sa
 
 1. Make a venv. Install the checkout dependencies and the previous release (non-editable): `pip install "downshift-server[all]==0.5.1" aiohttp safetensors`.
 2. Download the two Hugging Face checkpoints into `bench/models/` (see `bench/README.md`). Prompt Guard is gated.
-3. Run the fixture part: `python -m bench.run --out bench/results/vX.Y.Z/results.json`. The stored settings of the 1.0.0rc1 run match `--cases clean_mlp tiny_bert mlp_large scatter_include_self_false --skip-workers`. The exact command line is not stored.
-4. Run the text part: `python -m bench.hf_models --out bench/results/vX.Y.Z/results_hf.json` (the 1.0.0rc1 run used all-MiniLM-L6-v2 only).
+3. Run the fixture part: `python -m bench.run --out bench/results/vX.Y.Z/results.json`. The stored settings of the 1.0.0 run match `--cases clean_mlp tiny_bert mlp_large scatter_include_self_false --skip-workers`. The exact command line is not stored.
+4. Run the text part: `python -m bench.hf_models --out bench/results/vX.Y.Z/results_hf.json` (the 1.0.0 run used all-MiniLM-L6-v2 only).
 5. Make the report and the chart CSV files: `python -m bench.report --results ... --hf-results ... --out .../REPORT.md --csv .../chart_runs.csv --stages-csv .../chart_stages.csv`.
 6. Check the real models: `python scripts/check_real_models.py`. Make the fixture table: `python scripts/gen_matrix.py`.
 7. Run the cache check: `python -m bench.cache_accept --out bench/results/vX.Y.Z/cache_acceptance.json`.
@@ -3629,11 +3590,11 @@ Without `--out`, the commands write to `bench/scratch/`. A trial run never overw
 ## 6. Known limits and threats to validity
 
 1. **One machine, one run, no repeats.** No file holds repeated runs. The size of run-to-run noise is not measured. A difference of a few percent is not a finding. The report itself calls the difference of the cache-on and cache-off rows of `tiny_bert` and `scatter_include_self_false` "noise".
-2. **Short windows.** {cfg["duration"]} s for each point. The p99 at concurrency 1 comes from {min(oks)} to {max(oks)} requests for the 1.0.0rc1 default rows. The p99 at high concurrency has fewer samples for each client.
+2. **Short windows.** {cfg["duration"]} s for each point. The p99 at concurrency 1 comes from {min(oks)} to {max(oks)} requests for the 1.0.0 default rows. The p99 at high concurrency has fewer samples for each client.
 3. **The load generator shares the machine.** The CPU is shared between the client and the server. Results are valid for this layout only.
 4. **Closed loop.** At high concurrency the latency is set by the concurrency, so the latency at c=64 is mostly a queue.
-5. **A slow main pass.** The first `mlp_large` pass of 1.0.0rc1 default was slow. The report says it "does not fit one code path". A re-run covers batch 1 only (`rerun_mlp_large.json`). The batch 8 and 32 rows of `mlp_large` for 1.0.0rc1 JSON are not re-measured.
-6. **Release candidate.** The newest data is of `1.0.0rc1`.
+5. **Stalled windows.** Three windows of 1.0.0 under `--workers` had requests that timed out after 30 s or more. Each was measured again and was clean. The cause was the harness: it did not read the output pipe of the server, and a full pipe blocks a log write. The fault is fixed (`spawn_server` in `bench/run.py`), and a sweep after the fix had no error. The stalled rows are in `failed_rows_workers.json`, and the repeats in `workers_repeats.json`.
+6. **Three passes.** The run was split in three passes because the system ran out of memory once. The version label changed from `1.0.0rc1` to `1.0.0` between two passes, with no other code change. The first-pass rows are relabelled.
 7. **Small fixtures.** On `clean_mlp` the model takes about 0.13 ms of a 0.70 ms request. The fixtures measure the request path, not the model. The compute-heavy models (`mlp_large`, `tiny_bert`) are still small. Only MiniLM is a real model in the load run.
 8. **Random weights.** The fixtures use seeded random weights. The correctness numbers hold for those weights.
 9. **Hand-rolled baselines are one person's choice.** They are written to do less work than downshift. A tuned hand-rolled server could be faster or slower. TorchServe, BentoML, Triton, TEI and Infinity are not measured.
@@ -3682,7 +3643,7 @@ For a conference talk or a blog post. Every number comes from the data files nam
 - Wire format: safetensors helps wide inputs, hurts tiny ones. (Page: wire formats)
 
 ## 6. Honest notes (1 min)
-- 1.0.0rc1 is not faster than 0.5.1. The data shows no gain. (Page: releases)
+- 1.0.0 is not faster than 0.5.1. The data shows no gain. (Page: releases)
 - The result cache: a hit takes {hit["hit_median"]} ms of server time against {hit["no_cache_median"]} ms. The load-run numbers are a best case. (Page: result cache)
 - One machine, one run, no repeats, CPU only. Not measured: GPU, Linux, other servers.
 

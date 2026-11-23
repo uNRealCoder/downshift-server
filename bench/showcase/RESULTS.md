@@ -3,7 +3,7 @@
 A plain-text copy of the key tables. The tables are made by `build_showcase.py` from the data files named under each table.
 To read the method and the limits of a table, open the matching HTML page. Read [METHODOLOGY.md](METHODOLOGY.md) first.
 
-Main run: win32, 16 logical CPUs, Python 3.12.10, torch 2.14.0+cpu, onnxruntime 1.30.0, torch threads 8, run 2026-11-07T22:59:00. downshift 1.0.0rc1 from the checkout, 0.5.1 from PyPI. One machine, one run, no repeats.
+Main run: win32, 16 logical CPUs, Python 3.14.7, torch 2.14.0+cpu, onnxruntime 1.30.0, torch threads 8, run 2026-11-22T18:30:39. downshift 1.0.0 from the checkout, 0.5.1 from PyPI. One machine, one run, no repeats.
 
 ## Throughput and latency, batch 1: clean_mlp
 
@@ -11,15 +11,15 @@ Peak requests/s over the concurrency sweep; p50 and p99 in ms.
 
 | server | peak rps | at c= | rps c=1 | p50 ms c=1 | p99 ms c=1 | p50 ms c=8 | p99 ms c=8 |
 |---|---|---|---|---|---|---|---|
-| naive FastAPI + torch | 1698 | 32 | 1410 | 0.62 | 1.46 | 4.72 | 10.96 |
-| naive FastAPI + ONNX Runtime | 2069 | 16 | 1393 | 0.61 | 1.57 | 3.75 | 19.27 |
-| naive torch, async def | 3216 | 8 | 2142 | 0.42 | 0.91 | 2.35 | 3.85 |
-| downshift 0.5.1 | 1421 | 32 | 1039 | 0.80 | 2.02 | 5.94 | 8.71 |
-| downshift 0.5.1 safetensors | 1416 | 32 | 1015 | 0.83 | 2.17 | 6.04 | 9.67 |
-| downshift 1.0.0rc1 | 1428 | 16 | 1114 | 0.77 | 1.79 | 5.80 | 7.76 |
-| downshift 1.0.0rc1 safetensors | 1317 | 4 | 1018 | 0.81 | 2.06 | 6.12 | 10.60 |
-| downshift 1.0.0rc1 result cache on | 1824 | 4 | 1224 | 0.69 | 1.69 | 4.56 | 7.32 |
-| downshift 1.0.0rc1 --metrics | 1325 | 16 | 1054 | 0.81 | 1.81 | 6.15 | 8.60 |
+| naive FastAPI + torch | 1303 | 16 | 864 | 1.07 | 2.38 | 6.36 | 10.61 |
+| naive FastAPI + ONNX Runtime | 1706 | 32 | 1148 | 0.83 | 1.63 | 4.84 | 7.08 |
+| naive torch, async def | 2347 | 16 | 1671 | 0.57 | 1.10 | 3.37 | 5.34 |
+| downshift 0.5.1 | 1118 | 32 | 845 | 1.09 | 2.26 | 7.62 | 9.79 |
+| downshift 0.5.1 safetensors | 1055 | 32 | 876 | 1.07 | 1.86 | 7.88 | 10.24 |
+| downshift 1.0.0 | 1164 | 64 | 883 | 1.08 | 1.96 | 7.26 | 9.40 |
+| downshift 1.0.0 safetensors | 1079 | 16 | 867 | 1.11 | 1.92 | 7.94 | 10.60 |
+| downshift 1.0.0 result cache on | 1407 | 4 | 913 | 1.00 | 2.31 | 6.05 | 8.52 |
+| downshift 1.0.0 --metrics | 988 | 32 | 813 | 1.10 | 2.66 | 8.52 | 15.12 |
 
 Source: [`bench/results/v1.0.0/chart_runs.csv`](../results/v1.0.0/chart_runs.csv)
 
@@ -29,30 +29,30 @@ Peak requests/s over the concurrency sweep; p50 and p99 in ms.
 
 | server | peak rps | at c= | rps c=1 | p50 ms c=1 | p99 ms c=1 | p50 ms c=8 | p99 ms c=8 |
 |---|---|---|---|---|---|---|---|
-| naive FastAPI + torch | 984 | 32 | 389 | 2.41 | 4.46 | 9.29 | 21.30 |
-| naive FastAPI + ONNX Runtime | 808 | 32 | 383 | 1.80 | 7.58 | 10.60 | 31.62 |
-| naive torch, async def | 664 | 16 | 478 | 1.89 | 3.24 | 14.77 | 20.49 |
-| downshift 0.5.1 | 965 | 16 | 420 | 1.92 | 7.66 | 9.01 | 17.73 |
-| downshift 0.5.1 safetensors | 714 | 16 | 435 | 1.92 | 7.91 | 11.17 | 18.12 |
-| downshift 1.0.0rc1 | 765 | 64 | 302 | 2.17 | 9.95 | 10.26 | 24.45 |
-| downshift 1.0.0rc1 safetensors | 753 | 32 | 438 | 1.93 | 7.65 | 11.03 | 17.09 |
-| downshift 1.0.0rc1 result cache on | 1742 | 16 | 1078 | 0.80 | 1.80 | 5.04 | 8.20 |
-| downshift 1.0.0rc1 --metrics | 919 | 16 | 412 | 1.95 | 7.89 | 9.34 | 17.88 |
+| naive FastAPI + torch | 932 | 32 | 316 | 3.08 | 5.42 | 9.84 | 23.17 |
+| naive FastAPI + ONNX Runtime | 980 | 32 | 500 | 1.94 | 3.26 | 7.87 | 22.14 |
+| naive torch, async def | 656 | 64 | 391 | 2.43 | 4.66 | 16.67 | 26.23 |
+| downshift 0.5.1 | 1074 | 64 | 499 | 1.92 | 3.11 | 8.21 | 13.25 |
+| downshift 0.5.1 safetensors | 819 | 64 | 550 | 1.77 | 2.71 | 10.40 | 12.88 |
+| downshift 1.0.0 | 1013 | 64 | 490 | 1.98 | 3.25 | 8.48 | 14.75 |
+| downshift 1.0.0 safetensors | 806 | 64 | 550 | 1.75 | 2.82 | 10.45 | 13.18 |
+| downshift 1.0.0 result cache on | 1629 | 64 | 1062 | 0.90 | 1.48 | 5.67 | 8.15 |
+| downshift 1.0.0 --metrics | 988 | 64 | 485 | 2.04 | 3.06 | 8.58 | 14.04 |
 
 Source: [`bench/results/v1.0.0/chart_runs.csv`](../results/v1.0.0/chart_runs.csv)
 
-## 1.0.0rc1 against 0.5.1, batch 1
+## 1.0.0 against 0.5.1, batch 1
 
-Peak requests/s and requests/s at c=1. The mlp_large row of the main pass is marked in the note column.
+Peak requests/s and requests/s at c=1.
 
-| model | peak 0.5.1 | peak 1.0.0rc1 | change | c=1 0.5.1 | c=1 1.0.0rc1 | change | note |
-|---|---|---|---|---|---|---|---|
-| clean_mlp | 1421 | 1428 | +0.5% | 1039 | 1114 | +7.3% |  |
-| tiny_bert | 1183 | 1067 | -9.8% | 591 | 633 | +7.2% |  |
-| mlp_large | 965 | 765 | -20.7% | 420 | 302 | -28.2% | re-run: 942 vs 989 (-4.7%) |
-| scatter_include_self_false | 1443 | 1387 | -3.8% | 1222 | 1186 | -2.9% |  |
+| model | peak 0.5.1 | peak 1.0.0 | change | c=1 0.5.1 | c=1 1.0.0 | change |
+|---|---|---|---|---|---|---|
+| clean_mlp | 1118 | 1164 | +4.1% | 845 | 883 | +4.4% |
+| tiny_bert | 1082 | 1112 | +2.8% | 583 | 632 | +8.4% |
+| mlp_large | 1074 | 1013 | -5.6% | 499 | 490 | -1.7% |
+| scatter_include_self_false | 1047 | 959 | -8.4% | 853 | 646 | -24.2% |
 
-Source: [`bench/results/v1.0.0/chart_runs.csv`](../results/v1.0.0/chart_runs.csv), [`bench/results/v1.0.0/rerun_mlp_large.json`](../results/v1.0.0/rerun_mlp_large.json)
+Source: [`bench/results/v1.0.0/chart_runs.csv`](../results/v1.0.0/chart_runs.csv)
 
 ## Cost of --metrics at c=1
 
@@ -60,10 +60,10 @@ Extra time per request is 1/rps(metrics) - 1/rps(default).
 
 | model | rps c=1 default | rps c=1 --metrics | extra time per request (us) | change in rps |
 |---|---|---|---|---|
-| clean_mlp | 1114 | 1054 | +51 | -5.4% |
-| tiny_bert | 633 | 610 | +61 | -3.7% |
-| mlp_large | 302 | 412 | -891 | +36.7% |
-| scatter_include_self_false | 1186 | 1167 | +14 | -1.6% |
+| clean_mlp | 883 | 813 | +97 | -7.9% |
+| tiny_bert | 632 | 630 | +6 | -0.4% |
+| mlp_large | 490 | 485 | +21 | -1.0% |
+| scatter_include_self_false | 646 | 943 | -487 | +46.0% |
 
 Source: [`bench/results/v1.0.0/chart_runs.csv`](../results/v1.0.0/chart_runs.csv)
 
@@ -73,13 +73,13 @@ Requests/s of GET /health on a do-nothing server.
 
 | concurrency | ceiling rps |
 |---|---|
-| c=1 | 5194 |
-| c=2 | 9606 |
-| c=4 | 10446 |
-| c=8 | 11514 |
-| c=16 | 12102 |
-| c=32 | 11925 |
-| c=64 | 10707 |
+| c=1 | 4453 |
+| c=2 | 8168 |
+| c=4 | 8304 |
+| c=8 | 8769 |
+| c=16 | 9437 |
+| c=32 | 9636 |
+| c=64 | 9902 |
 
 Source: [`bench/results/v1.0.0/results.json`](../results/v1.0.0/results.json)
 
@@ -89,12 +89,12 @@ Median ms of 300 sequential requests, batch 1. A dash means the server reports n
 
 | server | total ms | parse | prep wait | prep | infer wait | infer | encode | HTTP + hand-offs |
 |---|---|---|---|---|---|---|---|---|
-| naive FastAPI + torch | 0.61 | - | - | - | - | - | - | 0.61 |
-| naive FastAPI + ONNX Runtime | 0.58 | - | - | - | - | - | - | 0.58 |
-| naive torch, async def | 0.36 | - | - | - | - | - | - | 0.36 |
-| downshift 0.5.1 | 0.71 | 0.01 | 0.03 | 0.02 | 0.03 | 0.14 | 0.03 | 0.43 |
-| downshift 1.0.0rc1 | 0.70 | 0.01 | 0.03 | 0.02 | 0.03 | 0.13 | 0.02 | 0.46 |
-| downshift 1.0.0rc1 result cache on | 0.66 | 0.02 | 0.03 | 0.04 | 0.00 | 0.00 | 0.02 | 0.55 |
+| naive FastAPI + torch | 0.90 | - | - | - | - | - | - | 0.90 |
+| naive FastAPI + ONNX Runtime | 0.74 | - | - | - | - | - | - | 0.74 |
+| naive torch, async def | 0.48 | - | - | - | - | - | - | 0.48 |
+| downshift 0.5.1 | 1.02 | 0.02 | 0.03 | 0.03 | 0.03 | 0.22 | 0.04 | 0.66 |
+| downshift 1.0.0 | 1.00 | 0.02 | 0.04 | 0.03 | 0.03 | 0.21 | 0.04 | 0.65 |
+| downshift 1.0.0 result cache on | 0.83 | 0.02 | 0.03 | 0.06 | 0.00 | 0.00 | 0.03 | 0.69 |
 
 Source: [`bench/results/v1.0.0/chart_stages.csv`](../results/v1.0.0/chart_stages.csv)
 
@@ -104,13 +104,13 @@ Median ms of 300 sequential requests, batch 1. A dash means the server reports n
 
 | server | total ms | parse | prep wait | prep | infer wait | infer | encode | HTTP + hand-offs |
 |---|---|---|---|---|---|---|---|---|
-| naive FastAPI + transformers | 8.77 | - | - | - | - | - | - | 8.77 |
-| naive transformers, async def | 8.54 | - | - | - | - | - | - | 8.54 |
-| downshift 0.5.1 | 4.39 | 0.04 | 0.05 | 0.28 | 0.05 | 2.82 | 0.09 | 0.93 |
-| downshift 1.0.0rc1 | 4.81 | 0.04 | 0.06 | 0.32 | 0.05 | 3.00 | 0.09 | 1.05 |
-| downshift 1.0.0rc1 result cache on | 0.58 | 0.01 | 0.03 | 0.01 | 0.00 | 0.00 | 0.03 | 0.49 |
-| downshift 0.5.1 --backend torch | 9.08 | 0.04 | 0.06 | 0.30 | 0.04 | 7.34 | 0.09 | 1.09 |
-| downshift 1.0.0rc1 --backend torch | 10.55 | 0.04 | 0.06 | 0.34 | 0.04 | 8.56 | 0.09 | 1.20 |
+| naive FastAPI + transformers | 9.10 | - | - | - | - | - | - | 9.10 |
+| naive transformers, async def | 8.68 | - | - | - | - | - | - | 8.68 |
+| downshift 0.5.1 | 4.64 | 0.04 | 0.06 | 0.33 | 0.04 | 3.02 | 0.10 | 1.05 |
+| downshift 1.0.0 | 4.67 | 0.04 | 0.06 | 0.34 | 0.04 | 3.01 | 0.10 | 1.09 |
+| downshift 1.0.0 result cache on | 0.70 | 0.02 | 0.02 | 0.01 | 0.00 | 0.00 | 0.05 | 0.59 |
+| downshift 0.5.1 --backend torch | 9.33 | 0.05 | 0.06 | 0.37 | 0.03 | 7.48 | 0.11 | 1.23 |
+| downshift 1.0.0 --backend torch | 9.46 | 0.05 | 0.06 | 0.38 | 0.03 | 7.55 | 0.11 | 1.27 |
 
 Source: [`bench/results/v1.0.0/chart_stages.csv`](../results/v1.0.0/chart_stages.csv)
 
@@ -120,18 +120,30 @@ p50 of 200 calls, no HTTP. The scatter rows time a graph that gives wrong number
 
 | model | batch | verdict | torch p50 ms | ORT p50 ms | torch / ORT |
 |---|---|---|---|---|---|
-| clean_mlp | 1 | CLEAN | 0.030 | 0.013 | 2.3x |
-| clean_mlp | 8 | CLEAN | 0.025 | 0.011 | 2.4x |
-| clean_mlp | 32 | CLEAN | 0.025 | 0.013 | 1.9x |
-| tiny_bert | 1 | CLEAN | 1.19 | 0.16 | 7.4x |
-| tiny_bert | 8 | CLEAN | 0.99 | 0.31 | 3.2x |
-| tiny_bert | 32 | CLEAN | 1.12 | 0.78 | 1.4x |
-| mlp_large | 1 | CLEAN | 1.00 | 0.35 | 2.8x |
-| mlp_large | 8 | CLEAN | 2.24 | 0.40 | 5.6x |
-| mlp_large | 32 | CLEAN | 2.89 | 1.49 | 1.9x |
-| scatter_include_self_false | 1 | DEGRADED | 0.037 | 0.020 | 1.8x |
-| scatter_include_self_false | 8 | DEGRADED | 0.058 | 0.021 | 2.8x |
-| scatter_include_self_false | 32 | DEGRADED | 0.073 | 0.038 | 1.9x |
+| clean_mlp | 1 | CLEAN | 0.051 | 0.021 | 2.5x |
+| clean_mlp | 8 | CLEAN | 0.060 | 0.021 | 2.8x |
+| clean_mlp | 32 | CLEAN | 0.062 | 0.021 | 2.9x |
+| dynamic_batch_cnn | 1 | CLEAN | 0.11 | 0.031 | 3.4x |
+| dynamic_batch_cnn | 8 | CLEAN | 0.22 | 0.048 | 4.7x |
+| dynamic_batch_cnn | 32 | CLEAN | 0.33 | 0.074 | 4.4x |
+| gnn_gcn | 1 | CLEAN | 0.78 | 0.12 | 6.5x |
+| gnn_gcn | 8 | CLEAN | 0.93 | 0.18 | 5.3x |
+| gnn_gcn | 32 | CLEAN | 0.93 | 0.36 | 2.6x |
+| tiny_bert | 1 | CLEAN | 1.33 | 0.26 | 5.2x |
+| tiny_bert | 8 | CLEAN | 1.52 | 0.48 | 3.2x |
+| tiny_bert | 32 | CLEAN | 2.15 | 1.24 | 1.7x |
+| scatter_include_self_false | 1 | DEGRADED | 0.059 | 0.034 | 1.8x |
+| scatter_include_self_false | 8 | DEGRADED | 0.11 | 0.042 | 2.6x |
+| scatter_include_self_false | 32 | DEGRADED | 0.15 | 0.068 | 2.2x |
+| mlp_large | 1 | CLEAN | 1.14 | 0.26 | 4.3x |
+| mlp_large | 8 | CLEAN | 2.11 | 0.49 | 4.3x |
+| mlp_large | 32 | CLEAN | 3.22 | 2.10 | 1.5x |
+| cnn_large | 1 | CLEAN | 1.05 | 0.32 | 3.3x |
+| cnn_large | 8 | CLEAN | 4.45 | 2.15 | 2.1x |
+| cnn_large | 32 | CLEAN | 16.22 | 8.44 | 1.9x |
+| bert_small | 1 | CLEAN | 7.85 | 7.02 | 1.1x |
+| bert_small | 8 | CLEAN | 35.67 | 47.98 | 0.7x |
+| bert_small | 32 | CLEAN | 142.26 | 193.83 | 0.7x |
 
 Source: [`bench/results/v1.0.0/results.json`](../results/v1.0.0/results.json)
 
@@ -141,10 +153,14 @@ p50 of 200 calls. JSON and base64 columns include parse, infer and write.
 
 | model (batch 32) | ORT compute ms | + JSON ms | + base64 ms | JSON / compute | JSON bytes | base64 bytes |
 |---|---|---|---|---|---|---|
-| clean_mlp | 0.01 | 0.37 | 0.05 | 29.4x | 10660 | 2831 |
-| tiny_bert | 0.78 | 3.78 | 0.95 | 4.9x | 1937 | 5636 |
-| mlp_large | 1.49 | 21.91 | 2.49 | 14.7x | 338282 | 87484 |
-| scatter_include_self_false | 0.04 | 0.86 | 0.09 | 22.3x | 32694 | 10402 |
+| clean_mlp | 0.02 | 0.55 | 0.07 | 25.6x | 10660 | 2831 |
+| dynamic_batch_cnn | 0.07 | 19.60 | 1.04 | 263.8x | 510407 | 131178 |
+| gnn_gcn | 0.36 | 2.51 | 0.60 | 7.0x | 34956 | 15184 |
+| tiny_bert | 1.24 | 5.76 | 1.49 | 4.7x | 1937 | 5636 |
+| scatter_include_self_false | 0.07 | 1.22 | 0.14 | 18.0x | 32694 | 10402 |
+| mlp_large | 2.10 | 29.68 | 3.32 | 14.1x | 338282 | 87484 |
+| cnn_large | 8.44 | 80.44 | 11.77 | 9.5x | 2034441 | 524394 |
+| bert_small | 193.83 | 1021.77 | 236.70 | 5.3x | 39626 | 87560 |
 
 Source: [`bench/results/v1.0.0/results.json`](../results/v1.0.0/results.json)
 
@@ -154,12 +170,12 @@ Requests/s at c=8 and p50 ms at c=1, 5 s windows. Cache off.
 
 | server | short_b1 rps c=8 | short_b8 rps c=8 | long_b1 rps c=8 | short_b1 p50 c=1 ms | short_b8 p50 c=1 ms | long_b1 p50 c=1 ms |
 |---|---|---|---|---|---|---|
-| naive FastAPI + transformers | 141 | 84 | 71 | 9.2 | 21.3 | 27.9 |
-| naive transformers, async def | 105 | 47 | 35 | 8.4 | 21.1 | 26.0 |
-| downshift 0.5.1 | 524 | 165 | 94 | 4.6 | 15.7 | 27.9 |
-| downshift 0.5.1 --backend torch | 156 | 90 | 69 | 9.8 | 21.0 | 25.7 |
-| downshift 1.0.0rc1 | 486 | 158 | 89 | 4.9 | 17.4 | 28.4 |
-| downshift 1.0.0rc1 --backend torch | 146 | 82 | 68 | 10.3 | 22.7 | 27.9 |
+| naive FastAPI + transformers | 142 | 83 | 74 | 9.4 | 21.8 | 28.4 |
+| naive transformers, async def | 115 | 46 | 36 | 8.9 | 21.3 | 27.1 |
+| downshift 0.5.1 | 532 | 139 | 78 | 4.8 | 19.4 | 33.3 |
+| downshift 0.5.1 --backend torch | 145 | 86 | 66 | 9.6 | 23.6 | 29.4 |
+| downshift 1.0.0 | 528 | 137 | 78 | 4.8 | 19.4 | 33.2 |
+| downshift 1.0.0 --backend torch | 148 | 84 | 70 | 9.6 | 23.7 | 29.7 |
 
 Source: [`bench/results/v1.0.0/chart_runs.csv`](../results/v1.0.0/chart_runs.csv)
 
@@ -169,35 +185,35 @@ Batch 1, JSON. The ORT graph of scatter_include_self_false gives wrong numbers.
 
 | model | FastAPI + torch peak rps | FastAPI + ORT peak rps | ORT / torch | ORT graph |
 |---|---|---|---|---|
-| clean_mlp | 1698 | 2069 | 1.22x | ok |
-| tiny_bert | 350 | 1329 | 3.79x | ok |
-| mlp_large | 984 | 808 | 0.82x | ok |
-| scatter_include_self_false | 1663 | 2043 | 1.23x | wrong numbers |
+| clean_mlp | 1303 | 1706 | 1.31x | ok |
+| tiny_bert | 383 | 1458 | 3.81x | ok |
+| mlp_large | 932 | 980 | 1.05x | ok |
+| scatter_include_self_false | 1421 | 1692 | 1.19x | wrong numbers |
 
 Source: [`bench/results/v1.0.0/chart_runs.csv`](../results/v1.0.0/chart_runs.csv)
 
 ## Wire encodings, batch 32, c=8
 
-JSON against safetensors. The 1.0.0rc1 mlp_large JSON row comes from the slow main pass.
+JSON against safetensors.
 
 | model | server | request bytes | requests/s | p50 ms | rows/s |
 |---|---|---|---|---|---|
-| clean_mlp | downshift 0.5.1 | 10659 | 1501 | 5.75 | 48023 |
-| clean_mlp | downshift 0.5.1 safetensors | 2120 | 1253 | 6.02 | 40092 |
-| clean_mlp | downshift 1.0.0rc1 | 10659 | 1348 | 5.78 | 43150 |
-| clean_mlp | downshift 1.0.0rc1 safetensors | 2120 | 1174 | 6.34 | 37558 |
-| tiny_bert | downshift 0.5.1 | 1941 | 769 | 10.39 | 24605 |
-| tiny_bert | downshift 0.5.1 safetensors | 4248 | 964 | 7.59 | 30833 |
-| tiny_bert | downshift 1.0.0rc1 | 1941 | 773 | 10.09 | 24724 |
-| tiny_bert | downshift 1.0.0rc1 safetensors | 4248 | 994 | 7.16 | 31813 |
-| mlp_large | downshift 0.5.1 | 338169 | 251 | 32.70 | 8022 |
-| mlp_large | downshift 0.5.1 safetensors | 65608 | 788 | 10.04 | 25221 |
-| mlp_large | downshift 1.0.0rc1 | 338169 | 205 | 39.93 | 6561 |
-| mlp_large | downshift 1.0.0rc1 safetensors | 65608 | 793 | 10.15 | 25378 |
-| scatter_include_self_false | downshift 0.5.1 | 32706 | 1014 | 8.29 | 32435 |
-| scatter_include_self_false | downshift 0.5.1 safetensors | 7824 | 1323 | 6.37 | 42325 |
-| scatter_include_self_false | downshift 1.0.0rc1 | 32706 | 912 | 9.08 | 29181 |
-| scatter_include_self_false | downshift 1.0.0rc1 safetensors | 7824 | 1268 | 6.64 | 40579 |
+| clean_mlp | downshift 0.5.1 | 10659 | 1301 | 6.55 | 41629 |
+| clean_mlp | downshift 0.5.1 safetensors | 2120 | 997 | 7.93 | 31899 |
+| clean_mlp | downshift 1.0.0 | 10659 | 1302 | 6.63 | 41651 |
+| clean_mlp | downshift 1.0.0 safetensors | 2120 | 1062 | 7.46 | 33988 |
+| tiny_bert | downshift 0.5.1 | 1941 | 694 | 11.46 | 22219 |
+| tiny_bert | downshift 0.5.1 safetensors | 4248 | 1169 | 7.31 | 37419 |
+| tiny_bert | downshift 1.0.0 | 1941 | 760 | 10.55 | 24320 |
+| tiny_bert | downshift 1.0.0 safetensors | 4248 | 1154 | 7.21 | 36920 |
+| mlp_large | downshift 0.5.1 | 338169 | 241 | 35.17 | 7701 |
+| mlp_large | downshift 0.5.1 safetensors | 65608 | 839 | 9.64 | 26859 |
+| mlp_large | downshift 1.0.0 | 338169 | 223 | 37.31 | 7142 |
+| mlp_large | downshift 1.0.0 safetensors | 65608 | 825 | 9.71 | 26416 |
+| scatter_include_self_false | downshift 0.5.1 | 32706 | 1070 | 7.74 | 34255 |
+| scatter_include_self_false | downshift 0.5.1 safetensors | 7824 | 1380 | 6.12 | 44160 |
+| scatter_include_self_false | downshift 1.0.0 | 32706 | 926 | 8.92 | 29631 |
+| scatter_include_self_false | downshift 1.0.0 safetensors | 7824 | 1336 | 5.84 | 42740 |
 
 Source: [`bench/results/v1.0.0/chart_runs.csv`](../results/v1.0.0/chart_runs.csv)
 
@@ -207,39 +223,39 @@ Requests/s times batch size. The cache-on row is a best case with one repeated b
 
 | server | clean_mlp b8 | clean_mlp b32 | tiny_bert b8 | tiny_bert b32 | mlp_large b8 | mlp_large b32 | scatter b8 | scatter b32 |
 |---|---|---|---|---|---|---|---|---|
-| naive FastAPI + torch | 7972 | 30507 | 2384 | 7314 | 1673 | 2386 | 8970 | 17310 |
-| naive FastAPI + ONNX Runtime | 14257 | 46352 | 7986 | 16548 | 2076 | 2916 | 14572 | 29924 |
-| downshift 0.5.1 | 10559 | 48023 | 7721 | 24605 | 4724 | 8022 | 10158 | 32435 |
-| downshift 0.5.1 safetensors | 10291 | 40092 | 7501 | 30833 | 7339 | 25221 | 7856 | 42325 |
-| downshift 1.0.0rc1 | 9788 | 43150 | 7783 | 24724 | 3714 | 6561 | 9700 | 29181 |
-| downshift 1.0.0rc1 safetensors | 10076 | 37558 | 7127 | 31813 | 7277 | 25378 | 7597 | 40579 |
-| downshift 1.0.0rc1 result cache on | 11922 | 43426 | 6645 | 21697 | 6717 | 9239 | 9199 | 29699 |
-| downshift 1.0.0rc1 --metrics | 10093 | 46029 | 7639 | 23325 | 4296 | 7873 | 9221 | 27496 |
+| naive FastAPI + torch | 7751 | 37182 | 2403 | 7456 | 1958 | 2497 | 9431 | 20470 |
+| naive FastAPI + ONNX Runtime | 11577 | 40302 | 8677 | 17882 | 2281 | 2628 | 11144 | 25354 |
+| downshift 0.5.1 | 7894 | 41629 | 6927 | 22219 | 4875 | 7701 | 10991 | 34255 |
+| downshift 0.5.1 safetensors | 8016 | 31899 | 7872 | 37419 | 8532 | 26859 | 7492 | 44160 |
+| downshift 1.0.0 | 8586 | 41651 | 7603 | 24320 | 4620 | 7142 | 10118 | 29631 |
+| downshift 1.0.0 safetensors | 8420 | 33988 | 7681 | 36920 | 8561 | 26416 | 6975 | 42740 |
+| downshift 1.0.0 result cache on | 9409 | 36611 | 7013 | 21983 | 6137 | 7585 | 10593 | 32004 |
+| downshift 1.0.0 --metrics | 7917 | 38453 | 7180 | 20543 | 4565 | 7256 | 9968 | 30706 |
 
 Source: [`bench/results/v1.0.0/chart_runs.csv`](../results/v1.0.0/chart_runs.csv)
 
 ## Result cache on the fixtures, batch 1
 
-1.0.0rc1, cache off against cache on. Every request repeats one body, so this is a best case. The mlp_large off row is from the slow main pass.
+1.0.0, cache off against cache on. Every request repeats one body, so this is a best case.
 
 | model | peak rps cache off | peak rps cache on | change | p50 ms c=1 off | p50 ms c=1 on |
 |---|---|---|---|---|---|
-| clean_mlp | 1428 | 1824 | +27.8% | 0.77 | 0.69 |
-| tiny_bert | 1067 | 914 | -14.3% | 1.16 | 1.14 |
-| mlp_large | 765 | 1742 | +127.7% | 2.17 | 0.80 |
-| scatter_include_self_false | 1387 | 1364 | -1.7% | 0.76 | 0.89 |
+| clean_mlp | 1164 | 1407 | +20.9% | 1.08 | 1.00 |
+| tiny_bert | 1112 | 1056 | -5.0% | 1.52 | 1.40 |
+| mlp_large | 1013 | 1629 | +60.7% | 1.98 | 0.90 |
+| scatter_include_self_false | 959 | 1045 | +9.0% | 1.51 | 1.15 |
 
 Source: [`bench/results/v1.0.0/chart_runs.csv`](../results/v1.0.0/chart_runs.csv)
 
 ## Result cache on MiniLM
 
-1.0.0rc1, 5 s windows. Every request repeats one body.
+1.0.0, 5 s windows. Every request repeats one body.
 
 | payload | rps c=1 off | rps c=1 on | rps c=8 off | rps c=8 on | p50 ms c=1 off | p50 ms c=1 on | worst /health p99 ms off | worst /health p99 ms on |
 |---|---|---|---|---|---|---|---|---|
-| short_b1 | 185 | 1456 | 486 | 1911 | 4.9 | 0.6 | 27 | 194 |
-| short_b8 | 54 | 1222 | 158 | 1627 | 17.4 | 0.7 | 22 | 18 |
-| long_b1 | 34 | 1534 | 89 | 1851 | 28.4 | 0.6 | 22 | 159 |
+| short_b1 | 204 | 1233 | 528 | 1504 | 4.8 | 0.8 | 22 | 18 |
+| short_b8 | 51 | 1039 | 137 | 1239 | 19.4 | 0.9 | 18 | 19 |
+| long_b1 | 30 | 1220 | 78 | 1557 | 33.2 | 0.8 | 18 | 19 |
 
 Source: [`bench/results/v1.0.0/chart_runs.csv`](../results/v1.0.0/chart_runs.csv)
 
@@ -262,9 +278,13 @@ From the gate at the start of each downshift server.
 | model | family | verdict | backend | max abs error at check | reason |
 |---|---|---|---|---|---|
 | clean_mlp | generic | CLEAN | onnxruntime | 3.7e-08 | exported via strict=False; numerics ok across 8 samples (max abs err 3.73e-08) |
+| dynamic_batch_cnn | generic | CLEAN | onnxruntime | 3.0e-08 | exported via strict=False; numerics ok across 8 samples (max abs err 2.98e-08) |
+| gnn_gcn | pyg | CLEAN | onnxruntime | 2.4e-07 | exported via strict=False; numerics ok across 8 samples (max abs err 2.38e-07) |
 | tiny_bert | hf | CLEAN | onnxruntime | 4.8e-07 | exported via strict=False; numerics ok across 8 samples (max abs err 4.77e-07) |
-| mlp_large | generic | CLEAN | onnxruntime | 2.1e-07 | exported via strict=False; numerics ok across 8 samples (max abs err 2.09e-07) |
 | scatter_include_self_false | generic | DEGRADED | torch | 1.6e+00 | exported via strict=False but numerics diverge on 6/8 samples (max abs err 1.59e+00) |
+| mlp_large | generic | CLEAN | onnxruntime | 2.1e-07 | exported via strict=False; numerics ok across 8 samples (max abs err 2.09e-07) |
+| cnn_large | generic | CLEAN | onnxruntime | 5.6e-08 | exported via strict=False; numerics ok across 8 samples (max abs err 5.59e-08) |
+| bert_small | hf | CLEAN | onnxruntime | 1.9e-06 | exported via strict=False; numerics ok across 8 samples (max abs err 1.91e-06) |
 
 Source: [`bench/results/v1.0.0/results.json`](../results/v1.0.0/results.json)
 
@@ -279,26 +299,30 @@ Over every row a server answered.
 | naive torch, async def | 0.0e+00 | 0.0e+00 | 0.0e+00 | 0.0e+00 |
 | downshift 0.5.1 | 6.4e-08 | 5.8e-07 | 2.6e-07 | 2.8e-08 |
 | downshift 0.5.1 safetensors | 6.0e-08 | 4.8e-07 | 2.5e-07 | 0.0e+00 |
-| downshift 1.0.0rc1 | 6.4e-08 | 5.8e-07 | 2.6e-07 | 2.8e-08 |
-| downshift 1.0.0rc1 safetensors | 6.0e-08 | 4.8e-07 | 2.5e-07 | 0.0e+00 |
-| downshift 1.0.0rc1 result cache on | 6.4e-08 | 5.8e-07 | 2.6e-07 | 2.8e-08 |
-| downshift 1.0.0rc1 --metrics | 6.4e-08 | 5.8e-07 | 2.6e-07 | 2.8e-08 |
+| downshift 1.0.0 | 6.4e-08 | 5.8e-07 | 2.6e-07 | 2.8e-08 |
+| downshift 1.0.0 safetensors | 6.0e-08 | 4.8e-07 | 2.5e-07 | 0.0e+00 |
+| downshift 1.0.0 result cache on | 6.4e-08 | 5.8e-07 | 2.6e-07 | 2.8e-08 |
+| downshift 1.0.0 --metrics | 6.4e-08 | 5.8e-07 | 2.6e-07 | 2.8e-08 |
 
 Source: [`bench/results/v1.0.0/chart_runs.csv`](../results/v1.0.0/chart_runs.csv)
 
 ## MiniLM agreement with downshift --backend torch
 
-short_b8 output, reference downshift_torch@1.0.0rc1.
+short_b8 output, reference downshift_torch@1.0.0.
 
 | server | max abs err | min cosine |
 |---|---|---|
 | naive_sync | 7.2e-09 | 1.0000000 |
 | naive_async | 7.2e-09 | 1.0000000 |
-| downshift_auto@1.0.0rc1 | 1.3e-07 | 1.0000000 |
-| downshift_auto_cache@1.0.0rc1 | 1.3e-07 | 1.0000000 |
-| downshift_torch@1.0.0rc1 | 0.0e+00 | 1.0000000 |
+| downshift_auto@1.0.0 | 1.3e-07 | 1.0000000 |
+| downshift_torch@1.0.0 | 0.0e+00 | 1.0000000 |
+| downshift_auto_mc4@1.0.0 | 1.3e-07 | 1.0000000 |
+| downshift_auto_inline@1.0.0 | 1.3e-07 | 1.0000000 |
+| downshift_auto_cache@1.0.0 | 1.3e-07 | 1.0000000 |
 | downshift_auto@0.5.1 | 1.3e-07 | 1.0000000 |
 | downshift_torch@0.5.1 | 0.0e+00 | 1.0000000 |
+| downshift_auto_mc4@0.5.1 | 1.3e-07 | 1.0000000 |
+| downshift_auto_inline@0.5.1 | 1.3e-07 | 1.0000000 |
 
 Source: [`bench/results/v1.0.0/results_hf.json`](../results/v1.0.0/results_hf.json)
 
@@ -346,12 +370,12 @@ Source: [`docs/compatibility.md`](../../docs/compatibility.md)
 
 Time from process start to first 200 answer. One start for each cell.
 
-| model | FastAPI + torch | FastAPI + ORT | torch, async def | downshift 0.5.1 | downshift 1.0.0rc1 |
+| model | FastAPI + torch | FastAPI + ORT | torch, async def | downshift 0.5.1 | downshift 1.0.0 |
 |---|---|---|---|---|---|
-| clean_mlp | 3.8 | 7.8 | 3.8 | 8.4 | 8.1 |
-| tiny_bert | 12.9 | 18.1 | 12.9 | 17.4 | 17.4 |
-| mlp_large | 4.5 | 7.8 | 3.8 | 7.8 | 8.9 |
-| scatter_include_self_false | 3.8 | 7.3 | 3.8 | 7.5 | 7.3 |
+| clean_mlp | 6.8 | 9.6 | 5.1 | 11.3 | 11.6 |
+| tiny_bert | 17.4 | 20.9 | 14.6 | 20.8 | 21.3 |
+| mlp_large | 4.5 | 9.6 | 4.6 | 8.8 | 9.3 |
+| scatter_include_self_false | 4.5 | 8.5 | 4.6 | 9.7 | 11.4 |
 
 Source: [`bench/results/v1.0.0/chart_runs.csv`](../results/v1.0.0/chart_runs.csv)
 
@@ -361,12 +385,12 @@ Time from process start to first 200 answer.
 
 | server (all-MiniLM-L6-v2) | ready s |
 |---|---|
-| naive FastAPI + transformers | 11.8 |
+| naive FastAPI + transformers | 12.4 |
 | naive transformers, async def | 11.8 |
-| downshift 0.5.1 | 18.5 |
-| downshift 0.5.1 --backend torch | 12.2 |
-| downshift 1.0.0rc1 | 19.2 |
-| downshift 1.0.0rc1 --backend torch | 12.3 |
+| downshift 0.5.1 | 20.5 |
+| downshift 0.5.1 --backend torch | 12.4 |
+| downshift 1.0.0 | 21.3 |
+| downshift 1.0.0 --backend torch | 12.5 |
 
 Source: [`bench/results/v1.0.0/chart_runs.csv`](../results/v1.0.0/chart_runs.csv)
 
@@ -376,37 +400,37 @@ From results_hf.json.
 
 | version | wall s | exit code |
 |---|---|---|
-| 1.0.0rc1 | 19.11 | 0 |
-| 0.5.1 | 18.47 | 0 |
+| 1.0.0 | 21.89 | 0 |
+| 0.5.1 | 20.95 | 0 |
 
 Source: [`bench/results/v1.0.0/results_hf.json`](../results/v1.0.0/results_hf.json)
 
-## Workers sweep (0.4.0 and 0.5.0 run)
+## Workers sweep (0.5.1 and 1.0.0)
 
-Requests/s at c=1, 8 and 32; p99 at c=8; seconds to ready. Not measured for 1.0.0rc1.
+Requests/s at c=1, 8 and 32; p99 at c=8; seconds to ready.
 
 | model | version | workers | rps c=1 | rps c=8 | rps c=32 | p99 ms c=8 | boot s |
 |---|---|---|---|---|---|---|---|
-| clean_mlp | 0.4.0 | 1 | 861 | 887 | 915 | 13.4 | 7.7 |
-| clean_mlp | 0.4.0 | 2 | 823 | 1789 | 1923 | 6.1 | 10.6 |
-| clean_mlp | 0.4.0 | 4 | 846 | 3406 | 3418 | 4.2 | 10.6 |
-| clean_mlp | 0.5.0 | 1 | 907 | 983 | 1111 | 12.7 | 9.2 |
-| clean_mlp | 0.5.0 | 2 | 936 | 2076 | 1964 | 6.0 | 11.3 |
-| clean_mlp | 0.5.0 | 4 | 974 | 3857 | 3845 | 3.7 | 12.3 |
-| mlp_large | 0.4.0 | 1 | 468 | 745 | 719 | 18.6 | 7.9 |
-| mlp_large | 0.4.0 | 2 | 418 | 1126 | 1260 | 13.9 | 10.9 |
-| mlp_large | 0.4.0 | 4 | 475 | 1325 | 2003 | 11.9 | 11.3 |
-| mlp_large | 0.5.0 | 1 | 515 | 819 | 827 | 14.2 | 8.2 |
-| mlp_large | 0.5.0 | 2 | 514 | 1006 | 1203 | 19.5 | 11.3 |
-| mlp_large | 0.5.0 | 4 | 525 | 1459 | 2089 | 10.6 | 11.3 |
-| bert_small | 0.4.0 | 1 | 89 | 105 | 98 | 95.2 | 20.2 |
-| bert_small | 0.4.0 | 2 | 90 | 142 | 143 | 111.6 | 23.1 |
-| bert_small | 0.4.0 | 4 | 66 | 227 | 231 | 98.0 | 24.1 |
-| bert_small | 0.5.0 | 1 | 91 | 108 | 101 | 84.8 | 20.3 |
-| bert_small | 0.5.0 | 2 | 92 | 157 | 150 | 82.7 | 23.1 |
-| bert_small | 0.5.0 | 4 | 70 | 239 | 248 | 58.9 | 23.6 |
+| clean_mlp | 0.5.1 | 1 | 1032 | 1150 | 1303 | 8.8 | 8.5 |
+| clean_mlp | 0.5.1 | 2 | 963 | 2251 | 2450 | 5.6 | 11.8 |
+| clean_mlp | 0.5.1 | 4 | 1032 | 4581 | 4372 | 2.5 | 12.3 |
+| clean_mlp | 1.0.0 | 1 | 1005 | 1135 | 1257 | 9.3 | 8.7 |
+| clean_mlp | 1.0.0 | 2 | 997 | 2228 | 2373 | 5.9 | 12.1 |
+| clean_mlp | 1.0.0 | 4 | 992 | 4123 | 4254 | 3.5 | 12.1 |
+| mlp_large | 0.5.1 | 1 | 522 | 1013 | 1050 | 13.3 | 8.5 |
+| mlp_large | 0.5.1 | 2 | 520 | 1452 | 1715 | 12.4 | 12.2 |
+| mlp_large | 0.5.1 | 4 | 526 | 1858 | 2785 | 7.2 | 12.3 |
+| mlp_large | 1.0.0 | 1 | 499 | 981 | 990 | 13.9 | 9.1 |
+| mlp_large | 1.0.0 | 2 | 505 | 1483 | 1710 | 11.2 | 12.8 |
+| mlp_large | 1.0.0 | 4 | 514 | 1736 | 2759 | 8.1 | 12.8 |
+| bert_small | 0.5.1 | 1 | 91 | 254 | 246 | 40.6 | 19.3 |
+| bert_small | 0.5.1 | 2 | 92 | 252 | 261 | 50.3 | 22.6 |
+| bert_small | 0.5.1 | 4 | 69 | 285 | 346 | 43.8 | 23.1 |
+| bert_small | 1.0.0 | 1 | 90 | 252 | 246 | 39.9 | 19.6 |
+| bert_small | 1.0.0 | 2 | 94 | 251 | 267 | 53.4 | 23.5 |
+| bert_small | 1.0.0 | 4 | 69 | 278 | 327 | 43.2 | 23.1 |
 
-Source: [`bench/results/v0.5.0/chart_runs.csv`](../results/v0.5.0/chart_runs.csv)
+Source: [`bench/results/v1.0.0/chart_runs.csv`](../results/v1.0.0/chart_runs.csv)
 
 ## Release to release, run A: 0.4.0 against 0.5.0
 
@@ -425,15 +449,15 @@ Peak requests/s, batch 1, JSON, same session.
 
 Source: [`bench/results/v0.5.0/chart_runs.csv`](../results/v0.5.0/chart_runs.csv)
 
-## Release to release, run B: 0.5.1 against 1.0.0rc1
+## Release to release, run B: 0.5.1 against 1.0.0
 
 Peak requests/s, batch 1, JSON, cache off, same session.
 
-| model | 0.5.1 peak rps | 1.0.0rc1 peak rps | change | note |
+| model | 0.5.1 peak rps | 1.0.0 peak rps | change | note |
 |---|---|---|---|---|
-| clean_mlp | 1421 | 1428 | +0.5% |  |
-| tiny_bert | 1183 | 1067 | -9.8% |  |
-| mlp_large | 965 | 765 | -20.7% | main pass was slow; re-run in the throughput page |
-| scatter_include_self_false | 1443 | 1387 | -3.8% |  |
+| clean_mlp | 1118 | 1164 | +4.1% |  |
+| tiny_bert | 1082 | 1112 | +2.8% |  |
+| mlp_large | 1074 | 1013 | -5.6% |  |
+| scatter_include_self_false | 1047 | 959 | -8.4% |  |
 
 Source: [`bench/results/v1.0.0/chart_runs.csv`](../results/v1.0.0/chart_runs.csv)

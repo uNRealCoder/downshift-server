@@ -6,7 +6,7 @@ This file is for coding agents that work in this repository. To use downshift as
 
 1. Install a CPU build of torch: `pip install torch --index-url https://download.pytorch.org/whl/cpu`.
 2. Install the package in editable mode: `pip install -e ".[dev,gnn,hf,fast]"`.
-3. If a non-editable `downshift-server` is also installed, set `PYTHONPATH=src`. If you do not, the tests import the installed copy and not your changes.
+3. The tests import `src` first (`pythonpath` in `pyproject.toml`), so a non-editable `downshift-server` does not hide your changes.
 
 The project needs Python 3.12 to 3.14. The tests run on the CPU. A GPU is not necessary. The HTTPS tests need the `openssl` command on `PATH`. They make a throwaway certificate with it. Without `openssl`, they skip. In CI, they fail.
 
@@ -18,12 +18,14 @@ CI runs these commands. Run them before you finish:
 ruff check .
 ruff format --check .
 mypy src
-pytest -q --cov=src/downshift --cov-report=term-missing --cov-fail-under=95
+pytest
 ```
 
-CI requires 95% line coverage (`--cov-fail-under=95`). Plain `pytest -q` does not measure coverage, so a subset run is fast. Add a test for each new code path.
+`pyproject.toml` sets the pytest defaults: `-q`, `--cov`, `--cov-report=term-missing` and `pythonpath = ["src"]`. It also sets `fail_under = 95` for coverage. CI requires 95% line coverage. Add a test for each new code path.
 
-While you work, run only the test files that apply to the change. Run the full suite one time, at the end.
+Plain `pytest` measures coverage on each run. A subset run covers only part of the code, so it fails the 95% limit. When you run a subset, add `--no-cov`: `pytest --no-cov tests/test_x.py`.
+
+While you work, run only the test files that apply to the change, with `--no-cov`. Run the full suite one time, at the end, without `--no-cov`.
 
 ## Layout
 

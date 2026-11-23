@@ -24,7 +24,7 @@ downshift picks a backend from a correctness verdict. The benchmark does not ask
 | Correctness | `bench.run`, `bench.hf_models` | `results.json`, `chart_runs.csv`, `results_hf.json` | [correctness](correctness.html) |
 | Real models and hazard fixtures | `python scripts/check_real_models.py`, `python scripts/gen_matrix.py` | `bench/results/v1.0.0/real_models.json`, `docs/compatibility.md` | [compatibility](compatibility.html) |
 | Boot time | `bench.run`, `bench.hf_models` | `chart_runs.csv` (`ready_s`), `results_hf.json` | [boot-time](boot-time.html) |
-| Workers | `bench.run` (0.5.0 run) | `bench/results/v0.5.0/chart_runs.csv` | [scaling](scaling.html) |
+| Workers | `bench.run` (1.0.0 run) | `bench/results/v1.0.0/chart_runs.csv` | [scaling](scaling.html) |
 | Release to release | `bench.run` (two runs) | both `chart_runs.csv` files | [releases](releases.html) |
 
 ## 3. The harness
@@ -32,30 +32,30 @@ downshift picks a backend from a correctness verdict. The benchmark does not ask
 - **Servers.** Three hand-rolled servers (`bench/servers.py`): FastAPI + eager torch (sync endpoint), FastAPI + ONNX Runtime (sync), and FastAPI + eager torch with `async def`, which blocks the event loop. For text: FastAPI + transformers (`bench/naive_hf_server.py`). The downshift servers are the real `downshift serve` command, never an in-process shortcut.
 - **Fairness.** The hand-rolled servers take a plain `dict` body with no validation and return a plain `dict`. They do less work for each request than downshift. The hand-rolled text server cuts long text. downshift rejects it. All servers get the same seeded weights (seed 1234, `bench/cases.py`). The hand-rolled ORT server gets the graph that the checkout exported.
 - **Load.** Closed loop (`bench/loadgen.py`). N clients each send the next request when the last one returns. The body is the same bytes every time. The load generator is split over up to 6 processes on the same machine.
-- **Ceiling.** Before the sweep, the harness measures the load generator against `GET /health` on a server that does nothing: c=1: 5194 rps, c=2: 9606 rps, c=4: 10446 rps, c=8: 11514 rps, c=16: 12102 rps, c=32: 11925 rps, c=64: 10707 rps. A result near these numbers would measure the client.
+- **Ceiling.** Before the sweep, the harness measures the load generator against `GET /health` on a server that does nothing: c=1: 4453 rps, c=2: 8168 rps, c=4: 8304 rps, c=8: 8769 rps, c=16: 9437 rps, c=32: 9636 rps, c=64: 9902 rps. A result near these numbers would measure the client.
 - **Windows.** Warm-up 1.0 s, then 3.0 s for each point on the fixtures. Text models: warm-up 1.0 s, window 5.0 s, concurrency [1, 8]. A `/health` probe runs every 50 ms during each text window.
 - **Correctness.** Every response is compared element by element with eager PyTorch on the same input. The hand-rolled text servers and downshift answers are compared with `downshift --backend torch`.
-- **Result cache.** Every 1.0.0rc1 row except "result cache on" starts with `--result-cache-rows 0`. The harness repeats one body, so a cache would answer from memory.
+- **Result cache.** Every 1.0.0 row except "result cache on" starts with `--result-cache-rows 0`. The harness repeats one body, so a cache would answer from memory.
 
 ## 4. Hardware and versions (from the data)
 
 | Item | Value | Source |
 |---|---|---|
-| Main run date | 2026-11-07T22:59:00 (HF part: 2026-11-07T23:45:53) | `results.json`, `results_hf.json` |
+| Main run date | 2026-11-22T18:30:39 (HF part: 2026-11-22T20:17:14) | `results.json`, `results_hf.json` |
 | Platform | win32; `Windows-11-10.0.26200-SP0` | `results.json`, `results_hf.json` |
 | Logical CPUs | 16 | `results.json` |
 | CPU model, RAM | not recorded in these runs (hardware: not recorded) | - |
-| Python | 3.12.10 | `results.json` |
+| Python | 3.14.7 | `results.json` |
 | torch | 2.14.0+cpu; torch threads 8 | `results.json` |
 | onnxruntime | 1.30.0; providers AzureExecutionProvider, CPUExecutionProvider | `results.json` |
-| downshift | checkout 1.0.0rc1; installed 0.5.1 | `results.json` |
-| Load settings | cases clean_mlp, tiny_bert, mlp_large, scatter_include_self_false; concurrency [1, 2, 4, 8, 16, 32, 64]; batch [1, 8, 32]; batch concurrency [1, 8, 32]; in-process iterations 200 | `results.json` |
-| Not run | the workers sweep (`skip_workers` = True); Prompt Guard; `dynamic_batch_cnn`, `gnn_gcn`, `cnn_large`, `bert_small` | `results.json` |
+| downshift | checkout 1.0.0; installed 0.5.1 | `results.json` |
+| Load settings | cases clean_mlp, dynamic_batch_cnn, gnn_gcn, tiny_bert, scatter_include_self_false, mlp_large, cnn_large, bert_small; concurrency [1, 2, 4, 8, 16, 32, 64]; batch [1, 8, 32]; batch concurrency [1, 8, 32]; in-process iterations 200 | `results.json` |
+| Shown on the pages | 4 of the 8 cases (`clean_mlp`, `tiny_bert`, `mlp_large`, `scatter_include_self_false`); the others are in `results.json` and the report | `results.json` |
 | Real-model check | date 2026-11-07; torch 2.14.0, onnx 1.22.0, onnxruntime 1.30.0, transformers 5.17.0, torch_geometric 2.8.0.post1, torchvision 0.29.2+cpu; OS and CPU not recorded | `real_models.json` |
 | Cache acceptance (0.6.0) | run 2026-10-14 23:46:17; 60 repeats; machine and versions not recorded | `cache_acceptance.json` |
 | Earlier run (0.4.0 and 0.5.0) | 2026-10-04T22:32:59; win32, 16 logical CPUs, Python 3.12.10, torch 2.14.0+cpu, onnxruntime 1.30.0 | `bench/results/v0.5.0/results.json` |
 
-The folder `results/v1.0.0/` holds a run of downshift `1.0.0rc1`, not of the final 1.0.0 release.
+The folder `results/v1.0.0/` holds a run of downshift `1.0.0`, not of the final 1.0.0 release.
 
 ## 5. How to reproduce
 
@@ -63,8 +63,8 @@ Run nothing else on the machine while the benchmark runs. A test suite at the sa
 
 1. Make a venv. Install the checkout dependencies and the previous release (non-editable): `pip install "downshift-server[all]==0.5.1" aiohttp safetensors`.
 2. Download the two Hugging Face checkpoints into `bench/models/` (see `bench/README.md`). Prompt Guard is gated.
-3. Run the fixture part: `python -m bench.run --out bench/results/vX.Y.Z/results.json`. The stored settings of the 1.0.0rc1 run match `--cases clean_mlp tiny_bert mlp_large scatter_include_self_false --skip-workers`. The exact command line is not stored.
-4. Run the text part: `python -m bench.hf_models --out bench/results/vX.Y.Z/results_hf.json` (the 1.0.0rc1 run used all-MiniLM-L6-v2 only).
+3. Run the fixture part: `python -m bench.run --out bench/results/vX.Y.Z/results.json`. The stored settings of the 1.0.0 run match `--cases clean_mlp tiny_bert mlp_large scatter_include_self_false --skip-workers`. The exact command line is not stored.
+4. Run the text part: `python -m bench.hf_models --out bench/results/vX.Y.Z/results_hf.json` (the 1.0.0 run used all-MiniLM-L6-v2 only).
 5. Make the report and the chart CSV files: `python -m bench.report --results ... --hf-results ... --out .../REPORT.md --csv .../chart_runs.csv --stages-csv .../chart_stages.csv`.
 6. Check the real models: `python scripts/check_real_models.py`. Make the fixture table: `python scripts/gen_matrix.py`.
 7. Run the cache check: `python -m bench.cache_accept --out bench/results/vX.Y.Z/cache_acceptance.json`.
@@ -75,11 +75,11 @@ Without `--out`, the commands write to `bench/scratch/`. A trial run never overw
 ## 6. Known limits and threats to validity
 
 1. **One machine, one run, no repeats.** No file holds repeated runs. The size of run-to-run noise is not measured. A difference of a few percent is not a finding. The report itself calls the difference of the cache-on and cache-off rows of `tiny_bert` and `scatter_include_self_false` "noise".
-2. **Short windows.** 3.0 s for each point. The p99 at concurrency 1 comes from 905 to 3559 requests for the 1.0.0rc1 default rows. The p99 at high concurrency has fewer samples for each client.
+2. **Short windows.** 3.0 s for each point. The p99 at concurrency 1 comes from 274 to 2649 requests for the 1.0.0 default rows. The p99 at high concurrency has fewer samples for each client.
 3. **The load generator shares the machine.** The CPU is shared between the client and the server. Results are valid for this layout only.
 4. **Closed loop.** At high concurrency the latency is set by the concurrency, so the latency at c=64 is mostly a queue.
-5. **A slow main pass.** The first `mlp_large` pass of 1.0.0rc1 default was slow. The report says it "does not fit one code path". A re-run covers batch 1 only (`rerun_mlp_large.json`). The batch 8 and 32 rows of `mlp_large` for 1.0.0rc1 JSON are not re-measured.
-6. **Release candidate.** The newest data is of `1.0.0rc1`.
+5. **Stalled windows.** Three windows of 1.0.0 under `--workers` had requests that timed out after 30 s or more. Each was measured again and was clean. The cause was the harness: it did not read the output pipe of the server, and a full pipe blocks a log write. The fault is fixed (`spawn_server` in `bench/run.py`), and a sweep after the fix had no error. The stalled rows are in `failed_rows_workers.json`, and the repeats in `workers_repeats.json`.
+6. **Three passes.** The run was split in three passes because the system ran out of memory once. The version label changed from `1.0.0rc1` to `1.0.0` between two passes, with no other code change. The first-pass rows are relabelled.
 7. **Small fixtures.** On `clean_mlp` the model takes about 0.13 ms of a 0.70 ms request. The fixtures measure the request path, not the model. The compute-heavy models (`mlp_large`, `tiny_bert`) are still small. Only MiniLM is a real model in the load run.
 8. **Random weights.** The fixtures use seeded random weights. The correctness numbers hold for those weights.
 9. **Hand-rolled baselines are one person's choice.** They are written to do less work than downshift. A tuned hand-rolled server could be faster or slower. TorchServe, BentoML, Triton, TEI and Infinity are not measured.

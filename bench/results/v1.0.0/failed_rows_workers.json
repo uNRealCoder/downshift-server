@@ -1,0 +1,170 @@
+{
+ "note": "Windows in which requests timed out (30-120 s stalls), and server starts that never became ready. CAUSE: the harness (not downshift) started each server with stdout=PIPE and never read it. A Windows pipe holds about 4 KB, and a full pipe blocks the next log write. The first three rows are from the main run and were replaced by clean re-runs; workers_repeats.json holds three more repeats (3 more stalled windows, 3 of 12 starts hung) and a sweep after the fix (0 errors in 8 windows, no hang). These rows are kept as a record of the harness fault, not as downshift results.",
+ "rows": [
+  {
+   "concurrency": 32,
+   "loadgen_procs": 4,
+   "ok": 760,
+   "errors": 14,
+   "first_error": {
+    "error": "TimeoutError: "
+   },
+   "window_s": 119.184,
+   "throughput_rps": 6.38,
+   "p50_ms": 69.185,
+   "p95_ms": 89.534,
+   "p99_ms": 95.427,
+   "mean_ms": 70.739,
+   "request_bytes": 1293,
+   "case": "bert_small",
+   "batch": 1,
+   "max_abs_err": 1.8664276124624735e-06,
+   "encoding": "json",
+   "variant": "downshift",
+   "version": "1.0.0",
+   "workers": 2,
+   "boot_s": 23.37,
+   "note": "first attempt, cache ON (invalid sweep); superseded"
+  },
+  {
+   "concurrency": 8,
+   "loadgen_procs": 4,
+   "ok": 10054,
+   "errors": 1,
+   "first_error": {
+    "error": "TimeoutError: "
+   },
+   "window_s": 32.083,
+   "throughput_rps": 313.38,
+   "p50_ms": 1.922,
+   "p95_ms": 3.1,
+   "p99_ms": 3.575,
+   "mean_ms": 2.081,
+   "request_bytes": 353,
+   "case": "clean_mlp",
+   "batch": 1,
+   "max_abs_err": 9.219741824162409e-09,
+   "encoding": "json",
+   "variant": "downshift",
+   "version": "1.0.0",
+   "workers": 4,
+   "boot_s": 12.05
+  },
+  {
+   "concurrency": 8,
+   "loadgen_procs": 4,
+   "ok": 868,
+   "errors": 2,
+   "first_error": {
+    "error": "TimeoutError: "
+   },
+   "window_s": 61.339,
+   "throughput_rps": 14.15,
+   "p50_ms": 22.483,
+   "p95_ms": 28.193,
+   "p99_ms": 32.372,
+   "mean_ms": 20.696,
+   "request_bytes": 1293,
+   "case": "bert_small",
+   "batch": 1,
+   "max_abs_err": 1.8664276124624735e-06,
+   "encoding": "json",
+   "variant": "downshift",
+   "version": "1.0.0",
+   "workers": 4,
+   "boot_s": 23.11
+  },
+  {
+   "concurrency": 8,
+   "loadgen_procs": 4,
+   "ok": 814,
+   "errors": 1,
+   "first_error": {
+    "error": "TimeoutError: "
+   },
+   "window_s": 32.034,
+   "throughput_rps": 25.41,
+   "p50_ms": 25.88,
+   "p95_ms": 33.693,
+   "p99_ms": 36.917,
+   "mean_ms": 25.805,
+   "request_bytes": 1293,
+   "case": "bert_small",
+   "batch": 1,
+   "max_abs_err": 1.8664276124624735e-06,
+   "encoding": "json",
+   "variant": "downshift",
+   "version": "1.0.0",
+   "workers": 4,
+   "boot_s": 26.89,
+   "note": "repeat 2 of the second look"
+  },
+  {
+   "concurrency": 8,
+   "loadgen_procs": 4,
+   "ok": 8477,
+   "errors": 1,
+   "first_error": {
+    "error": "TimeoutError: "
+   },
+   "window_s": 32.214,
+   "throughput_rps": 263.15,
+   "p50_ms": 2.637,
+   "p95_ms": 3.651,
+   "p99_ms": 4.192,
+   "mean_ms": 2.467,
+   "request_bytes": 353,
+   "case": "clean_mlp",
+   "batch": 1,
+   "max_abs_err": 9.219741824162409e-09,
+   "encoding": "json",
+   "variant": "downshift",
+   "version": "1.0.0",
+   "workers": 4,
+   "boot_s": 14.09,
+   "note": "repeat 3 of the second look"
+  },
+  {
+   "concurrency": 8,
+   "loadgen_procs": 4,
+   "ok": 833,
+   "errors": 1,
+   "first_error": {
+    "error": "TimeoutError: "
+   },
+   "window_s": 32.117,
+   "throughput_rps": 25.94,
+   "p50_ms": 25.751,
+   "p95_ms": 31.77,
+   "p99_ms": 37.087,
+   "mean_ms": 25.268,
+   "request_bytes": 1293,
+   "case": "bert_small",
+   "batch": 1,
+   "max_abs_err": 1.8664276124624735e-06,
+   "encoding": "json",
+   "variant": "downshift",
+   "version": "1.0.0",
+   "workers": 4,
+   "boot_s": 26.38,
+   "note": "repeat 3 of the second look"
+  }
+ ],
+ "startup_hangs": [
+  {
+   "repeat": 1,
+   "case": "clean_mlp",
+   "workers": 2
+  },
+  {
+   "repeat": 1,
+   "case": "bert_small",
+   "workers": 4
+  },
+  {
+   "repeat": 2,
+   "case": "clean_mlp",
+   "workers": 2
+  }
+ ]
+}

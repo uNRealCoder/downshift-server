@@ -1,0 +1,62 @@
+[
+ {
+  "rps": 2651.7,
+  "p50_ms": 3.07,
+  "p99_ms": 5.68,
+  "errors": 0,
+  "case": "clean_mlp",
+  "config": "0.5.1",
+  "traffic": "distinct rows",
+  "cache": false
+ },
+ {
+  "rps": 1080.7,
+  "p50_ms": 7.35,
+  "p99_ms": 10.61,
+  "errors": 0,
+  "case": "clean_mlp",
+  "config": "0.5.1",
+  "traffic": "one row",
+  "cache": false
+ },
+ {
+  "rps": 2114.2,
+  "p50_ms": 3.86,
+  "p99_ms": 7.09,
+  "errors": 0,
+  "case": "clean_mlp",
+  "config": "0.6.0",
+  "traffic": "distinct rows",
+  "cache": true
+ },
+ {
+  "rps": 1411.7,
+  "p50_ms": 5.46,
+  "p99_ms": 8.17,
+  "errors": 0,
+  "case": "clean_mlp",
+  "config": "0.6.0",
+  "traffic": "one row",
+  "cache": true
+ },
+ {
+  "rps": 2601.8,
+  "p50_ms": 3.17,
+  "p99_ms": 6.03,
+  "errors": 0,
+  "case": "clean_mlp",
+  "config": "0.6.0 cache off",
+  "traffic": "distinct rows",
+  "cache": false
+ },
+ {
+  "rps": 1090.8,
+  "p50_ms": 7.28,
+  "p99_ms": 10.08,
+  "errors": 0,
+  "case": "clean_mlp",
+  "config": "0.6.0 cache off",
+  "traffic": "one row",
+  "cache": false
+ }
+]

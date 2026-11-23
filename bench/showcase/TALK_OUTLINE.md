@@ -16,16 +16,16 @@ For a conference talk or a blog post. Every number comes from the data files nam
 - Limit: the gate is a sample of 8. The data has no false-negative rate.
 
 ## 4. What does the gate cost? (2 min)
-- Boot: 19.2 s against 11.8 s on MiniLM. (Page: boot time)
-- Request path: on a tiny model, 66% of a request is HTTP and hand-offs. A hand-rolled server wins on `clean_mlp`: 3216 against 1428 requests/s at peak. (Pages: throughput, time of one request)
+- Boot: 21.3 s against 12.4 s on MiniLM. (Page: boot time)
+- Request path: on a tiny model, 66% of a request is HTTP and hand-offs. A hand-rolled server wins on `clean_mlp`: 2347 against 1164 requests/s at peak. (Pages: throughput, time of one request)
 
 ## 5. What does the gate give? (2 min)
-- ONNX Runtime on a real encoder: MiniLM, one sentence, 8 clients: 486 against 141 requests/s. p50 at one client: 4.9 ms against 9.2 ms. (Page: torch vs ORT)
+- ONNX Runtime on a real encoder: MiniLM, one sentence, 8 clients: 528 against 142 requests/s. p50 at one client: 4.8 ms against 9.4 ms. (Page: torch vs ORT)
 - The gain falls with the input size. Show the three payloads.
 - Wire format: safetensors helps wide inputs, hurts tiny ones. (Page: wire formats)
 
 ## 6. Honest notes (1 min)
-- 1.0.0rc1 is not faster than 0.5.1. The data shows no gain. (Page: releases)
+- 1.0.0 is not faster than 0.5.1. The data shows no gain. (Page: releases)
 - The result cache: a hit takes 0.255 ms of server time against 4.62 ms. The load-run numbers are a best case. (Page: result cache)
 - One machine, one run, no repeats, CPU only. Not measured: GPU, Linux, other servers.
 

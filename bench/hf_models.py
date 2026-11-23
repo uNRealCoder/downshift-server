@@ -27,6 +27,7 @@ from bench.run import (
     environment,
     free_port,
     run_load,
+    spawn_server,
     stage_split,
     stop_server,
     version_tuple,
@@ -130,9 +131,7 @@ def start(
     else:
         cmd = [PYTHON, "-m", "bench.naive_hf_server", path, str(port), variant.split("_")[1]]
         env, ready_path = None, "/health"
-    proc = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=str(ROOT), env=env
-    )
+    proc = spawn_server(cmd, env=env)
     return proc, port, wait_ready(port, proc, timeout=600, path=ready_path)
 
 

@@ -464,7 +464,7 @@ req = urllib.request.Request(
 y = decode(json.load(urllib.request.urlopen(req))["outputs"]["output_0"])
 ```
 
-Base64 does not help below about 100 KiB of tensor data. Above that, the gain increases with the size. In the 0.4.0 benchmark (`bench/REPORT_v0.4.0.md`), a `(32, 3, 16, 16)` float32 batch gave 6.65x the throughput as base64. At batch 1 on a narrow input, base64 was slower (0.72x).
+Base64 does not help below about 100 KiB of tensor data. Above that, the gain increases with the size. In the 0.4.0 benchmark (`bench/results/v0.4.0/REPORT.md`), a `(32, 3, 16, 16)` float32 batch gave 6.65x the throughput as base64. At batch 1 on a narrow input, base64 was slower (0.72x).
 
 `output_encoding` is a field in both request bodies. It is not a URL parameter. It controls only the encoding of the response. It does not depend on the format of the request.
 
