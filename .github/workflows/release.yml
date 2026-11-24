@@ -45,10 +45,26 @@ jobs:
           name: dist
           path: dist/
 
-  # The test matrix, the floor job, the Windows job and the docs job of ci.yml. They enforce the 95%
-  # coverage and the strict docs build.
+  # The test matrix, the floor job and the Windows job of ci.yml. They enforce the 95% coverage.
   ci:
     uses: ./.github/workflows/ci.yml
+
+  # The strict docs build. It runs only here, not on each push. Read the Docs builds the site from
+  # the same files. The build needs no torch: mkdocstrings reads the source without an import, and
+  # docs/openapi.json is a committed file.
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: docs/requirements.txt
+      - run: pip install -r docs/requirements.txt
+      - run: mkdocs build --strict
+        env:
+          NO_MKDOCS_2_WARNING: "1"
 
   # Install the built wheel, not the checkout, into a clean venv with only the CPU torch. This
   # finds a wheel that misses a file or that imports torch at import time.
@@ -82,7 +98,7 @@ jobs:
 
   publish-pypi:
     if: github.event_name == 'release'
-    needs: [build, ci, smoke-wheel]
+    needs: [build, ci, docs, smoke-wheel]
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -111,3 +127,24 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+
+  # Read the Docs serves "stable" from the newest release tag. Build it after the upload, so the
+  # site matches the version on PyPI. Set the repository secret RTD_TOKEN (Read the Docs, Settings,
+  # API Tokens). If the secret is not set, the job gives a notice and the site gets only the
+  # webhook build of Read the Docs.
+  publish-docs:
+    if: github.event_name == 'release'
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build the stable docs on Read the Docs
+        env:
+          RTD_TOKEN: ${{ secrets.RTD_TOKEN }}
+        run: |
+          if [ -z "$RTD_TOKEN" ]; then
+            echo "::notice::RTD_TOKEN is not set. Read the Docs builds from its webhook only."
+            exit 0
+          fi
+          curl --fail-with-body -sS -X POST \
+            -H "Authorization: Token $RTD_TOKEN" \
+            https://readthedocs.org/api/v3/projects/downshift-server/versions/stable/builds/
