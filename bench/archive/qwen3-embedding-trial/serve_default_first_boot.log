@@ -1,0 +1,49 @@
+2026-10-06 18:27:01 WARNING downshift.serve: DOWNSHIFT_SERVER_API_KEY is not set, so the endpoints (including /metadata and /metrics) are unauthenticated. Set it to require a fixed API key, or add your own authentication middleware.
+2026-10-06 18:27:02 INFO downshift.report: loading bench/QWEN-3-EMB/Qwen3-Embedding-0.6B
+2026-10-06 18:27:02 INFO downshift.report: will listen on http://127.0.0.1:8765 (not ready yet)
+2026-10-06 18:27:02 INFO uvicorn.error: Started server process [11044]
+2026-10-06 18:27:02 INFO uvicorn.error: Waiting for application startup.
+2026-10-06 18:27:02 INFO uvicorn.error: Application startup complete.
+2026-10-06 18:27:02 INFO uvicorn.error: Uvicorn running on http://127.0.0.1:8765 (Press CTRL+C to quit)
+Loading weights:   0%|          | 0/310 [00:00<?, ?it/s]Loading weights:   4%|3         | 12/310 [00:00<00:03, 95.71it/s]Loading weights:   8%|8         | 26/310 [00:00<00:02, 108.23it/s]Loading weights:  12%|#1        | 37/310 [00:00<00:03, 81.76it/s] Loading weights:  15%|#4        | 46/310 [00:00<00:03, 71.33it/s]Loading weights:  19%|#9        | 60/310 [00:00<00:02, 86.10it/s]Loading weights:  24%|##3       | 73/310 [00:00<00:02, 97.58it/s]Loading weights: 100%|##########| 310/310 [00:00<00:00, 351.67it/s]
+2026-10-06 18:28:51 INFO downshift.report: downshift v0.5.0
+  Model          bench/QWEN-3-EMB/Qwen3-Embedding-0.6B  (downloaded Hugging Face repo)
+  Family         hf
+  Verdict        FAILED  (strict=False, opset 20)
+                 -> exported via strict=False but ONNX Runtime cannot run the graph: onnxruntime could not load the exported graph: [ONNXRuntimeError] : 9 : NOT_IMPLEMENTED : Could not find an implementation for Mul(14) node with name 'node_mul_102'
+  Numerics       not checked
+  Warmup         3 inferences, 118.76 ms each
+  Boot           108.4 s: load 16.9, export 89.1, verify 1.7, session 0.3, warmup 0.4
+  Backend        torch (eager) | cpu  <- auto-selected
+  Embedding      lasttoken pooling, L2-normalised  (from modules.json)
+  Text input     "text" accepted, up to 32768 tokens a row  (longer rows are refused)
+  Dynamic dims   `batch` (input_ids[0])  not verified, serves 1-4096
+                 `seq` (input_ids[1])  not verified, serves 1-32768
+                 `batch` (attention_mask[0])  not verified, serves 1-4096
+                 `seq` (attention_mask[1])  not verified, serves 1-32768
+                 ! onnxruntime could not load the exported graph: [ONNXRuntimeError] : 9 : NOT_IMPLEMENTED : Could not find an implementation for Mul(14) node with name 'node_mul_102'
+  Encoding       json  (clients override with output_encoding)
+  Capacity       1 inference at a time, 4 prep threads, 64 queued, 30 s timeout  (--max-concurrency, --prep-threads, --max-queue, --request-timeout)
+  Execution      threadpool  (--execution)
+  Endpoint       http://127.0.0.1:8765  (GET /schema for the input format)
+2026-10-06 18:28:51 INFO downshift.report: ready in 108.4 s
+2026-10-06 18:29:03 INFO downshift.access: GET /schema 200 55.1 ms request_id=9e7b37e4d56347f1
+2026-10-06 18:29:03 INFO downshift.access: GET /metadata 200 2.3 ms request_id=b90879e10c0b44ef
+2026-10-06 18:29:04 INFO downshift.access: POST /predict 200 210.2 ms request_id=76a6c1d4a277461b
+2026-10-06 18:30:02 INFO downshift.access: POST /predict 200 234.6 ms request_id=6eb9275f4ec5489c
+2026-10-06 18:30:02 INFO downshift.access: POST /predict 200 101.3 ms request_id=c44010cf92474766
+2026-10-06 18:30:02 INFO downshift.access: POST /predict 200 109.6 ms request_id=72e27c0bc09a4d44
+2026-10-06 18:30:03 INFO downshift.access: POST /predict 200 126.5 ms request_id=a0074a70aea2413a
+2026-10-06 18:30:03 INFO downshift.access: POST /predict 200 115.9 ms request_id=1a63ed5056844815
+2026-10-06 18:30:03 INFO downshift.access: POST /predict 200 238.9 ms request_id=a40e44641a974102
+2026-10-06 18:30:06 INFO downshift.access: POST /predict 200 255.0 ms request_id=dd0dd9be067b4045
+2026-10-06 18:30:06 INFO downshift.access: POST /predict 200 99.4 ms request_id=29c1e0c6a170465f
+2026-10-06 18:30:06 INFO downshift.access: POST /predict 200 94.9 ms request_id=0ac632311bd24f05
+2026-10-06 18:30:06 INFO downshift.access: POST /predict 200 127.9 ms request_id=d5fc8ab7dab347fe
+2026-10-06 18:30:07 INFO downshift.access: POST /predict 200 127.4 ms request_id=1716ca3500244b24
+2026-10-06 18:30:07 INFO downshift.access: POST /predict 200 188.4 ms request_id=2a3a300e5e8c40de
+2026-10-06 18:30:27 INFO downshift.access: POST /predict 200 1363.6 ms request_id=fe9b9e2061b64809
+2026-10-06 18:30:34 INFO downshift.access: POST /predict 200 7602.2 ms request_id=bb2a364b70ba4792
+2026-10-06 18:31:38 INFO downshift.access: POST /predict 200 64100.7 ms request_id=8003f9cf2cb742f4
+2026-10-06 18:31:39 WARNING downshift.access: POST /predict 400 123.1 ms request_id=4dfcafcf148c4a1a
+2026-10-06 18:32:23 INFO downshift.access: POST /predict 200 44153.3 ms request_id=b02141da8d0946aa

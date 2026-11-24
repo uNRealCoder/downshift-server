@@ -106,7 +106,7 @@ def test_openapi_lists_the_binary_content_types(mlp_client):
 
 
 def test_server_wide_output_encoding_stays_json_or_base64():
-    from downshift.serve.schemas import OutputEncoding, RequestOutputEncoding
+    from downshift.entities.options import OutputEncoding, RequestOutputEncoding
 
     assert {e.value for e in OutputEncoding} == {"json", "base64"}
     assert "safetensors" in {e.value for e in RequestOutputEncoding}

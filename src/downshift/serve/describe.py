@@ -9,9 +9,11 @@ from typing import Any
 
 import orjson
 
-from downshift.core.axes import DimBound
-from downshift.serve.backends import IOSpec, concrete_dim
-from downshift.serve.engine import ServingState
+from downshift.entities.axes import DimBound
+from downshift.entities.backend import IOSpec
+from downshift.entities.options import OutputEncoding
+from downshift.entities.serving import ServingState
+from downshift.serve.backends import concrete_dim
 from downshift.serve.graphs import GRAPH_INPUTS
 from downshift.serve.schemas import (
     AxisBound,
@@ -19,7 +21,6 @@ from downshift.serve.schemas import (
     EmbeddingInfo,
     InputFormat,
     Limits,
-    OutputEncoding,
     SchemaResponse,
     SourceInfo,
     TensorSchema,

@@ -61,6 +61,21 @@ def test_cli_main_import_leaves_torch_out_of_sys_modules() -> None:
     assert result.returncode == 0, result.stderr
 
 
+def test_import_downshift_does_not_read_the_environment() -> None:
+    env = {**subprocess_env(), "DOWNSHIFT_PORT": "abc", "DOWNSHIFT_EXPORT_CACHE_DIR": "/x"}
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import downshift, sys; assert 'downshift.settings' not in sys.modules",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_help_is_fast() -> None:
     start = time.perf_counter()
     result = _run("--help")
@@ -75,3 +90,10 @@ def test_serve_help_is_fast() -> None:
     elapsed = time.perf_counter() - start
     assert result.returncode == 0, result.stderr
     assert elapsed < HELP_BUDGET_SECONDS, elapsed
+
+
+def test_build_app_is_a_lazy_public_name() -> None:
+    from downshift import build_app
+    from downshift.serve.app import build_app as defined
+
+    assert build_app is defined

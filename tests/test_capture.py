@@ -86,7 +86,7 @@ def test_external_data_verdict_is_clean_and_keeps_its_directory_alive():
 
     prepared = prepare_model(clean_mlp.make_model(), clean_mlp.make_inputs())
 
-    verdict = build_verdict(prepared, k=2, _external_data_threshold=0)
+    verdict = build_verdict(prepared, samples=2, _external_data_threshold=0)
 
     assert verdict.status == "CLEAN", verdict.reason
     assert verdict.onnx_bytes == b""
@@ -155,3 +155,39 @@ def test_off_thread_capture_still_collects_torch_logging():
 
     assert "from torch" in sink.getvalue()
     assert worker_saw["stderr"] is not sink
+
+
+def test_opset_is_the_one_of_the_default_domain(monkeypatch):
+    real_export = capture_mod.torch.onnx.export
+
+    def export_with_a_custom_domain_first(*args, **kwargs):
+        program = real_export(*args, **kwargs)
+        imports = dict(program.model.graph.opset_imports)
+        program.model.graph.opset_imports.clear()
+        program.model.graph.opset_imports["custom.domain"] = 1
+        program.model.graph.opset_imports.update(imports)
+        return program
+
+    monkeypatch.setattr(capture_mod.torch.onnx, "export", export_with_a_custom_domain_first)
+
+    result = capture(clean_mlp.make_model(), clean_mlp.make_inputs())
+
+    assert result.success is True
+    assert result.opset is not None and result.opset > 1
+
+
+def test_capture_keeps_what_the_exporter_prints_off_stdout(monkeypatch, capsys):
+    """onnxscript 0.5 prints a line on stdout during the export. `check --json` needs stdout to
+    hold only the JSON."""
+    real_export = torch.onnx.export
+
+    def noisy_export(*args, **kwargs):
+        print("Applied 1 of general pattern rewrite rules.")
+        return real_export(*args, **kwargs)
+
+    monkeypatch.setattr(torch.onnx, "export", noisy_export)
+
+    result = capture(clean_mlp.make_model(), clean_mlp.make_inputs())
+
+    assert result.success is True
+    assert capsys.readouterr().out == ""

@@ -2,7 +2,7 @@
 
 The full tables behind the downshift 0.4.0 launch post, *Stop hand-rolling model servers*, published on Medium. Medium doesn't render tables, so they're kept here, next to the harness that produced them.
 
-Every number comes from the v0.4.0 runs in this directory: `results_v0.4.0.json` for the synthetic models and `results_hf*_v0.4.0.json` for Prompt Guard 86M and all-MiniLM-L6-v2.
+Every number comes from the v0.4.0 runs in this directory: `results.json` for the synthetic models and `results_hf*.json` for Prompt Guard 86M and all-MiniLM-L6-v2.
 
 ## A. Method
 
@@ -88,7 +88,7 @@ Batch 1, peak across concurrency 1–64; p50/p99 in ms at that peak; error vs ea
 
 ## E. Compatibility matrix
 
-One fixture per export hazard, re-run for this post with torch 2.14.0, onnx 1.22.0, onnxruntime 1.30.0, torch_geometric 2.8.0 and transformers 5.17.0 (`k=8`). The verdicts match the committed [docs/compatibility.md](../docs/compatibility.md); only float-noise error magnitudes differ between runs.
+One fixture per export hazard, re-run for this post with torch 2.14.0, onnx 1.22.0, onnxruntime 1.30.0, torch_geometric 2.8.0 and transformers 5.17.0 (`k=8`). The verdicts match the committed [docs/compatibility.md](../../../docs/compatibility.md); only float-noise error magnitudes differ between runs.
 
 | Model | Hazard | Family | Export | Capture | Numerics | Shape-general | Backend |
 |---|---|---|---|---|---|---|---|
@@ -117,7 +117,7 @@ python -m bench.report --results bench/results.json --out bench/REPORT.md
 python scripts/gen_matrix.py
 ```
 
-[`bench/README.md`](README.md) covers the real-model run (`python -m bench.hf_models`), where to download the two checkpoints, and the fairness rules. The raw results behind this post are `bench/results_v0.4.0.json` and `bench/results_hf*_v0.4.0.json`, and the full generated report is [`bench/REPORT_v0.4.0.md`](REPORT_v0.4.0.md).
+[`bench/README.md`](../../README.md) covers the real-model run (`python -m bench.hf_models`), where to download the two checkpoints, and the fairness rules. The raw results behind this post are `bench/results/v0.4.0/results.json` and `bench/results_hf*.json`, and the full generated report is [`bench/results/v0.4.0/REPORT.md`](REPORT.md).
 
 ## G. Data behind the charts
 

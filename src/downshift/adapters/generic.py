@@ -10,8 +10,8 @@ import torch
 from torch import nn
 
 from downshift.adapters._flatten import build_shim_class
-from downshift.adapters.base import Family, Prepared
 from downshift.core.shapes import infer_dynamic_shapes, lower_axis_max, pin_vary_fn
+from downshift.entities.adapters import Family, Prepared
 
 _GUESS_SPATIAL = 32
 

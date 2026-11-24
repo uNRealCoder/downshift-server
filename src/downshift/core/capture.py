@@ -9,12 +9,13 @@ import tempfile
 import threading
 from collections import Counter
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import onnx
 import torch
+
+from downshift.entities.verdict import CaptureResult
 
 _STRATEGIES: tuple[tuple[str, bool], ...] = (("strict=False", False), ("strict=True", True))
 
@@ -38,11 +39,13 @@ def _quiet_registration_warnings() -> Iterator[None]:
 
 @contextlib.contextmanager
 def _capture_torch_output(sink: io.StringIO) -> Iterator[None]:
-    """Collect what torch prints during the export (whole FX graphs on a failed guard). The
-    sys.stderr swap is process-wide, so it happens only on the main thread. On the serve loader
-    thread, next to a live server, only the torch loggers are collected."""
+    """Collect what torch prints during the export (whole FX graphs on a failed guard). Drop what
+    onnxscript prints on stdout (onnxscript 0.5 prints "Applied N of general pattern rewrite
+    rules."), so `--json` output stays valid JSON. The sys.stderr and sys.stdout swaps are
+    process-wide, so they happen only on the main thread. On the serve loader thread, next to a
+    live server, only the torch loggers are collected."""
     if threading.current_thread() is threading.main_thread():
-        with contextlib.redirect_stderr(sink):
+        with contextlib.redirect_stderr(sink), contextlib.redirect_stdout(io.StringIO()):
             yield
         return
     handler = logging.StreamHandler(sink)
@@ -54,26 +57,41 @@ def _capture_torch_output(sink: io.StringIO) -> Iterator[None]:
         torch_logger.removeHandler(handler)
 
 
-@dataclass
-class CaptureResult:
-    success: bool
-    capture_strategy: str | None  # a _STRATEGIES name. None if nothing traced
-    onnx_program: "torch.onnx.ONNXProgram | None" = None
-    onnx_bytes: bytes = field(default=b"", repr=False)
-    # In place of onnx_bytes if the weights went to external data. `tmpdir` owns the files.
-    onnx_path: Path | None = None
-    tmpdir: tempfile.TemporaryDirectory | None = field(default=None, repr=False)
-    opset: int | None = None
-    op_types: dict[str, int] = field(default_factory=dict)  # histogram, highest count first
-    exception: Exception | None = None  # quoted as the reason
-    exceptions: list[tuple[str, Exception]] = field(default_factory=list)  # each strategy tried
-    stderr: str = ""  # what torch printed, for the debug log
-
-
 def op_type_histogram(nodes: Iterable[Any]) -> dict[str, int]:
     """Operation types by count, highest first."""
     counts = Counter(node.op_type for node in nodes)
     return dict(sorted(counts.items(), key=lambda kv: kv[1], reverse=True))
+
+
+def has_half_weights(proto: onnx.ModelProto) -> bool:
+    """Does the graph keep fp16 weights (for example, an fp16 export)?"""
+    return any(init.data_type == onnx.TensorProto.FLOAT16 for init in proto.graph.initializer)
+
+
+def to_half_precision(result: CaptureResult) -> None:
+    """Change the fp32 graph of `result` to fp16, in place. The inputs and outputs stay fp32,
+    so clients do not change. The converter keeps the operations that fp16 would break
+    (for example, the ones that need fp32 range) in fp32."""
+    from onnxruntime.transformers.float16 import convert_float_to_float16
+
+    path = result.onnx_path
+    if path is None:
+        proto = onnx.load_from_string(result.onnx_bytes)
+    else:
+        proto = onnx.load(str(path))
+    # Shape inference cannot read a proto over 2 GB, the case that uses external data.
+    proto = convert_float_to_float16(
+        proto, keep_io_types=True, disable_shape_infer=path is not None
+    )
+    if path is None:
+        result.onnx_bytes = proto.SerializeToString()
+    else:
+        result.onnx_path = path.with_name("model_fp16.onnx")
+        onnx.save_model(
+            proto, str(result.onnx_path), save_as_external_data=True, location="model_fp16.data"
+        )
+    result.onnx_program = None  # it holds the fp32 graph
+    result.op_types = op_type_histogram(proto.graph.node)
 
 
 def _weights_nbytes(exported_program: "torch.export.ExportedProgram") -> int:
@@ -93,6 +111,7 @@ def capture(
     captured = io.StringIO()
 
     with _capture_torch_output(captured), _quiet_registration_warnings():
+        # Try strict=False first, then strict=True. The first one that works is the strategy.
         for name, strict in _STRATEGIES:
             try:
                 exported_program = torch.export.export(
@@ -115,7 +134,11 @@ def capture(
             )
 
         try:
-            onnx_program = torch.onnx.export(exported_program, verbose=False, report=False)
+            # dynamo=True is explicit: downshift only uses the dynamo exporter. (An ExportedProgram
+            # already selects it in torch 2.6 and later, and torch 2.9 made it the default.)
+            onnx_program = torch.onnx.export(
+                exported_program, verbose=False, report=False, dynamo=True
+            )
             if onnx_program is None:  # the stub allows it for the legacy path, never for a program
                 raise RuntimeError("torch.onnx.export returned None")
         except Exception as exc:  # noqa: BLE001 - a failed translation is a failed capture
@@ -145,7 +168,9 @@ def capture(
         onnx_bytes=onnx_bytes,
         onnx_path=onnx_path,
         tmpdir=tmpdir,
-        opset=proto.opset_import[0].version if proto.opset_import else None,
+        opset=next(
+            (imp.version for imp in proto.opset_import if imp.domain in ("", "ai.onnx")), None
+        ),
         op_types=op_type_histogram(proto.graph.node),
         stderr=captured.getvalue(),
     )

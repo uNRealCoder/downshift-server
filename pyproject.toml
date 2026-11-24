@@ -1,22 +1,22 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
 name = "downshift-server"
-version = "0.6.0"
+version = "1.0.0"
 description = "Serve PyTorch models over HTTP through ONNX Runtime. Downshift verifies each export against PyTorch before it serves, and it falls back to eager PyTorch."
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     {name = "Nikhil Ranjan", email = "nrnikhilranjan1997@gmail.com"}
 ]
 keywords = ["onnx", "pytorch", "model-serving", "export"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -25,16 +25,16 @@ classifiers = [
 ]
 
 dependencies = [
-    "torch>=2.5",  # torch.onnx.export(dynamo=True) accepting an ExportedProgram with report= is 2.5+
-    "onnx>=1.16",  # onnxscript's own floor; older onnx also hits real bugs in torch 2.5's exporter
-    "onnxruntime>=1.17",
-    "onnxscript>=0.5",  # 0.1-0.4 fail to translate ops torch 2.5's exporter emits for dynamic shapes
-    "typer>=0.12",
-    "fastapi>=0.100",
-    "uvicorn[standard]>=0.23",
-    "numpy>=1.24",
-    "pydantic>=2.0",
-    "orjson>=3.9",
+    "torch>=2.8",  # CI tests the floor on 2.8; torch 2.6 and 2.7 cannot export a Hugging Face encoder up to its position limit
+    "onnx>=1.23",  # the floor job tests the latest stable onnx; only the dynamo exporter is used, so no legacy exporter limits it
+    "onnxruntime>=1.20",  # torch 2.8 writes IR version 10 graphs (ORT 1.17 reads up to 9); ORT 1.18 has no CPU kernel for ArgMax(13), which last-token pooling needs
+    "onnxscript>=0.5",  # 0.1-0.4 fail to translate ops that the torch exporter emits for dynamic shapes
+    "typer>=0.19",  # the floor job tests 0.19.0; typer 0.18 and earlier import rich when typer loads, and the CLI must not (tests/test_logs.py); typer 0.12 to 0.14 were also three packages that share one folder
+    "fastapi>=0.115",  # the floor job tests it; fastapi 0.100 types HTTPException headers as dict, which fails mypy
+    "uvicorn[standard]>=0.30",  # the floor job tests it; uvicorn 0.23 has no uvicorn.config.STARTUP_FAILURE
+    "numpy>=2.0",  # numpy 2 only; the floor job tests 2.0.2 (torch 2.8 and onnxruntime 1.20 both support numpy 2)
+    "pydantic>=2.5",  # first pydantic with Python 3.12 support; the floor job tests it
+    "orjson>=3.10.7",  # the floor job tests it; orjson 3.9 cannot serialize float16 numpy arrays (OPT_SERIALIZE_NUMPY)
 ]
 
 [project.optional-dependencies]
@@ -45,12 +45,14 @@ dev = [
     "mypy>=1.0",
     "httpx>=0.24",  # FastAPI TestClient
     "safetensors>=0.4",  # reference reader/writer for the binary wire format tests
+    "prometheus-client>=0.20",  # parses the /metrics text in the tests
+    "openai>=1.40",  # the client tests of the /v1 routes
 ]
 gnn = [
-    "torch-geometric>=2.5",
+    "torch-geometric>=2.7",  # the floor job tests 2.7.0; torch-geometric 2.5 EdgeIndex fails under torch.export of torch 2.8 (FakeTensor)
 ]
 hf = [
-    "transformers>=4.40",
+    "transformers>=5.17",
 ]
 fast = [
     "pybase64>=1.4",  # SIMD base64 for binary tensor I/O; stdlib is used when absent
@@ -62,11 +64,12 @@ all = [
 [project.urls]
 Homepage = "https://github.com/uNRealCoder/downshift-server"
 Repository = "https://github.com/uNRealCoder/downshift-server"
+Documentation = "https://downshift-server.readthedocs.io"
 Changelog = "https://github.com/uNRealCoder/downshift-server/blob/main/CHANGELOG.md"
 Issues = "https://github.com/uNRealCoder/downshift-server/issues"
 
 [project.scripts]
-downshift = "downshift.cli.main:app"
+downshift = "downshift.cli.entry:main"
 
 # The built-in adapters (generic, pyg, hf) are not entry points. downshift.adapters.registry
 # imports them directly, and it uses sys.modules as a gate. The search for adapters therefore
@@ -76,9 +79,14 @@ downshift = "downshift.cli.main:app"
 [tool.hatch.build.targets.wheel]
 packages = ["src/downshift"]
 
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/tests", "/docs", "/examples", "/scripts/gen_matrix.py", "/README.md", "/LICENSE", "/CHANGELOG.md", "/llms.txt"]
+exclude = ["**/__pycache__", "**/*.pyc"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+extend-exclude = ["bench/archive"]  # frozen records of past runs
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]
@@ -100,17 +108,16 @@ warn_unused_configs = true
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-addopts = ["--cov=src/downshift", "--cov-report=term-missing"]
 testpaths = ["tests"]
 python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
-markers = [
-    "needs_torch_26: requires torch >= 2.6 (skipped on the CI floor job, pinned to 2.5.1)",
-]
+pythonpath = ["src"]
+addopts = "--cov --cov-report=term-missing"
 
 [tool.coverage.run]
 source = ["src/downshift"]
 
 [tool.coverage.report]
 show_missing = true
+fail_under = 95

@@ -17,24 +17,12 @@ import hashlib
 import threading
 from collections import OrderedDict
 from concurrent.futures import Future
-from dataclasses import dataclass, field
 
 import numpy as np
 
-Row = dict[str, np.ndarray]  # output name -> the array of this row, with no batch axis
+from downshift.entities.cache import Lookup, Row
 
 _MIN_DOORKEEPER = 1024
-
-
-@dataclass
-class Lookup:
-    """The answer for the rows of one request. `hits` and `pending` map a row index to its
-    result (or to a Future of it). `missing` lists the rows that this request must compute. It
-    has claimed them: it must call complete() or fail() for each of them."""
-
-    hits: dict[int, Row] = field(default_factory=dict)
-    pending: dict[int, "Future[Row]"] = field(default_factory=dict)
-    missing: list[int] = field(default_factory=list)
 
 
 class ResultCache:
@@ -90,12 +78,13 @@ class ResultCache:
         if future is not None:
             future.set_result(row)
 
-    def fail(self, keys: list[bytes], exc: BaseException) -> None:
-        """The owner could not compute these rows. The waiters get the same error."""
+    def fail(self, keys: list[bytes]) -> None:
+        """The owner could not compute these rows. The waiters get a neutral error, never the
+        error of the owner, and compute the rows themselves."""
         with self._lock:
             futures = [f for f in (self._flying.pop(key, None) for key in keys) if f is not None]
         for future in futures:
-            future.set_exception(exc)
+            future.set_exception(RuntimeError("the owner of the row failed"))
 
     def stats(self) -> dict[str, int]:
         with self._lock:
@@ -108,7 +97,8 @@ class ResultCache:
 
 
 def _digest(kind: bytes) -> hashlib.blake2b:
-    return hashlib.blake2b(kind, digest_size=16)
+    """A 256-bit key. A collision gives the output of another row, so the key must not collide."""
+    return hashlib.blake2b(kind, digest_size=32)
 
 
 def text_keys(prompt: str, rows: list[str]) -> list[bytes]:

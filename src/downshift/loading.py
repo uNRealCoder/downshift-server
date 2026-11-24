@@ -9,7 +9,6 @@ pkg.module:attr      an nn.Module or a factory. A `make_inputs` in the same modu
 """
 
 import re
-from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
 from typing import Any
@@ -22,13 +21,13 @@ from downshift._imports import (
     import_object,
     is_import_spec,
 )
-from downshift.adapters.base import Family
+from downshift.entities.adapters import Family
+from downshift.entities.loading import LoadedModel, LoadSpec
 from downshift.sources import (
     HF_REPO_DIR,
     IMPORT_SPEC,
     ONNX_FILE,
     TORCH_CHECKPOINT,
-    UNKNOWN_SOURCE,
 )
 
 _STATE_DICT_SUFFIXES = {".pt", ".pth", ".bin", ".ckpt"}
@@ -41,34 +40,6 @@ ACCEPTED = (
     "PyTorch checkpoint (.pt/.pth/.bin/.ckpt), a Hugging Face repo directory (one holding "
     "a config.json), or an importable package.module:attr"
 )
-
-
-@dataclass(frozen=True)
-class LoadSpec:
-    """One MODEL argument and its flags. pooling and normalize apply to HF repos only."""
-
-    model: str
-    inputs: str | None = None
-    model_class: str | None = None
-    unsafe_load: bool = False
-    pooling: str | None = None
-    normalize: bool | None = None
-
-
-@dataclass
-class LoadedModel:
-    source: str
-    model: nn.Module | None = None
-    onnx_path: Path | None = None
-    example_inputs: tuple | None = None
-    adapter_hint: str | None = None
-    # The accepted form of `source` (downshift.sources).
-    kind: str = UNKNOWN_SOURCE
-
-    @property
-    def source_path(self) -> Path | None:
-        path = Path(self.source)
-        return path if path.exists() else None
 
 
 def _instantiate(obj: Any) -> nn.Module:

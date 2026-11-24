@@ -1,7 +1,6 @@
 """prepare_serving(): verdict, backend selection, warmed-up state, and the shared contract of the
 backends."""
 
-import dataclasses
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -11,18 +10,17 @@ import pytest
 import torch
 
 import downshift
-from downshift.core.phase import CURRENT_PROGRESS, LoadProgress, Phase, report
-from downshift.core.verdict import ExportVerdict, prepare_model
-from downshift.loading import LoadedModel, LoadSpec, load_model
+from downshift.core.phase import CURRENT_PROGRESS, report
+from downshift.core.verdict import prepare_model
+from downshift.entities.loading import LoadedModel, LoadSpec
+from downshift.entities.phase import LoadProgress, Phase
+from downshift.entities.serving import WarmupStats
+from downshift.entities.verdict import ExportVerdict
+from downshift.loading import load_model
 from downshift.serve import backends as backends_mod
 from downshift.serve.backends import InferenceInputError, OnnxRuntimeBackend, TorchBackend
-from downshift.serve.engine import (
-    ServeOptions,
-    WarmupStats,
-    choose_backend,
-    prepare_serving,
-    synthesize_feeds,
-)
+from downshift.serve.engine import ServeOptions, choose_backend, prepare_serving, synthesize_feeds
+from tests.conftest import with_options
 from tests.models import clean_mlp
 
 
@@ -39,16 +37,12 @@ def test_serving_state_builds_an_executor_from_max_concurrency(mlp_state):
     assert mlp_state.executor._max_workers == mlp_state.options.max_concurrency == 4
     assert mlp_state.in_flight == 0
 
-    wider = dataclasses.replace(
-        mlp_state, options=dataclasses.replace(mlp_state.options, max_concurrency=3)
-    )
+    wider = with_options(mlp_state, max_concurrency=3)
     assert wider.executor._max_workers == 3
 
 
 def test_serving_state_builds_a_prep_pool_from_prep_threads(mlp_state):
-    narrow = dataclasses.replace(
-        mlp_state, options=dataclasses.replace(mlp_state.options, prep_threads=2)
-    )
+    narrow = with_options(mlp_state, prep_threads=2)
     assert isinstance(narrow.prep_executor, ThreadPoolExecutor)
     assert narrow.prep_executor._max_workers == 2
     assert narrow.prep_executor._thread_name_prefix == "downshift-prep"
@@ -216,7 +210,7 @@ def test_torch_backend_rejects_missing_input():
 
 
 def test_torch_backend_leaves_a_model_error_to_the_server():
-    # Downshift checks the shape of the client before infer (predict._shape_violation). An error
+    # Downshift checks the shape of the client before infer (feeds.shape_violation). An error
     # that the model raises after that is a 500 of the server. The message does not change the
     # class of the error.
     backend = TorchBackend(clean_mlp.make_model(), ("x",), device="cpu")
@@ -305,7 +299,16 @@ def test_ort_providers_prefers_cuda_when_available(monkeypatch):
         "get_available_providers",
         lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"],
     )
-    assert backends_mod._ort_providers("cuda") == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    cuda = backends_mod._ort_providers("cuda")
+    assert cuda == [
+        ("CUDAExecutionProvider", {"device_id": "0", "use_tf32": "0"}),
+        "CPUExecutionProvider",
+    ]
+    assert backends_mod._ort_providers("cuda:1", tf32=True) == [
+        ("CUDAExecutionProvider", {"device_id": "1", "use_tf32": "1"}),
+        "CPUExecutionProvider",
+    ]
+    assert backends_mod._ort_providers("cpu") == ["CPUExecutionProvider"]
 
 
 class _FakeSession:
@@ -459,9 +462,9 @@ def test_check_leaves_global_rng_alone():
     torch.manual_seed(1234)
     before = torch.get_rng_state()
 
-    downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(), k=2)
+    downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(), samples=2)
     first = clean_mlp.make_model()
-    downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(), k=2)
+    downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(), samples=2)
     second = clean_mlp.make_model()
 
     assert not torch.equal(first.net[0].weight, second.net[0].weight)
@@ -473,7 +476,7 @@ def test_verify_logs_one_progress_line_per_sample_with_every_input_shape(caplog)
     from downshift.logs import REPORT_LOGGER
 
     with caplog.at_level(logging.INFO, logger=REPORT_LOGGER):
-        verdict = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(), k=3)
+        verdict = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(), samples=3)
 
     lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("verify:")]
     assert verdict.numerics is not None
@@ -501,3 +504,216 @@ def test_report_updates_the_current_progress():
         assert progress.phase == "warmup"
     finally:
         CURRENT_PROGRESS.reset(token)
+
+
+def _fake_cuda_torch(monkeypatch, gpus: int) -> None:
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: gpus > 0)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: gpus)
+
+
+def test_auto_picks_cuda_for_onnx_runtime_only_if_it_has_the_cuda_provider(monkeypatch):
+    _fake_cuda_torch(monkeypatch, 1)
+    monkeypatch.setattr(
+        backends_mod.ort, "get_available_providers", lambda: ["CPUExecutionProvider"]
+    )
+
+    assert backends_mod.resolve_device("auto") == "cuda"
+    assert backends_mod.resolve_device("auto", ort_backend=True) == "cpu"
+
+
+def test_auto_on_a_cpu_only_onnx_runtime_serves_on_the_cpu_with_one_log_line(monkeypatch, caplog):
+    _fake_cuda_torch(monkeypatch, 1)
+    monkeypatch.setattr(
+        backends_mod.ort, "get_available_providers", lambda: ["CPUExecutionProvider"]
+    )
+    monkeypatch.setattr(
+        backends_mod.ort, "InferenceSession", lambda *a, **k: _FakeSession(["CPUExecutionProvider"])
+    )
+
+    with caplog.at_level("INFO", logger="downshift.serve"):
+        backend = OnnxRuntimeBackend(b"model", device="auto")
+
+    assert backend.provider == "CPUExecutionProvider"
+    assert "install onnxruntime-gpu" in caplog.text
+
+
+def test_auto_falls_back_to_the_cpu_when_the_cuda_provider_does_not_start(monkeypatch, caplog):
+    _fake_cuda_torch(monkeypatch, 1)
+    _fake_gpu_wheel(monkeypatch, ["CPUExecutionProvider"])
+
+    backend = OnnxRuntimeBackend(b"model", device="auto")
+
+    assert backend.provider == "CPUExecutionProvider"
+    assert "Serving on the CPU" in caplog.text
+
+
+def test_a_cuda_index_above_the_gpu_count_is_a_usage_error(monkeypatch):
+    _fake_cuda_torch(monkeypatch, 2)
+    _fake_gpu_wheel(monkeypatch, ["CUDAExecutionProvider"])
+
+    with pytest.raises(ValueError, match=r"this machine has 2 GPUs \(cuda:0 to cuda:1\)"):
+        OnnxRuntimeBackend(b"model", device="cuda:2")
+    with pytest.raises(ValueError, match=r"--device cuda:5: this machine has 2 GPUs"):
+        TorchBackend(clean_mlp.make_model(), ("x",), device="cuda:5")
+    assert backends_mod.resolve_device("cuda:1") == "cuda:1"
+
+
+class _Off:
+    """A backend whose outputs are off by 1e-2, as a GPU with a bad kernel would be."""
+
+    def __init__(self, backend) -> None:
+        self._backend = backend
+        self.name = backend.name
+
+    def infer(self, inputs):
+        return {k: v + 1e-2 for k, v in self._backend.infer(inputs).items()}
+
+    def metadata(self):
+        return self._backend.metadata()
+
+
+@pytest.fixture
+def off_onnx(monkeypatch):
+    """Serve as if on a GPU, where the ONNX backend is off by 1e-2 and torch is exact."""
+    from downshift.serve import engine as engine_mod
+
+    real = engine_mod.check_serving
+
+    def check(backend, *args, **kwargs):
+        wrapped = _Off(backend) if backend.name == "onnxruntime" else backend
+        return real(wrapped, *args, **kwargs)
+
+    monkeypatch.setattr(engine_mod, "serves_off_cpu", lambda backend: True)
+    monkeypatch.setattr(engine_mod, "check_serving", check)
+
+
+def test_a_failed_serving_check_falls_back_to_torch_and_warns_once(off_onnx, serve_fixture, caplog):
+    with caplog.at_level(logging.WARNING, logger="downshift.serve"):
+        state = serve_fixture("clean_mlp")
+
+    assert state.backend.name == "torch"
+    assert state.serving_numerics is not None and state.serving_numerics.ok
+    assert state.serving_numerics.provider == "torch"
+    assert any("serving torch" in note for note in state.notes)
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "differs from the CPU result" in warnings[0]
+    assert "--device cpu" in warnings[0] and "--force-onnx" in warnings[0]
+
+
+def test_a_failed_serving_check_keeps_onnx_with_force_onnx(off_onnx, serve_fixture, caplog):
+    with caplog.at_level(logging.WARNING, logger="downshift.serve"):
+        state = serve_fixture("clean_mlp", force_onnx=True)
+
+    assert state.backend.name == "onnxruntime"
+    assert state.serving_numerics is not None and not state.serving_numerics.ok
+    assert state.serving_numerics.max_abs_err > 1e-3
+    assert "Serving it as asked" in caplog.text
+
+
+def test_a_failed_serving_check_of_torch_warns_and_keeps_serving(caplog):
+    from downshift.entities.serving import ServingNumerics
+    from downshift.serve.engine import _falls_back
+
+    failed = ServingNumerics("torch", "cuda", True, 1, 1, 0.5, None, False, 1e-3, 1e-2)
+    with caplog.at_level(logging.WARNING, logger="downshift.serve"):
+        assert _falls_back(failed, backends_mod.BackendName.torch, ServeOptions(), True) is False
+
+    assert "No other backend can serve" in caplog.text
+    assert "remove --tf32" in caplog.text
+
+
+def test_a_reused_export_falls_back_to_torch_after_a_failed_serving_check(off_onnx, exported_mlp):
+    from downshift.entities.cache import ExportEntry
+    from downshift.serve.engine import state_from_entry
+
+    path, model, verdict = exported_mlp
+    inputs = clean_mlp.make_inputs()
+    entry = ExportEntry(
+        verdict.to_dict(), ["x"], {}, feeds={"x": inputs[0].numpy()}, onnx_path=path
+    )
+    loaded = LoadedModel("m", model=model)
+
+    state = state_from_entry(
+        entry, lambda: (loaded, None), ServeOptions(warmup=0), None, source="m", kind="x"
+    )
+
+    assert state.backend.name == "torch"
+    assert state.serving_numerics is not None and state.serving_numerics.ok
+
+
+def test_serving_on_the_cpu_runs_no_serving_check(mlp_state):
+    assert mlp_state.serving_numerics is None
+
+
+def test_tf32_off_sets_the_torch_flags_of_a_cuda_backend(monkeypatch):
+    from downshift.serve import backends as b
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.nn.Module, "to", lambda self, *a, **k: self)
+    # Do not use monkeypatch for the two flags. In current torch they are properties, so
+    # monkeypatch cannot undo them. Its undo then raises an error and stops, and the two patches
+    # above stay on for all later tests. Save and restore the flags by hand.
+    saved = torch.backends.cuda.matmul.allow_tf32, torch.backends.cudnn.allow_tf32
+    try:
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = True
+        b.TorchBackend(clean_mlp.make_model(), ("x",), device="cuda", tf32=True)
+        assert torch.backends.cuda.matmul.allow_tf32 is True
+        b.TorchBackend(clean_mlp.make_model(), ("x",), device="cuda", tf32=False)
+        assert torch.backends.cuda.matmul.allow_tf32 is False
+    finally:
+        torch.backends.cuda.matmul.allow_tf32, torch.backends.cudnn.allow_tf32 = saved
+
+
+def test_a_cache_hit_replays_all_the_verification_samples(off_onnx, exported_mlp, tmp_path):
+    from downshift.core.export_cache import ExportCache
+    from downshift.entities.cache import ExportEntry
+    from downshift.serve.engine import state_from_entry
+
+    path, model, verdict = exported_mlp
+    assert len(verdict.sample_feeds) > 1
+    entry = ExportEntry(verdict.to_dict(), ["x"], {}, samples=verdict.sample_feeds, onnx_path=path)
+    cache = ExportCache(tmp_path)
+    cache.put("a" * 64, entry)
+    reread = cache.get("a" * 64)
+    assert reread is not None
+    assert len(reread.samples) == len(verdict.sample_feeds)
+
+    loaded = LoadedModel("m", model=model)
+    state = state_from_entry(
+        reread, lambda: (loaded, None), ServeOptions(warmup=0), None, source="m", kind="x"
+    )
+
+    assert state.serving_numerics is not None
+    assert state.serving_numerics.samples == len(verdict.sample_feeds)
+    assert state.serving_numerics.samples_total == verdict.numerics.samples_tested
+
+
+def test_bound_samples_keeps_the_smallest_and_the_largest_first():
+    from downshift.core.feeds import bound_samples
+
+    samples = [{"x": np.zeros(n, dtype=np.uint8)} for n in (50, 10, 40, 100, 20)]
+
+    kept = bound_samples(samples, limit=170)
+
+    assert [s["x"].size for s in kept] == [10, 40, 100, 20]
+    assert bound_samples(samples, limit=5) == []
+    assert len(bound_samples(samples)) == 5
+    assert bound_samples([]) == []
+
+
+def test_pack_feeds_round_trips_the_example_and_the_samples():
+    from downshift.core.export_cache import pack_feeds, unpack_feeds
+
+    example = {"x": np.ones(2)}
+    samples = [{"x": np.zeros(1)}, {"x": np.zeros(3)}]
+    packed = pack_feeds(example, samples)
+
+    class _Archive(dict):
+        files = property(lambda self: list(self))
+
+    feeds, back = unpack_feeds(_Archive(packed))
+    assert feeds is not None and feeds["x"].tolist() == [1.0, 1.0]
+    assert [s["x"].size for s in back] == [1, 3]
+    assert unpack_feeds(_Archive(pack_feeds(None, []))) == (None, [])

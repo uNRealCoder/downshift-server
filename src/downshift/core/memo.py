@@ -19,7 +19,6 @@ import sys
 import threading
 from collections import OrderedDict
 from collections.abc import Callable
-from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -29,11 +28,16 @@ import torch
 
 from downshift import settings
 from downshift._version import __version__
+from downshift.entities.cache import ExportEntry
 
 if TYPE_CHECKING:
-    from downshift.core.verdict import ExportVerdict
+    from downshift.entities.verdict import ExportVerdict
 
 logger = logging.getLogger("downshift.memo")
+
+# The layout version of model.manifest.json and of the export cache (entries and index.json).
+# Change it only when a reader of the old layout would misread the new one.
+FORMAT_VERSION = 1
 
 MAX_ENTRIES = 2
 STORED_STATUSES = frozenset({"CLEAN", "DEGRADED"})
@@ -43,32 +47,6 @@ _TOOLS = ("torch", "onnx", "onnxscript", "onnxruntime", "transformers", "torch_g
 _LIBRARY_PACKAGES = ("torch", "transformers", "torch_geometric")
 _SENTENCE_TRANSFORMERS_DIR = re.compile(r"^\d+_\w+$")
 _SCALAR_TYPES = (bool, int, float, str, bytes, type(None))
-
-
-@dataclass
-class ExportEntry:
-    """What a boot needs to skip the export and the verification. A graph with external data
-    has no `onnx_bytes`; `onnx_path` names its .onnx file next to the data file."""
-
-    verdict: dict
-    input_names: list[str]
-    axis_bounds: dict[str, list[list]]
-    feeds: dict[str, np.ndarray] | None = None
-    onnx_bytes: bytes = field(default=b"", repr=False)
-    onnx_path: Path | None = None
-
-    @property
-    def status(self) -> str:
-        return str(self.verdict["status"])
-
-    @property
-    def external(self) -> bool:
-        return not self.onnx_bytes and self.onnx_path is not None
-
-    def example_inputs(self) -> tuple | None:
-        if self.feeds is None:
-            return None
-        return tuple(self.feeds[name] for name in self.input_names)
 
 
 class ExportMemo:
@@ -192,7 +170,7 @@ def common_parts(
     *,
     adapter: object,
     dynamic: dict[str, list[int]] | None,
-    k: int,
+    samples: int,
     seed: int,
     atol: float | None,
     rtol: float | None,
@@ -207,11 +185,12 @@ def common_parts(
     return {
         "adapter": _code_ref(adapter),
         "dynamic": dynamic,
-        "k": k,
+        "samples": samples,
         "seed": seed,
         "atol": atol,
         "rtol": rtol,
         "tolerances": {name: list(pair) for name, pair in settings.TOLERANCES.items()},
+        "tolerance_cosine": settings.TOLERANCE_COSINE,
         "vary": _code_ref(vary),
         "axis_max": axis_max,
         "pooling": str(pooling) if pooling is not None else None,
@@ -226,7 +205,7 @@ def run_options(opts: Any, adapter: object) -> dict:
     return {
         "adapter": adapter,
         "dynamic": opts.dynamic,
-        "k": opts.k,
+        "samples": opts.samples,
         "seed": opts.seed,
         "atol": opts.atol,
         "rtol": opts.rtol,
@@ -396,6 +375,7 @@ def build_entry(
         input_names=list(input_names),
         axis_bounds=axis_bounds,
         feeds=feeds,
+        samples=verdict.sample_feeds,
         onnx_bytes=verdict.onnx_bytes,
         onnx_path=verdict.onnx_path,
     )

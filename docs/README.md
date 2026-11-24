@@ -2,16 +2,21 @@
 
 Downshift serves a model that you already downloaded, over HTTP. Before it answers a request, it exports the model to ONNX and compares the ONNX graph with PyTorch on inputs that the exporter did not see. The check gives a verdict: CLEAN, DEGRADED, FAILED or UNVERIFIED. The verdict selects the backend behind `/predict`.
 
-For a first walkthrough, read the repo [`README.md`](../README.md). The pages below are reference material. Each one describes the code as it is.
+For a first walkthrough, read the repo [`README.md`](https://github.com/uNRealCoder/downshift-server/blob/main/README.md). To learn the code, read [`architecture.md`](architecture.md) and then [`walkthrough.md`](walkthrough.md). The other pages are reference material. Each one describes the code as it is.
 
 | Page | Read it to |
 |---|---|
+| [`architecture.md`](architecture.md) | Learn how the parts fit together: the flow from `MODEL` to verdict to backend, the layers, the design rules and a glossary. |
+| [`walkthrough.md`](walkthrough.md) | Run the three verdicts, export a file and call a server, with the code to read at each step. |
 | [`cli.md`](cli.md) | Use `downshift check`, `export` and `serve`: every flag, environment variable, log level and exit code. |
 | [`http-api.md`](http-api.md) | Call a server: every route, body, status code, header and wire format (JSON, base64, safetensors, text, graphs). |
+| [`openai.md`](openai.md) | Use the OpenAI embeddings routes (`/v1/embeddings`) with an OpenAI client: the fields, `--served-model-name`, `--matryoshka` and the errors. |
 | [`production.md`](production.md) | Deploy a server: authentication, HTTPS, probes, workers, threads, the result cache, sizing, Kubernetes and GPUs. |
 | [`python-api.md`](python-api.md) | Use downshift as a library: `check`, `export`, `intake`, `app_for` and the verdict types. |
 | [`serving.md`](serving.md) | Change the serving layer: `ServeOptions`, `ServingState`, the boot builders, the request path and the backends. |
 | [`adapters.md`](adapters.md) | Add a model family with your own adapter. |
+| [`stability.md`](stability.md) | See which routes, codes, metrics, options, variables and names stay the same in 1.x. It also defines a breaking change and the deprecation rule. |
+| [`reference/http.md`](reference/http.md), [`reference/python.md`](reference/python.md) | Browse the generated API reference: the OpenAPI document and the docstrings. They are on the documentation site. |
 | [`compatibility.md`](compatibility.md) | See which export hazards downshift catches. A script generates this page. |
 
 ## Module map
@@ -38,9 +43,10 @@ All modules are in `src/downshift/`. The modules that the CLI imports at start d
 | `core/manifest.py`, `core/feeds.py`, `core/phase.py` | The manifest of `export`, example feeds, and the boot phases. |
 | `adapters/` | The `Adapter` protocol (`base.py`), the registry, and the `generic`, `pyg` and `hf` adapters. `embedding.py`, `pooling.py` and `text.py` are the Hugging Face parts. |
 | `serve/__init__.py` | `app_for`. |
-| `serve/options.py` | `ServeOptions`, `BackendChoice` and `ExecutionChoice`. |
+| `entities/` | The data types: every dataclass, and the enums and aliases that they need. `entities/options.py` has `ServeOptions`, `BackendChoice` and `ExecutionChoice`. No module in it has logic of its own. |
 | `serve/engine.py`, `serve/reuse.py` | `ServingState`, the two boot builders, the backend selection and the warmup. `reuse.py` looks up the export cache. |
-| `serve/app.py` | `build_app`, the routes, the request-ID and API-key middleware, and the loading of `--middleware`. |
-| `serve/predict.py`, `serve/result_cache.py` | The request path of `/predict` and `/predict/graph`, and the result cache. |
+| `serve/app.py`, `serve/middleware.py` | `build_app` and the routes. The request-ID and API-key middleware, and the loading of `--middleware`, are in `middleware.py`. |
+| `serve/predict.py`, `serve/parse.py`, `serve/feeds.py`, `serve/stages.py`, `serve/encode.py`, `serve/cached.py`, `serve/result_cache.py` | The request path of `/predict` and `/predict/graph`: `run_predict` and its parts (parse, input feeds and checks, pool hops, response encoding, the cached path), and the result cache. |
+| `serve/errors.py`, `serve/metrics.py`, `serve/numerics.py`, `serve/openai.py` | The error codes and the error body. The metrics of one worker and their Prometheus text. The serving check on the serving device. The `/v1` routes (OpenAI-compatible). |
 | `serve/describe.py`, `serve/schemas.py` | `GET /schema`, and the request and response models. |
 | `serve/backends.py`, `serve/codec.py`, `serve/graphs.py` | The two backends, the base64 and safetensors codecs, and graph batching. |

@@ -37,17 +37,12 @@ def app_for(
     directory for the tokenizer, pooling and labels (as --tokenizer-from). `source` is the
     label of /metadata and /schema. `options` are ServeOptions fields.
 
-    `api_key` defaults to DOWNSHIFT_SERVER_API_KEY; None turns it off. An earlier export of
+    `api_key` defaults to DOWNSHIFT_API_KEY; None turns it off. An earlier export of
     the same model and options is reused from the in-process memo and from
     `export_cache_dir`; `cache=False` skips both.
     """
-    from downshift.loading import (
-        LoadedModel,
-        LoadSpec,
-        hf_repo_dir,
-        load_model,
-        resolve_tokenizer_source,
-    )
+    from downshift.entities.loading import LoadedModel, LoadSpec
+    from downshift.loading import hf_repo_dir, load_model, resolve_tokenizer_source
     from downshift.serve.app import build_app
     from downshift.serve.engine import ServeOptions
     from downshift.serve.reuse import prepare_serving_reusing
@@ -88,4 +83,10 @@ def app_for(
         ), ref
 
     state = prepare_serving_reusing(load, opts, resolved_tokenizer_from, repo=repo, cache=cache)
-    return build_app(state=state, middleware=tuple(middleware), api_key=api_key)
+    return build_app(
+        state=state,
+        middleware=tuple(middleware),
+        api_key=api_key,
+        metrics=opts.metrics,
+        request_id_headers=opts.enable_request_id_headers,
+    )

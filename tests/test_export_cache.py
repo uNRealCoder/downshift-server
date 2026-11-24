@@ -15,12 +15,12 @@ from typer.testing import CliRunner
 
 import downshift
 from downshift.cli.main import app as cli_app
-from downshift.cli.runtime import ServeArgs
 from downshift.core import capture, export_cache
 from downshift.core.memo import MEMO
-from downshift.loading import LoadSpec
+from downshift.entities.cli import ServeArgs
+from downshift.entities.loading import LoadSpec
+from downshift.entities.options import ServeOptions
 from downshift.serve import app_for
-from downshift.serve.options import ServeOptions
 from tests.models import clean_mlp
 
 runner = CliRunner()
@@ -69,15 +69,14 @@ def no_weights(monkeypatch):
 def test_the_default_writes_nothing(tmp_path, repo):
     before = sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*"))
 
-    app_for(repo, k=1, warmup=0)
-    app_for(mlp(), clean_mlp.make_inputs(), k=1, warmup=0)
+    app_for(repo, samples=1, warmup=0)
+    app_for(mlp(), clean_mlp.make_inputs(), samples=1, warmup=0)
 
     assert sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*")) == before
 
 
-@pytest.mark.needs_torch_26
 def test_a_restart_reuses_the_export_and_never_loads_weights(cache, repo, no_weights):
-    first = app_for(repo, k=2, warmup=1, export_cache_dir=str(cache))
+    first = app_for(repo, samples=2, warmup=1, export_cache_dir=str(cache))
     assert {"export", "verify"} <= set(boot(first))
     expected = TestClient(first).post("/predict", json={"text": ["hello world"]}).json()
     (entry,) = entries(cache)
@@ -91,7 +90,7 @@ def test_a_restart_reuses_the_export_and_never_loads_weights(cache, repo, no_wei
 
     MEMO.clear()
     no_weights()
-    second = app_for(repo, k=2, warmup=1, export_cache_dir=str(cache))
+    second = app_for(repo, samples=2, warmup=1, export_cache_dir=str(cache))
 
     assert "export" not in boot(second) and "verify" not in boot(second)
     client = TestClient(second)
@@ -100,17 +99,16 @@ def test_a_restart_reuses_the_export_and_never_loads_weights(cache, repo, no_wei
     assert len(entries(cache)) == 1
 
 
-@pytest.mark.needs_torch_26
 def test_the_boot_banner_says_where_the_export_came_from(cache, repo, no_weights):
     from downshift.cli import render
     from downshift.serve.reuse import prepare_serving_reusing
 
-    options = ServeOptions(k=1, warmup=0, export_cache_dir=str(cache))
+    options = ServeOptions(samples=1, warmup=0, export_cache_dir=str(cache))
 
     def load():
         raise AssertionError("loaded on a hit")
 
-    app_for(repo, k=1, warmup=0, export_cache_dir=str(cache))
+    app_for(repo, samples=1, warmup=0, export_cache_dir=str(cache))
     no_weights()
     memory = prepare_serving_reusing(load, options, repo=repo)
     MEMO.clear()
@@ -121,15 +119,14 @@ def test_the_boot_banner_says_where_the_export_came_from(cache, repo, no_weights
     assert "reused from --export-cache-dir" in render._boot_text(disk)
 
 
-@pytest.mark.needs_torch_26
 def test_a_corrupted_graph_is_exported_again_and_overwritten(cache, repo, caplog):
-    app_for(repo, k=1, warmup=0, export_cache_dir=str(cache))
+    app_for(repo, samples=1, warmup=0, export_cache_dir=str(cache))
     (entry,) = entries(cache)
     (entry / "model.onnx").write_bytes(b"not an onnx file")
     MEMO.clear()
 
     with caplog.at_level(logging.WARNING, logger="downshift.export_cache"):
-        again = app_for(repo, k=1, warmup=0, export_cache_dir=str(cache))
+        again = app_for(repo, samples=1, warmup=0, export_cache_dir=str(cache))
 
     assert {"export", "verify"} <= set(boot(again))
     assert len([r for r in caplog.records if "unusable" in r.getMessage()]) == 1
@@ -137,31 +134,32 @@ def test_a_corrupted_graph_is_exported_again_and_overwritten(cache, repo, caplog
     assert (entry / "model.onnx").read_bytes() != b"not an onnx file"
 
     MEMO.clear()
-    healed = app_for(repo, k=1, warmup=0, export_cache_dir=str(cache))
+    healed = app_for(repo, samples=1, warmup=0, export_cache_dir=str(cache))
     assert "export" not in boot(healed)
 
 
 def test_a_damaged_data_file_or_manifest_is_a_miss(cache):
-    app_for(mlp(), clean_mlp.make_inputs(), k=1, warmup=0, export_cache_dir=str(cache))
+    app_for(mlp(), clean_mlp.make_inputs(), samples=1, warmup=0, export_cache_dir=str(cache))
     (entry,) = entries(cache)
     (entry / "serving.json").write_text("{")
     MEMO.clear()
 
-    again = app_for(mlp(), clean_mlp.make_inputs(), k=1, warmup=0, export_cache_dir=str(cache))
+    again = app_for(
+        mlp(), clean_mlp.make_inputs(), samples=1, warmup=0, export_cache_dir=str(cache)
+    )
 
     assert {"export", "verify"} <= set(boot(again))
 
 
-@pytest.mark.needs_torch_26
 def test_a_leftover_temp_directory_is_ignored(cache, repo, no_weights):
     leftover = cache / "deadbeef.tmp-1234-abcd"
     leftover.mkdir()
     (leftover / "model.onnx").write_bytes(b"half written")
 
-    app_for(repo, k=1, warmup=0, export_cache_dir=str(cache))
+    app_for(repo, samples=1, warmup=0, export_cache_dir=str(cache))
     MEMO.clear()
     no_weights()
-    again = app_for(repo, k=1, warmup=0, export_cache_dir=str(cache))
+    again = app_for(repo, samples=1, warmup=0, export_cache_dir=str(cache))
 
     assert "export" not in boot(again)
     assert len(entries(cache)) == 1
@@ -175,7 +173,7 @@ def test_a_failed_write_cleans_up_its_temp_directory(cache, monkeypatch):
         raise RuntimeError("crash before the rename")
 
     monkeypatch.setattr(export_cache.ExportCache, "_install", staticmethod(crash))
-    entry = entry_from_verdict(downshift.check(mlp(), clean_mlp.make_inputs(), k=1))
+    entry = entry_from_verdict(downshift.check(mlp(), clean_mlp.make_inputs(), samples=1))
     assert entry is not None
 
     with pytest.raises(RuntimeError):
@@ -188,7 +186,7 @@ def test_a_failed_write_cleans_up_its_temp_directory(cache, monkeypatch):
 def test_an_external_data_graph_is_on_disk_but_not_in_memory(cache, monkeypatch):
     monkeypatch.setattr(capture, "EXTERNAL_DATA_THRESHOLD", 0)
     inputs = clean_mlp.make_inputs()
-    first = app_for(mlp(), inputs, k=1, warmup=1, export_cache_dir=str(cache))
+    first = app_for(mlp(), inputs, samples=1, warmup=1, export_cache_dir=str(cache))
     expected = TestClient(first).post("/predict", json={"inputs": {"x": inputs[0].tolist()}}).json()
 
     assert len(MEMO) == 0
@@ -196,7 +194,7 @@ def test_an_external_data_graph_is_on_disk_but_not_in_memory(cache, monkeypatch)
     assert (entry / "model.onnx").exists()
     assert any(p.name.endswith(".data") for p in entry.iterdir())
 
-    second = app_for(mlp(), inputs, k=1, warmup=1, export_cache_dir=str(cache))
+    second = app_for(mlp(), inputs, samples=1, warmup=1, export_cache_dir=str(cache))
 
     assert "export" not in boot(second)
     got = TestClient(second).post("/predict", json={"inputs": {"x": inputs[0].tolist()}}).json()
@@ -208,10 +206,12 @@ def test_export_to_a_directory_after_an_external_disk_hit(cache, tmp_path, monke
 
     monkeypatch.setattr(capture, "EXTERNAL_DATA_THRESHOLD", 0)
     inputs = clean_mlp.make_inputs()
-    downshift.export(mlp(), tmp_path / "a.onnx", inputs, k=1, export_cache_dir=str(cache))
+    downshift.export(mlp(), tmp_path / "a.onnx", inputs, samples=1, export_cache_dir=str(cache))
     MEMO.clear()
 
-    verdict = downshift.export(mlp(), tmp_path / "b.onnx", inputs, k=1, export_cache_dir=str(cache))
+    verdict = downshift.export(
+        mlp(), tmp_path / "b.onnx", inputs, samples=1, export_cache_dir=str(cache)
+    )
 
     assert verdict.status == "CLEAN"
     assert (tmp_path / "b.onnx.data").exists()
@@ -221,7 +221,6 @@ def test_export_to_a_directory_after_an_external_disk_hit(cache, tmp_path, monke
     assert session.get_inputs()[0].name == "x"
 
 
-@pytest.mark.needs_torch_26
 def test_a_content_digest_is_computed_once_per_file_across_boots(
     cache, repo, no_weights, monkeypatch
 ):
@@ -232,15 +231,15 @@ def test_a_content_digest_is_computed_once_per_file_across_boots(
         hashed.append(Path(path).name)
         return real(path)
 
-    app_for(repo, k=1, warmup=0, export_cache_dir=str(cache))
+    app_for(repo, samples=1, warmup=0, export_cache_dir=str(cache))
     monkeypatch.setattr(export_cache, "sha256_file", counting)
     (cache / "index.json").unlink()
     MEMO.clear()
     no_weights()
 
-    app_for(repo, k=1, warmup=0, export_cache_dir=str(cache))
+    app_for(repo, samples=1, warmup=0, export_cache_dir=str(cache))
     MEMO.clear()
-    app_for(repo, k=1, warmup=0, export_cache_dir=str(cache))
+    app_for(repo, samples=1, warmup=0, export_cache_dir=str(cache))
 
     assert hashed.count("model.safetensors") == 1
 
@@ -262,6 +261,20 @@ def test_an_unwritable_directory_is_a_usage_error(tmp_path, repo):
         app_for(mlp(), clean_mlp.make_inputs(), export_cache_dir=str(missing))
 
 
+def test_export_reads_the_cache_directory_at_call_time_and_none_turns_it_off(
+    cache, tmp_path, monkeypatch
+):
+    monkeypatch.setattr("downshift.settings.EXPORT_CACHE_DIR", str(cache))
+    inputs = clean_mlp.make_inputs()
+
+    downshift.export(mlp(), tmp_path / "off.onnx", inputs, samples=1, export_cache_dir=None)
+    assert entries(cache) == []
+
+    MEMO.clear()
+    downshift.export(mlp(), tmp_path / "env.onnx", inputs, samples=1)
+    assert len(entries(cache)) == 1
+
+
 def test_check_ignores_the_cache_directory(cache, monkeypatch):
     monkeypatch.setattr("downshift.settings.EXPORT_CACHE_DIR", str(cache))
 
@@ -273,11 +286,18 @@ def test_check_ignores_the_cache_directory(cache, monkeypatch):
         cli_app,
         ["check", "tests.models.clean_mlp:make_model", "--export-cache-dir", str(cache)],
     )
-    assert rejected.exit_code == 2
+    assert rejected.exit_code == 4
 
 
 def test_cache_false_skips_the_disk_tier_too(cache):
-    app_for(mlp(), clean_mlp.make_inputs(), k=1, warmup=0, export_cache_dir=str(cache), cache=False)
+    app_for(
+        mlp(),
+        clean_mlp.make_inputs(),
+        samples=1,
+        warmup=0,
+        export_cache_dir=str(cache),
+        cache=False,
+    )
 
     assert list(cache.iterdir()) == []
 
@@ -303,9 +323,9 @@ def test_a_worker_with_an_artifact_never_opens_the_cache(cache, monkeypatch, tmp
     monkeypatch.setattr(export_cache, "ExportCache", refuse)
     from downshift.serve import engine
 
-    built = SimpleNamespace(timings={})
+    built = SimpleNamespace(timings={}, verdict=SimpleNamespace(onnx_bytes=b"graph"))
     monkeypatch.setattr(engine, "state_from_entry", lambda *args, **kwargs: built)
-    from downshift.cli.runtime import ArtifactHandoff
+    from downshift.entities.cli import ArtifactHandoff
 
     args = ServeArgs(
         load=LoadSpec("m"),
@@ -317,3 +337,114 @@ def test_a_worker_with_an_artifact_never_opens_the_cache(cache, monkeypatch, tmp
     )
 
     assert runtime._build_serving_state(args) is built
+
+
+@pytest.mark.parametrize("version", [2, None])
+def test_an_entry_with_another_format_version_is_exported_again(cache, repo, caplog, version):
+    app_for(repo, samples=1, warmup=0, export_cache_dir=str(cache))
+    (entry,) = entries(cache)
+    manifest_file = entry / "model.manifest.json"
+    manifest = json.loads(manifest_file.read_text())
+    assert manifest["format_version"] == 1
+    if version is None:
+        del manifest["format_version"]
+    else:
+        manifest["format_version"] = version
+    manifest_file.write_text(json.dumps(manifest))
+    MEMO.clear()
+
+    with caplog.at_level(logging.WARNING, logger="downshift.export_cache"):
+        again = app_for(repo, samples=1, warmup=0, export_cache_dir=str(cache))
+
+    assert {"export", "verify"} <= set(boot(again))
+    warnings = [r.getMessage() for r in caplog.records if "unusable" in r.getMessage()]
+    assert len(warnings) == 1
+    assert "format version" in warnings[0]
+    assert "Exporting again" in warnings[0]
+    assert json.loads(manifest_file.read_text())["format_version"] == 1
+
+
+def test_the_index_has_the_format_version_and_another_one_is_rebuilt(cache, tmp_path, caplog):
+    target = tmp_path / "weights.bin"
+    target.write_bytes(b"abc")
+    first = export_cache.ExportCache(cache)
+    digest = first.fingerprint(target)
+    saved = json.loads((cache / "index.json").read_text())
+    assert saved["format_version"] == 1
+    assert list(saved["digests"].values()) == [digest]
+
+    assert export_cache.ExportCache(cache).fingerprint(target) == digest
+
+    (cache / "index.json").write_text(json.dumps({"format_version": 2, "digests": {"x": "y"}}))
+    with caplog.at_level(logging.WARNING, logger="downshift.export_cache"):
+        second = export_cache.ExportCache(cache)
+        assert second.fingerprint(target) == digest
+        second.fingerprint(target)
+    messages = [r.getMessage() for r in caplog.records if "format version" in r.getMessage()]
+    assert len(messages) == 1
+    assert "makes the index again" in messages[0]
+    assert json.loads((cache / "index.json").read_text())["format_version"] == 1
+
+
+def test_an_index_without_a_format_version_is_rebuilt(cache, tmp_path, caplog):
+    (cache / "index.json").write_text(json.dumps({"some|file": "digest"}))
+    with caplog.at_level(logging.WARNING, logger="downshift.export_cache"):
+        assert export_cache.ExportCache(cache)._load_index() == {}
+    assert len([r for r in caplog.records if "format version" in r.getMessage()]) == 1
+
+
+def _stale(path: Path, age_seconds: float) -> None:
+    import os
+    import time
+
+    path.mkdir()
+    (path / "model.onnx").write_bytes(b"x")
+    old = time.time() - age_seconds
+    os.utime(path, (old, old))
+
+
+def test_a_new_cache_removes_old_leftovers_of_killed_writers(cache):
+    old_tmp, old_old = cache / "k.tmp-1-aa", cache / "k.old-1-bb"
+    new_tmp, entry = cache / "k.tmp-2-cc", cache / "k"
+    _stale(old_tmp, 7200)
+    _stale(old_old, 7200)
+    _stale(new_tmp, 10)
+    _stale(entry, 7200)
+
+    export_cache.ExportCache(cache)
+
+    assert not old_tmp.exists()
+    assert not old_old.exists()
+    assert new_tmp.exists()
+    assert entry.exists()
+
+
+def test_a_missing_cache_directory_does_not_break_the_clean_up(cache, monkeypatch):
+    export_cache.ExportCache(cache)
+
+    def boom(self):
+        raise OSError("gone")
+
+    monkeypatch.setattr(Path, "iterdir", boom)
+    export_cache.ExportCache(cache)
+
+
+def test_an_input_named_file_or_allow_pickle_survives_the_disk_tier(cache):
+    import numpy as np
+
+    from downshift.core.memo import entry_from_verdict
+
+    inputs = clean_mlp.make_inputs()
+    verdict = downshift.check(mlp(), inputs, samples=1)
+    entry = entry_from_verdict(verdict)
+    assert entry is not None
+    feeds = {"file": np.ones(2, dtype=np.float32), "allow_pickle": np.zeros(2, dtype=np.int64)}
+    entry.feeds = feeds
+    disk = export_cache.ExportCache(cache)
+
+    disk.put("key", entry)
+    got = disk.get("key")
+
+    assert got is not None and got.feeds is not None
+    assert sorted(got.feeds) == ["allow_pickle", "file"]
+    np.testing.assert_array_equal(got.feeds["file"], feeds["file"])

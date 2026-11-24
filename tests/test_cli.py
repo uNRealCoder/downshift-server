@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -14,12 +15,12 @@ from typer.testing import CliRunner
 import downshift
 from downshift.cli import main, runtime
 from downshift.cli.main import app
-from downshift.cli.runtime import ArtifactHandoff, ServeArgs
-from downshift.core.axes import DimBound, axis_bounds_from_json, axis_bounds_to_json
-from downshift.loading import LoadSpec
-from downshift.serve.options import BackendChoice, ServeOptions
-from downshift.serve.schemas import OutputEncoding
-from tests.conftest import TLS_KEY_PASSWORD
+from downshift.core.axes import axis_bounds_from_json, axis_bounds_to_json
+from downshift.entities.axes import DimBound
+from downshift.entities.cli import ArtifactHandoff, ServeArgs
+from downshift.entities.loading import LoadSpec
+from downshift.entities.options import BackendChoice, OutputEncoding, ServeOptions
+from tests.conftest import REPO_ROOT, TLS_KEY_PASSWORD
 from tests.models import clean_mlp
 
 CLEAN = "tests.models.clean_mlp:make_model"
@@ -36,7 +37,14 @@ def run(*args: str):
 
 def parse(result) -> dict:
     assert result.exit_code in (0, 1, 2, 3), result.output
-    return json.loads(result.stdout)
+    try:
+        parsed: dict = json.loads(result.stdout)
+    except ValueError:
+        # Show what the command wrote. The bare JSON error does not.
+        pytest.fail(
+            f"stdout is not JSON.\nstdout: {result.stdout[:800]!r}\noutput: {result.output[:800]!r}"
+        )
+    return parsed
 
 
 @pytest.fixture(scope="module")
@@ -251,6 +259,9 @@ def _fake_uvicorn_server(monkeypatch, captured: dict) -> None:
             ssl_certfile=config.ssl_certfile,
             ssl_keyfile=config.ssl_keyfile,
             ssl_ciphers=config.ssl_ciphers,
+            root_path=config.root_path,
+            forwarded_allow_ips=config.forwarded_allow_ips,
+            timeout_graceful_shutdown=config.timeout_graceful_shutdown,
         )
 
     def fake_run(self) -> None:
@@ -300,6 +311,40 @@ def test_serve_with_a_certificate_serves_https(monkeypatch, workers, tls_files):
     # also enables NULL and anonymous ciphers.
     assert captured["ssl_ciphers"] is None
     assert "https://127.0.0.1:" in result.output
+
+
+@pytest.mark.parametrize("workers", ["1", "2"])  # uvicorn.Server, then uvicorn.run
+def test_serve_passes_the_proxy_and_shutdown_options_to_uvicorn(monkeypatch, workers):
+    _, captured = _serve_captured(
+        monkeypatch,
+        "--workers",
+        workers,
+        "--root-path",
+        "/models/bert",
+        "--forwarded-allow-ips",
+        "10.0.0.1,10.0.0.2",
+        "--timeout-graceful-shutdown",
+        "45",
+    )
+    assert captured["root_path"] == "/models/bert"
+    assert captured["forwarded_allow_ips"] == "10.0.0.1,10.0.0.2"
+    assert captured["timeout_graceful_shutdown"] == 45
+
+
+@pytest.mark.parametrize("workers", ["1", "2"])
+def test_serve_defaults_for_the_proxy_and_shutdown_options(monkeypatch, workers):
+    monkeypatch.delenv("FORWARDED_ALLOW_IPS", raising=False)
+    _, captured = _serve_captured(monkeypatch, "--workers", workers)
+    assert captured["root_path"] == ""
+    assert captured["timeout_graceful_shutdown"] == 30
+    # Not given: uvicorn keeps its own default. The default depends on the uvicorn version.
+    uvicorn_default = uvicorn.Config("downshift:app").forwarded_allow_ips
+    assert captured.get("forwarded_allow_ips", uvicorn_default) == uvicorn_default
+
+
+def test_serve_timeout_graceful_shutdown_zero_waits_without_a_limit(monkeypatch):
+    _, captured = _serve_captured(monkeypatch, "--timeout-graceful-shutdown", "0")
+    assert captured["timeout_graceful_shutdown"] is None
 
 
 def test_serve_without_a_certificate_serves_http(monkeypatch):
@@ -375,27 +420,36 @@ def test_serve_passes_max_queue_and_request_timeout(monkeypatch):
     assert "Capacity" in result.output
 
 
-def _app_access_log(api) -> bool:
-    """uvicorn's own access log is always off; the app's RequestIdMiddleware writes the line."""
-    middleware = next(m for m in api.user_middleware if m.cls.__name__ == "RequestIdMiddleware")
-    return middleware.kwargs["access_log"]
+def _middleware_names(api) -> set[str]:
+    return {m.cls.__name__ for m in api.user_middleware}
 
 
-def test_serve_access_log_defaults_to_enabled(monkeypatch):
+def test_serve_defaults_to_the_access_log_without_a_request_id(monkeypatch):
+    """uvicorn's own access log is always off. The app writes the line, and it has no request
+    ID middleware unless the user asks for it."""
     _, captured = _serve_captured(monkeypatch)
     assert captured["access_log"] is False
-    assert _app_access_log(captured["app"]) is True
+    assert "RequestObserverMiddleware" in _middleware_names(captured["app"])
+    assert "RequestIdMiddleware" not in _middleware_names(captured["app"])
+
+
+def test_serve_enable_request_id_headers_installs_the_middleware(monkeypatch):
+    _, captured = _serve_captured(monkeypatch, "--enable-request-id-headers", "--no-access-log")
+    assert "RequestIdMiddleware" in _middleware_names(captured["app"])
+    assert "RequestObserverMiddleware" not in _middleware_names(captured["app"])
 
 
 def test_serve_no_access_log_disables_it(monkeypatch):
     _, captured = _serve_captured(monkeypatch, "--no-access-log")
-    assert _app_access_log(captured["app"]) is False
+    assert "RequestObserverMiddleware" not in _middleware_names(captured["app"])
 
 
 @pytest.mark.parametrize("value", ["hex", "safetensors"])
 def test_serve_rejects_unknown_output_encoding(value):
     result = run("serve", CLEAN, "--output-encoding", value)
-    assert result.exit_code == 2, result.output  # typer usage error: not one of the choices
+    assert result.exit_code == main.EXIT_USAGE, (
+        result.output
+    )  # typer usage error: not one of the choices
 
 
 def test_serve_load_failure_on_the_loader_thread_exits_with_the_usual_code(monkeypatch):
@@ -472,7 +526,7 @@ def test_serve_app_factory_rebuilds_the_app_from_env(monkeypatch):
     args = runtime.ServeArgs(
         load=LoadSpec(CLEAN),
         options=ServeOptions(
-            k=1,
+            samples=1,
             device="cpu",
             warmup=1,
             output_encoding=OutputEncoding.base64,
@@ -499,13 +553,16 @@ def test_a_worker_that_cannot_load_exits_with_uvicorns_startup_failure_code(monk
     It would then reload the same failing model forever. STARTUP_FAILURE makes it stop the
     server."""
     pytest.importorskip("downshift.serve.app")
-    from uvicorn.config import STARTUP_FAILURE
+    import uvicorn.config
 
     from downshift.cli import runtime
 
+    # Older uvicorn does not declare the name in uvicorn.config. Its value is 3 in every release.
+    STARTUP_FAILURE = getattr(uvicorn.config, "STARTUP_FAILURE", 3)
+
     args = runtime.ServeArgs(
         load=LoadSpec(CLEAN),
-        options=ServeOptions(k=1, device="cpu", warmup=1),
+        options=ServeOptions(samples=1, device="cpu", warmup=1),
         reference=None,
         middleware=None,
         log_level="warning",
@@ -589,6 +646,32 @@ def test_serve_workers_hands_an_external_data_export_to_the_workers(monkeypatch)
     assert seen["api"].state.serving.backend.name == "onnxruntime"
 
 
+def test_worker_handoff_keeps_inputs_named_like_numpy_savez_keywords():
+    """numpy.savez has its own keywords `file` and `allow_pickle`. An input with such a name must
+    reach the worker."""
+    import shutil
+    from types import SimpleNamespace
+
+    names = ["file", "allow_pickle"]
+    arrays = (torch.ones(2, 3), torch.zeros(2, 1))
+    verdict = SimpleNamespace(_tmpdir=None, onnx_path=None, onnx_bytes=b"graph", sample_feeds=[])
+    state = SimpleNamespace(verdict=verdict, example_inputs=arrays, input_names=names)
+
+    onnx_path, feeds_path, temp_dir = runtime._write_onnx_artifact(state)
+    try:
+        handoff = ArtifactHandoff(
+            verdict={}, input_names=names, kind="onnx-file", feeds_path=str(feeds_path)
+        )
+        feeds = handoff.entry().feeds
+    finally:
+        shutil.rmtree(temp_dir)
+
+    assert feeds is not None
+    assert sorted(feeds) == sorted(names)
+    assert feeds["file"].shape == (2, 3)
+    assert feeds["allow_pickle"].shape == (2, 1)
+
+
 def test_serve_workers_degraded_ships_a_torch_artifact_and_warns(monkeypatch):
     seen: dict = {}
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: seen.update(app=app, **kw))
@@ -621,7 +704,7 @@ def test_serve_app_factory_from_onnx_artifact_never_calls_capture(monkeypatch, t
     args = runtime.ServeArgs(
         load=LoadSpec(CLEAN),
         options=ServeOptions(
-            k=1, device="cpu", warmup=1, max_input_bytes=1024, max_body_bytes=2048
+            samples=1, device="cpu", warmup=1, max_input_bytes=1024, max_body_bytes=2048
         ),
         reference=None,
         middleware=None,
@@ -672,7 +755,7 @@ def test_check_bad_axis_max_is_usage_error(value):
 
 
 def test_serve_axis_max_round_trips_through_serve_args():
-    from downshift.cli.runtime import ServeArgs
+    from downshift.entities.cli import ServeArgs
 
     args = ServeArgs(
         load=LoadSpec(CLEAN),
@@ -704,12 +787,12 @@ def test_serve_passes_execution_inline(monkeypatch):
 
 def test_serve_rejects_an_unknown_execution_mode(monkeypatch):
     result = run("serve", CLEAN, "--execution", "auto")
-    assert result.exit_code == 2, result.output
+    assert result.exit_code == main.EXIT_USAGE, result.output
 
 
 def test_serve_execution_round_trips_through_serve_args():
-    from downshift.cli.runtime import ServeArgs
-    from downshift.serve.options import ExecutionChoice
+    from downshift.entities.cli import ServeArgs
+    from downshift.entities.options import ExecutionChoice
 
     args = ServeArgs(
         load=LoadSpec(CLEAN),
@@ -742,6 +825,18 @@ def test_serve_server_timing_flag_reaches_the_options_and_the_workers(monkeypatc
     _serve_captured(monkeypatch, "--server-timing", "--workers", "2")
     args = runtime.ServeArgs.from_json(os.environ[runtime._SERVE_ARGS_ENV])
     assert args.options.server_timing is True
+
+
+def test_serve_served_model_name_reaches_the_options_and_the_workers(monkeypatch):
+    _, captured = _serve_captured(monkeypatch)
+    assert captured["app"].state.serving.options.served_model_name is None
+
+    _, captured = _serve_captured(monkeypatch, "--served-model-name", "my-model")
+    assert captured["app"].state.serving.options.served_model_name == "my-model"
+
+    _serve_captured(monkeypatch, "--served-model-name", "my-model", "--workers", "2")
+    args = runtime.ServeArgs.from_json(os.environ[runtime._SERVE_ARGS_ENV])
+    assert args.options.served_model_name == "my-model"
 
 
 BOUNDS = {
@@ -799,3 +894,122 @@ def test_serve_args_round_trip_without_an_artifact_defaults_access_log_on():
     assert restored == args
     assert restored.artifact is None
     assert restored.access_log is True
+
+
+def test_serve_matryoshka_flag_reaches_the_options(monkeypatch):
+    _, captured = _serve_captured(monkeypatch)
+    assert captured["app"].state.serving.options.matryoshka is False
+
+    _, captured = _serve_captured(monkeypatch, "--matryoshka")
+    assert captured["app"].state.serving.options.matryoshka is True
+
+
+@pytest.mark.parametrize("device", ["gpu", "cuda:", "cuda:-1", "cuda:x", "CPU"])
+def test_serve_bad_device_is_usage_error(device):
+    result = run("serve", CLEAN, "--device", device)
+    assert result.exit_code == 4, result.output
+    assert "Use auto, cpu, cuda or cuda:N" in result.output
+
+
+def _downshift(*args: str, **env: str) -> subprocess.CompletedProcess:
+    full_env = {**os.environ, "PYTHONPATH": str(REPO_ROOT / "src"), **env}
+    return subprocess.run(
+        [sys.executable, "-m", "downshift", *args],
+        capture_output=True,
+        text=True,
+        env=full_env,
+        timeout=120,
+    )
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ("serve", CLEAN, "--bogus"),
+        ("serve", CLEAN, "--workers", "0"),
+        ("check",),
+        ("check", CLEAN, "--samples", "x"),
+    ],
+)
+def test_a_click_usage_error_exits_4(args):
+    assert run(*args).exit_code == main.EXIT_USAGE
+
+
+def test_help_still_exits_0():
+    assert run("serve", "--help").exit_code == 0
+
+
+def test_a_usage_error_exits_4_in_a_real_process():
+    result = _downshift("serve", "x", "--bogus")
+
+    assert result.returncode == main.EXIT_USAGE
+    assert "--bogus" in result.stderr
+
+
+def test_a_bad_environment_value_is_a_one_line_usage_error():
+    for args in (("--help",), ("check", CLEAN)):
+        result = _downshift(*args, DOWNSHIFT_PORT="abc")
+
+        assert result.returncode == main.EXIT_USAGE
+        assert "DOWNSHIFT_PORT='abc' is not a valid integer" in result.stdout
+        assert "Traceback" not in result.stdout + result.stderr
+        assert len(result.stdout.strip().splitlines()) == 1
+
+
+def test_metrics_with_more_than_one_worker_is_a_usage_error():
+    result = run("serve", CLEAN, "--metrics", "--workers", "2")
+
+    assert result.exit_code == main.EXIT_USAGE
+    assert "--metrics needs one worker" in result.output
+
+
+def test_the_metrics_and_workers_variables_together_are_a_usage_error():
+    result = _downshift("serve", CLEAN, DOWNSHIFT_METRICS="1", DOWNSHIFT_WORKERS="2")
+
+    assert result.returncode == main.EXIT_USAGE
+    assert "--metrics needs one worker" in result.stdout
+
+
+def test_serve_tf32_flag_reaches_the_options_and_the_worker_json(monkeypatch):
+    _, captured = _serve_captured(monkeypatch)
+    assert captured["app"].state.serving.options.tf32 is False
+
+    _, captured = _serve_captured(monkeypatch, "--tf32")
+    options = captured["app"].state.serving.options
+    assert options.tf32 is True
+    assert ServeArgs.from_json(_serve_args(options=options).to_json()).options.tf32 is True
+
+
+# serve_cmd copies each ServeOptions field from the parameter with the same name. These are the
+# parameters that are not ServeOptions fields: they load the model, bind the server or log.
+NOT_SERVE_OPTIONS = {
+    "access_log", "forwarded_allow_ips", "host", "inputs", "log_level", "middleware", "model",
+    "model_class", "port", "reference", "root_path", "ssl_certfile", "ssl_keyfile",
+    "timeout_graceful_shutdown", "tokenizer_from", "unsafe_load", "workers",
+}  # fmt: skip
+
+
+def test_serve_cmd_has_a_parameter_for_each_serve_option_and_names_the_rest():
+    import dataclasses
+    import inspect
+
+    from downshift.cli.main import serve_cmd
+
+    params = set(inspect.signature(serve_cmd).parameters)
+    options = {f.name for f in dataclasses.fields(ServeOptions)}
+    assert sorted(options - params) == [], "a ServeOptions field has no serve option"
+    assert sorted(params - options - NOT_SERVE_OPTIONS) == [], (
+        "a new serve option is not a ServeOptions field. Add the field, or list the name here"
+    )
+
+
+def test_docs_cli_md_lists_each_serve_flag():
+    import typer.main
+
+    from downshift.cli.main import app as cli_app
+
+    command = typer.main.get_command(cli_app).commands["serve"]  # type: ignore[attr-defined]
+    flags = {opt for param in command.params for opt in getattr(param, "opts", []) if "--" in opt}
+    page = (REPO_ROOT / "docs" / "cli.md").read_text(encoding="utf-8")
+    assert len(flags) > 30
+    assert sorted(flag for flag in flags if flag not in page) == []

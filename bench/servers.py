@@ -16,6 +16,7 @@ and not a strawman baseline.
 
 from __future__ import annotations
 
+import os
 import sys
 import warnings
 from typing import Any
@@ -39,11 +40,12 @@ def build_naive_torch(case, blocking: bool):
     import torch
     from fastapi import FastAPI
 
-    model = case.module.eval()
+    device = os.environ.get("BENCH_DEVICE", "cpu")
+    model = case.module.eval().to(device)
     app = FastAPI()
 
     def run(inputs: dict[str, Any]) -> dict[str, Any]:
-        args = [torch.from_numpy(v) for v in _feeds(case, inputs).values()]
+        args = [torch.from_numpy(v).to(device) for v in _feeds(case, inputs).values()]
         with torch.inference_mode():
             out = model(*args)
         tensors = (
@@ -51,7 +53,7 @@ def build_naive_torch(case, blocking: bool):
             if isinstance(out, torch.Tensor)
             else [t for t in out if isinstance(t, torch.Tensor)]
         )
-        return {"outputs": {f"output_{i}": t.numpy().tolist() for i, t in enumerate(tensors)}}
+        return {"outputs": {f"output_{i}": t.cpu().numpy().tolist() for i, t in enumerate(tensors)}}
 
     if blocking:
 

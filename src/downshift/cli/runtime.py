@@ -10,29 +10,26 @@ from __future__ import annotations
 
 import atexit
 import gc
-import json
 import os
 import shutil
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from downshift.cli import render
 from downshift.cli.options import LogLevel
-from downshift.core.phase import Phase
+from downshift.entities.cli import ArtifactHandoff, ServeArgs
+from downshift.entities.phase import Phase
 from downshift.logs import setup_logging
-from downshift.serve.options import BackendChoice, ExecutionChoice, ServeOptions
-from downshift.serve.schemas import OutputEncoding
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
-    from downshift.core.memo import ExportEntry
-    from downshift.loading import LoadedModel, LoadSpec
-    from downshift.serve.engine import ServingState
+    from downshift.entities.loading import LoadedModel, LoadSpec
+    from downshift.entities.serving import ServingState
 
 _SERVE_ARGS_ENV = "_DOWNSHIFT_SERVE_ARGS"
 
@@ -85,70 +82,19 @@ def _load(spec: LoadSpec) -> LoadedModel:
     return load_model(spec)
 
 
-@dataclass
-class ArtifactHandoff:
-    """The parent's export for `--workers N`. A worker boots from it like from a cache hit. A
-    torch worker loads the model itself: weights are not sent between processes."""
+def release_graph(state: ServingState) -> None:
+    """The backend has its own copy of the graph. Drop the bytes of the graph and the export
+    memo. A process that serves calls this. The parent of the workers does not: it needs the
+    bytes to write the file for the workers."""
+    from downshift.core.memo import MEMO
 
-    verdict: dict
-    input_names: list[str]
-    kind: str  # the parent's source_kind: an ONNX worker loads nothing to find it
-    axis_bounds: dict[str, list[list]] = field(default_factory=dict)
-    onnx_path: str | None = None  # the graph, if the parent serves it on onnxruntime
-    feeds_path: str | None = None  # example inputs for the warmup, if any
-
-    def entry(self) -> ExportEntry:
-        import numpy as np
-
-        from downshift.core.memo import ExportEntry
-
-        feeds = None
-        if self.feeds_path:
-            with np.load(self.feeds_path) as archive:
-                feeds = {name: archive[name] for name in archive.files}
-        return ExportEntry(
-            verdict=self.verdict,
-            input_names=self.input_names,
-            axis_bounds=self.axis_bounds,
-            feeds=feeds,
-            onnx_path=Path(self.onnx_path) if self.onnx_path else None,
-        )
-
-
-@dataclass
-class ServeArgs:
-    """Everything needed to build the ServingState and app again, as JSON for the workers."""
-
-    load: LoadSpec
-    options: ServeOptions
-    reference: str | None
-    middleware: list[str] | None
-    log_level: str
-    artifact: ArtifactHandoff | None = None
-    access_log: bool = True
-    # The validated --tokenizer-from directory.
-    tokenizer_from: str | None = None
-
-    def to_json(self) -> str:
-        return json.dumps(asdict(self))
-
-    @classmethod
-    def from_json(cls, raw: str) -> ServeArgs:
-        from downshift.loading import LoadSpec
-
-        data = json.loads(raw)
-        data["load"] = LoadSpec(**data["load"])
-        options = data["options"]
-        options["backend"] = BackendChoice(options["backend"])
-        options["output_encoding"] = OutputEncoding(options["output_encoding"])
-        options["execution"] = ExecutionChoice(options["execution"])
-        data["options"] = ServeOptions(**options)
-        if data.get("artifact") is not None:
-            data["artifact"] = ArtifactHandoff(**data["artifact"])
-        return cls(**data)
+    state.verdict.onnx_bytes = b""
+    state.verdict.sample_feeds = []
+    MEMO.clear()
 
 
 def _build_serving_state(args: ServeArgs) -> ServingState:
+    """Boot the state of `args`."""
     from downshift.loading import hf_repo_dir
     from downshift.serve.engine import state_from_entry
     from downshift.serve.reuse import prepare_serving_reusing
@@ -195,10 +141,13 @@ def _serve_app_factory() -> FastAPI:
     A worker that cannot load exits with uvicorn's STARTUP_FAILURE code, which stops the whole
     server instead of a restart into the same failure.
     """
-    from uvicorn.config import STARTUP_FAILURE
+    import uvicorn.config
 
     from downshift.serve.app import build_app
 
+    # uvicorn's exit code for a failed start. Older uvicorn stubs do not declare the name, so read it
+    # with getattr. 3 is its value in every release.
+    startup_failure: int = getattr(uvicorn.config, "STARTUP_FAILURE", 3)
     args = ServeArgs.from_json(os.environ[_SERVE_ARGS_ENV])
     _setup_logging(LogLevel(args.log_level))
 
@@ -209,12 +158,17 @@ def _serve_app_factory() -> FastAPI:
             if LogLevel(args.log_level) is LogLevel.debug:
                 render.print_traceback()
             render.error(f"model failed to load in this worker: {type(exc).__name__}: {exc}")
-            os._exit(STARTUP_FAILURE)
+            os._exit(startup_failure)
+        release_graph(state)
         render.print_ready(state)
         return state
 
     return build_app(
-        loader=loader, middleware=tuple(args.middleware or ()), access_log=args.access_log
+        loader=loader,
+        middleware=tuple(args.middleware or ()),
+        access_log=args.access_log,
+        metrics=args.options.metrics,
+        request_id_headers=args.options.enable_request_id_headers,
     )
 
 
@@ -228,6 +182,7 @@ def _write_onnx_artifact(state: ServingState) -> tuple[Path, Path | None, Path |
 
     import numpy as np
 
+    from downshift.core.export_cache import pack_feeds
     from downshift.core.feeds import example_feeds
 
     verdict = state.verdict
@@ -235,7 +190,7 @@ def _write_onnx_artifact(state: ServingState) -> tuple[Path, Path | None, Path |
         # The verdict's temporary directory holds external data. Keep it alive until exit.
         _HANDOFF_KEEPALIVE.append(verdict._tmpdir)
     needs_copy = verdict.onnx_path is None
-    needs_feeds = state.example_inputs is not None
+    needs_feeds = state.example_inputs is not None or bool(verdict.sample_feeds)
     if not needs_copy and not needs_feeds:
         assert verdict.onnx_path is not None
         return verdict.onnx_path, None, None
@@ -246,10 +201,13 @@ def _write_onnx_artifact(state: ServingState) -> tuple[Path, Path | None, Path |
         onnx_path.write_bytes(verdict.onnx_bytes)
     feeds_path = None
     if needs_feeds:
-        assert state.example_inputs is not None
         feeds_path = temp_dir / "feeds.npz"
-        feeds = example_feeds(state.input_names, state.example_inputs)
-        np.savez(feeds_path, **feeds)  # type: ignore[arg-type]  # the numpy stub misreads **kwds
+        example = (
+            example_feeds(state.input_names, state.example_inputs)
+            if state.example_inputs is not None
+            else None
+        )
+        np.savez(feeds_path, **pack_feeds(example, verdict.sample_feeds))  # type: ignore[arg-type]  # the numpy stub misreads **kwds
     return onnx_path, feeds_path, temp_dir
 
 

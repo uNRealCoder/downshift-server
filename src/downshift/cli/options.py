@@ -1,5 +1,5 @@
 """Typer option types that the commands share: the `Annotated` aliases and the enums that they
-name. This module imports only the standard library, typer, and downshift.serve.options and
+name. This module imports only the standard library, typer, and downshift.entities.options and
 schemas. Both of these are free of torch. An import of this module therefore never pays the
 import cost of torch, and `--help` and `--version` stay fast.
 """
@@ -9,9 +9,8 @@ from typing import Annotated
 
 import typer
 
-from downshift.adapters.pooling import PoolingChoice
-from downshift.serve.options import ExecutionChoice
-from downshift.serve.schemas import OutputEncoding
+from downshift.entities.adapters import PoolingChoice
+from downshift.entities.options import ExecutionChoice, OutputEncoding
 
 
 class LogLevel(StrEnum):
@@ -221,8 +220,9 @@ RequestTimeoutOpt = Annotated[
     typer.Option(
         "--request-timeout",
         min=0,
-        help="The number of seconds that a predict can wait without a start. After this time, "
-        "it gets a 503 and no inference. 0 = no limit",
+        help="The time limit in seconds for a whole predict, from its admission. At the limit, "
+        "the client gets a 503 and the slot is free. A running inference is not stopped. "
+        "0 = no limit",
     ),
 ]
 SslCertfileOpt = Annotated[
@@ -240,6 +240,34 @@ SslKeyfileOpt = Annotated[
         metavar="PATH",
         help="The PEM private key of --ssl-certfile. If the certificate file contains the key, "
         "this option is not necessary. For an encrypted key, set DOWNSHIFT_SSL_KEYFILE_PASSWORD",
+    ),
+]
+RootPathOpt = Annotated[
+    str,
+    typer.Option(
+        "--root-path",
+        metavar="PATH",
+        help="The path prefix that your proxy strips, for example /models/bert. The links of "
+        "GET / and the example URL of GET /schema then include it",
+    ),
+]
+ForwardedAllowIpsOpt = Annotated[
+    str | None,
+    typer.Option(
+        "--forwarded-allow-ips",
+        metavar="IPS",
+        help="The proxies (comma-separated IPs, or *) whose X-Forwarded-For and "
+        "X-Forwarded-Proto headers to trust. Default: 127.0.0.1",
+    ),
+]
+TimeoutGracefulShutdownOpt = Annotated[
+    int,
+    typer.Option(
+        "--timeout-graceful-shutdown",
+        metavar="SECONDS",
+        min=0,
+        help="On SIGTERM, the server stops new connections, waits up to SECONDS for the "
+        "running requests, then stops. /ready gives 503 at once. 0 = wait without a limit",
     ),
 ]
 AtolOpt = Annotated[
@@ -300,10 +328,53 @@ ServerTimingOpt = Annotated[
         "in the cache. The access log has the timings in both cases",
     ),
 ]
+MetricsOpt = Annotated[
+    bool,
+    typer.Option(
+        "--metrics/--no-metrics",
+        help="Count the requests and serve them as Prometheus text on GET /metrics. It "
+        "needs one worker. The API key rule of the other routes applies",
+    ),
+]
+ServedModelNameOpt = Annotated[
+    str | None,
+    typer.Option(
+        "--served-model-name",
+        metavar="NAME",
+        help="The model name for GET /v1/models and POST /v1/embeddings. Default: the name of "
+        "the model source (the last part of a path)",
+    ),
+]
+MatryoshkaOpt = Annotated[
+    bool,
+    typer.Option(
+        "--matryoshka/--no-matryoshka",
+        help="Tell downshift that the model was trained for Matryoshka cuts. POST "
+        "/v1/embeddings then accepts 'dimensions'. Default: off",
+    ),
+]
+Tf32Opt = Annotated[
+    bool,
+    typer.Option(
+        "--tf32/--no-tf32",
+        help="Allow TF32 math on the GPU. It is faster and less exact. The serving check then "
+        "uses the TF32 tolerances. Default: off",
+    ),
+]
+EnableRequestIdHeadersOpt = Annotated[
+    bool,
+    typer.Option(
+        "--enable-request-id-headers/--no-enable-request-id-headers",
+        help="Read the request ID from the X-Request-Id request header (or make one) and set "
+        "it on each response, in the log lines and in the body of a 500. Default: off, and "
+        "the server then has no request ID middleware",
+    ),
+]
 AccessLogOpt = Annotated[
     bool,
     typer.Option(
         "--access-log/--no-access-log",
-        help="One log line for each request: method, path, status, duration and request ID",
+        help="One log line for each request: method, path, status and duration (and the "
+        "request ID, with --enable-request-id-headers). Default: on",
     ),
 ]

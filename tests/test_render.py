@@ -11,15 +11,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from downshift.adapters.embedding import EmbeddingRecipe
-from downshift.adapters.text import TextIO
 from downshift.cli import render
-from downshift.core.verdict import ExportVerdict
-from downshift.core.verify import NumericsReport, WorstMismatch
-from downshift.serve.backends import BackendMeta
-from downshift.serve.engine import ServeOptions, ServingState, WarmupStats
-from downshift.serve.options import ExecutionChoice
-from downshift.serve.schemas import OutputEncoding
+from downshift.entities.adapters import EmbeddingRecipe, TextIO
+from downshift.entities.backend import BackendMeta
+from downshift.entities.options import ExecutionChoice, OutputEncoding
+from downshift.entities.serving import ServingNumerics, ServingState, WarmupStats
+from downshift.entities.verdict import ExportVerdict, NumericsReport, WorstMismatch
+from downshift.serve.engine import ServeOptions
 
 
 @pytest.fixture(autouse=True)
@@ -130,6 +128,16 @@ def test_print_verdict_failed_reason_points_at_debug_logging(caplog):
     render.print_verdict(verdict, "model")
     out = caplog.text
     assert "--log-level debug" in out
+
+
+def test_print_verdict_shows_the_minimum_cosine_of_an_embedding(caplog):
+    render.print_verdict(_verdict(numerics=_numerics(True, min_cosine=0.9999984)), "model")
+    assert "min cosine 0.999998" in caplog.text
+
+
+def test_print_verdict_has_no_cosine_for_other_models(caplog):
+    render.print_verdict(_verdict(numerics=_numerics(True)), "model")
+    assert "cosine" not in caplog.text
 
 
 def test_print_verdict_shows_overridden_tolerance(caplog):
@@ -527,7 +535,7 @@ def test_print_ready_without_timings(caplog):
 
 
 def _fact(name: str, served_max: int, sampled_max: int | None, input: str = "x"):
-    from downshift.core.axes import AxisFact
+    from downshift.entities.axes import AxisFact
 
     return AxisFact(input, 0, name, 1, served_max, None if sampled_max is None else 2, sampled_max)
 
@@ -680,3 +688,25 @@ def test_print_booting_is_plain_ascii(caplog):
     assert len(messages) == 2
     assert all(_plain_ascii(m) for m in messages)
     assert "http://localhost:8000" in messages[1]
+
+
+def test_print_banner_shows_the_gpu_check(caplog):
+    check = ServingNumerics(
+        "CUDAExecutionProvider", "cuda:0", False, 3, 8, 3.1e-6, None, True, 1e-4, 1e-3
+    )
+    render.print_banner(_serving_state(_verdict(), serving_numerics=check), "127.0.0.1", 8000)
+    assert "GPU check" in caplog.text
+    assert (
+        "CUDAExecutionProvider cuda:0  max abs err 3.1e-06 over 3 of 8 samples  OK" in caplog.text
+    )
+
+
+def test_print_banner_shows_a_failed_gpu_check_with_tf32(caplog):
+    check = ServingNumerics("torch", "cuda", True, 1, 1, 0.5, 0.9, False, 1e-3, 1e-2)
+    render.print_banner(_serving_state(_verdict(), serving_numerics=check), "127.0.0.1", 8000)
+    assert "min cosine 0.900000  FAILED  (TF32 on)" in caplog.text
+
+
+def test_print_banner_has_no_gpu_check_row_on_the_cpu(caplog):
+    render.print_banner(_serving_state(_verdict()), "127.0.0.1", 8000)
+    assert "GPU check" not in caplog.text

@@ -66,6 +66,8 @@ A sample passes when each output element satisfies `abs(got - expected) <= atol 
 
 `--atol` and `--rtol` have priority over these variables.
 
+A text embedding model has one more check. For each row of the embedding, downshift computes the cosine similarity between the torch row and the ONNX Runtime row. The smallest value must be at least `DOWNSHIFT_TOL_COSINE` (default `0.9999`). If it is lower, the verdict is `DEGRADED`. A row with a zero norm on both sides has cosine 1. A row with a zero norm on one side has cosine 0. `--atol` and `--rtol` do not change this check. downshift makes the check at export time only, not on the request path.
+
 ## `check`
 
 `check` exports the model in memory and verifies the numbers. It writes nothing to disk. The exit code is the verdict, so `check` can gate CI.
@@ -80,7 +82,7 @@ All options of the gate also apply.
 ```
 $ downshift check examples.scatter_include_self_false:make_model
 ...
-2026-10-20 16:20:24 INFO downshift.report: downshift v0.6.0
+2026-10-20 16:20:24 INFO downshift.report: downshift v1.0.0rc1
   Model           examples.scatter_include_self_false:make_model
   Family          generic
   Export          DEGRADED  (strict=False, opset 20)
@@ -97,6 +99,7 @@ $ downshift check examples.scatter_include_self_false:make_model
   Reason          exported via strict=False but numerics diverge on 6/8 samples (max abs err 1.02e+00)
 ```
 
+- `Numerics` shows `min cosine` for a text embedding model: the smallest cosine similarity between a torch row and an ONNX Runtime row.
 - `Tolerance` shows the dtype that selected the default, or `--atol/--rtol` if a flag set it.
 - `Worst` (DEGRADED only) is the output element with the largest error across all samples.
 - `Samples` lists the input shapes of each sample.
@@ -116,7 +119,7 @@ downshift check my_pkg.models:build --json -k 16 > verdict.json
 |---|---|---|---|
 | `-o`, `--output DIR` | - | *(required)* | The output directory. |
 | `--name STR` | - | the model slug | The name of the files, without the extension. |
-| `--fp16` | - | off | Cast a copy of the model to fp16 before the export. This is a plain `.half()` and not quantization. |
+| `--fp16` | - | off | Export the model in fp32, then change the graph to fp16 weights. The inputs and outputs stay fp32. The verdict uses the `float16` tolerances. This is not quantization. |
 | `--no-verify` | - | off | Skip the numerics check. The verdict is `UNVERIFIED`. |
 | `--json` | - | off | As for `check`. The JSON also has `manifest_path`. |
 | `--export-cache-dir DIR` | `DOWNSHIFT_EXPORT_CACHE_DIR` | none | An existing directory. Downshift reuses a verified export from it, and saves new ones in it. Refer to "Export cache" in [`production.md`](production.md#export-cache). |
@@ -144,7 +147,7 @@ downshift export my_pkg.models:build -o artifacts/ --name classifier
 | `--port INT` | `DOWNSHIFT_PORT` | `8000` | The port to bind. |
 | `--backend auto\|onnxruntime\|torch` | `DOWNSHIFT_BACKEND` | `auto` | `auto` follows the verdict. `torch` skips the export. `onnxruntime` on a DEGRADED verdict is an error, unless you also give `--force-onnx`. |
 | `--force-onnx` | - | off | Serve a DEGRADED graph through ONNX Runtime. The banner says so. |
-| `--device auto\|cpu\|cuda` | `DOWNSHIFT_DEVICE` | `auto` | `cuda` without CUDA is a usage error on both backends. The gate runs only on the CPU. The `Verified on` row of the banner says this when you serve on a GPU. |
+| `--device auto\|cpu\|cuda\|cuda:N` | `DOWNSHIFT_DEVICE` | `auto` | N is 0 or more. Any other value is a usage error (exit code `4`) that lists the allowed values. `cuda` without CUDA is a usage error on both backends. The gate runs only on the CPU. The `Verified on` row of the banner says this when you serve on a GPU. |
 | `--warmup INT` | `DOWNSHIFT_WARMUP` | `3` | The number of inferences before `/ready` changes to `200`. |
 | `--reference MODEL` | - | none | The PyTorch model to verify a `.onnx` `MODEL` against. |
 | `--tokenizer-from DIR` | - | none | A downloaded Hugging Face repo directory. It gives the tokenizer, the pooling recipe and the labels to a `.onnx` or PyTorch `MODEL` that has none. Then `/predict` takes `{"text": ...}`. It does not change the graph or the verification, and it does not depend on `--reference`. |
@@ -156,7 +159,7 @@ downshift export my_pkg.models:build -o artifacts/ --name classifier
 | `--max-body-bytes INT` | `DOWNSHIFT_MAX_BODY_BYTES` | 32 MiB | The largest request body. A larger one gets a `413` before the server parses it. This is also the only limit on the size of a `text` request. |
 | `--max-concurrency INT` | `DOWNSHIFT_MAX_CONCURRENCY` | `4` | The inferences that run at the same time in each worker process. Each one holds its own activation memory. |
 | `--max-queue INT` | `DOWNSHIFT_MAX_QUEUE` | `64` | The predicts that can wait beyond `--max-concurrency`. After that, a new predict gets a fast `503`. |
-| `--request-timeout FLOAT` | `DOWNSHIFT_REQUEST_TIMEOUT` | `30` | The seconds that an admitted predict can wait before its inference starts. After that, it gets a `503`. `0` means no limit. |
+| `--request-timeout FLOAT` | `DOWNSHIFT_REQUEST_TIMEOUT` | `30` | The time limit in seconds for the whole request, from its admission. At the limit, the client gets a `503` and the slot is free. A running inference thread is not stopped. `0` means no limit. |
 | `--prep-threads INT` | `DOWNSHIFT_PREP_THREADS` | `min(4, CPUs)` | The threads in each worker process that parse and convert request bodies. |
 | `--execution threadpool\|inline` | `DOWNSHIFT_EXECUTION` | `threadpool` | `inline` runs a JSON body of up to 64 KiB (with a `Content-Length` and no `text`) on the event loop. Use it only for a model that infers in less than about 1 ms. |
 | `--result-cache-rows INT` | `DOWNSHIFT_RESULT_CACHE_ROWS` | `100`, or off | The rows that the result cache keeps in each worker. `0` turns it off. The default is on only for a model with independent rows. A number for another model is a usage error. Refer to [`production.md`](production.md#result-cache). |
@@ -164,8 +167,16 @@ downshift export my_pkg.models:build -o artifacts/ --name classifier
 | `--export-cache-dir DIR` | `DOWNSHIFT_EXPORT_CACHE_DIR` | none | As for `export`. A repeat boot of the same model skips the export and the verification. |
 | `--ssl-certfile PATH` | `DOWNSHIFT_SSL_CERTFILE` | none | A PEM certificate or chain. If you give it, the server uses HTTPS. |
 | `--ssl-keyfile PATH` | `DOWNSHIFT_SSL_KEYFILE` | none | The PEM private key. Not necessary if the certificate file contains the key. For an encrypted key, set `DOWNSHIFT_SSL_KEYFILE_PASSWORD`. |
+| `--root-path PATH` | `DOWNSHIFT_ROOT_PATH` | `""` | The path prefix that your proxy strips, for example `/models/bert`. The links of `GET /` and the example URL of `GET /schema` then include it. Refer to "Behind a proxy" in `docs/production.md`. |
+| `--forwarded-allow-ips IPS` | `DOWNSHIFT_FORWARDED_ALLOW_IPS` | `127.0.0.1` | The proxies (comma-separated IPs, or `*`) whose `X-Forwarded-For` and `X-Forwarded-Proto` headers downshift trusts. |
+| `--timeout-graceful-shutdown SECONDS` | `DOWNSHIFT_TIMEOUT_GRACEFUL_SHUTDOWN` | `30` | On `SIGTERM`, the server stops new connections, waits up to `SECONDS` for the running requests, then stops. `/ready` gives `503` at once. `0` means wait without a limit. Refer to "Shut down" in `docs/production.md`. |
 | `--server-timing` / `--no-server-timing` | `DOWNSHIFT_SERVER_TIMING` | off | Adds the `Server-Timing` header (the milliseconds of each stage) to each predict response. Keep it off on a server that untrusted clients use: the timings show how the server works, and a fast cache hit shows that another client sent the same row. The access log has the timings in both cases. |
-| `--access-log` / `--no-access-log` | - | on | One log line for each request. |
+| `--metrics` / `--no-metrics` | `DOWNSHIFT_METRICS` | off | Counts the requests and serves them as Prometheus text on `GET /metrics`. It needs one worker (`--workers 1`). The API key rule of the other routes applies. Refer to "Metrics" in `docs/production.md`. |
+| `--served-model-name NAME` | `DOWNSHIFT_SERVED_MODEL_NAME` | the model source | The model name for `GET /v1/models` and `POST /v1/embeddings`. Without it, the name is the last part of the model path. Refer to "Model name" in `docs/production.md`. |
+| `--matryoshka` / `--no-matryoshka` | `DOWNSHIFT_MATRYOSHKA` | off | Tells downshift that the model was trained for Matryoshka cuts. `POST /v1/embeddings` then accepts `dimensions`. Refer to [`openai.md`](openai.md#dimensions-and---matryoshka). |
+| `--tf32` / `--no-tf32` | `DOWNSHIFT_TF32` | off | Allows TF32 math on the GPU. It is faster and less exact. The serving check then uses the TF32 tolerances (`DOWNSHIFT_TOL_TF32_ATOL` and `DOWNSHIFT_TOL_TF32_RTOL`). Without this option, both backends keep TF32 off on the GPU. Refer to [`production.md`](production.md#gpu). |
+| `--access-log` / `--no-access-log` | - | on | One log line for each request on `downshift.access`. |
+| `--enable-request-id-headers` / `--no-enable-request-id-headers` | `DOWNSHIFT_ENABLE_REQUEST_ID_HEADERS` | off | Reads the request ID from the `X-Request-Id` request header (or makes one) and sets it on each response, on the log lines and in the body of a `500`. If this option is off, the server has no request ID middleware. |
 
 `serve` binds the port first. It then loads, exports, verifies and warms up on a background thread. `/ready` gives `503` until the model is ready. `serve` serves all four verdicts. It exits early only for a usage error (`4`) or a crash (`5`) before the server is ready. Downshift loads the TLS files before the model, so a bad TLS file stops `serve` with exit code `4`.
 
@@ -175,7 +186,7 @@ downshift serve my_pkg.models:build --port 8000 --output-encoding base64
 
 ## Logging
 
-All output goes through Python `logging` to one plain-text handler on stdout: the banner, the reports, the lines of uvicorn, `warnings` and the request lines. Each line has the form `time LEVEL logger: message`. A line that belongs to a request ends with ` request_id=<id>`. There is no JSON format and no colour.
+All output goes through Python `logging` to one plain-text handler on stdout: the banner, the reports, the lines of uvicorn, `warnings` and the request lines. Each line has the form `time LEVEL logger: message`. With `--enable-request-id-headers`, a line that belongs to a request ends with ` request_id=<id>`. There is no JSON format and no colour.
 
 | `--log-level` | What prints |
 |---|---|
@@ -184,7 +195,7 @@ All output goes through Python `logging` to one plain-text handler on stdout: th
 | `debug` | Adds tracebacks. For a FAILED verdict, it also adds the output of the torch export. |
 | `error` | Only errors and the lines of `downshift.report`. |
 
-`--no-access-log` removes the request line. The response keeps its `X-Request-Id`. With `--json`, the verdict is the only output on stdout, and the log lines go to stderr.
+`--no-access-log` removes the request line. The access log and `--enable-request-id-headers` are independent: without the request ID option, the line has no `request_id`. With `--json`, the verdict is the only output on stdout, and the log lines go to stderr.
 
 ## Environment variables
 
@@ -202,17 +213,24 @@ Downshift reads these variables one time, when `downshift` is imported. To chang
 | `DOWNSHIFT_EXECUTION`, `DOWNSHIFT_PREP_THREADS` | `threadpool`, `min(4, CPUs)` | `--execution`, `--prep-threads` |
 | `DOWNSHIFT_RESULT_CACHE_ROWS` | unset (`100`, or off) | `--result-cache-rows` |
 | `DOWNSHIFT_SERVER_TIMING` | `0` | `--server-timing` (`1` or `0`, also `true`, `false`, `yes`, `no`, `on`, `off`) |
+| `DOWNSHIFT_METRICS` | `0` | `--metrics` (`1` or `0`, also `true`, `false`, `yes`, `no`, `on`, `off`) |
+| `DOWNSHIFT_SERVED_MODEL_NAME` | unset | `--served-model-name` |
+| `DOWNSHIFT_MATRYOSHKA` | `0` | `--matryoshka` (`1` or `0`, as for `DOWNSHIFT_METRICS`) |
+| `DOWNSHIFT_TF32` | `0` | `--tf32` (`1` or `0`, as for `DOWNSHIFT_METRICS`) |
 | `DOWNSHIFT_AXIS_MAX` | unset | `--axis-max` (`NAME=N,NAME=N`) |
 | `DOWNSHIFT_EXPORT_CACHE_DIR` | unset | `--export-cache-dir` |
 | `DOWNSHIFT_WORKERS` | `1` | `--workers` (CLI only) |
 | `DOWNSHIFT_SSL_CERTFILE`, `DOWNSHIFT_SSL_KEYFILE` | unset | `--ssl-certfile`, `--ssl-keyfile` (CLI only) |
+| `DOWNSHIFT_ROOT_PATH`, `DOWNSHIFT_FORWARDED_ALLOW_IPS`, `DOWNSHIFT_TIMEOUT_GRACEFUL_SHUTDOWN` | `""`, unset (`127.0.0.1`), `30` | `--root-path`, `--forwarded-allow-ips`, `--timeout-graceful-shutdown` (CLI only) |
 | `DOWNSHIFT_SSL_KEYFILE_PASSWORD` | unset | The password of an encrypted key. There is no flag, because a flag shows in the process list. |
-| `DOWNSHIFT_SERVER_API_KEY` | unset | Requires `Authorization: Bearer <key>` on each route except `/health` and `/ready`. There is no flag, because the key is a secret. |
-| `DOWNSHIFT_REQUEST_ID_HEADER` | `X-Request-Id` | The name of the request-ID header. The server reads the ID from this request header and sets it on each response. Use letters, digits and `-` only. An empty value means the default. There is no flag. |
+| `DOWNSHIFT_API_KEY` | unset | Requires `Authorization: Bearer <key>` on each route except `/health` and `/ready`. There is no flag, because the key is a secret. |
+| `DOWNSHIFT_REQUEST_ID_HEADER` | `X-Request-Id` | The name of the request-ID header. It has an effect only with `--enable-request-id-headers`. The server reads the ID from this request header and sets it on each response. Use letters, digits and `-` only. An empty value means the default. There is no flag. |
 | `DOWNSHIFT_CACHE_HEADER` | `X-Downshift-Cache` | The name of the result-cache header of `/predict` (`hit`, `partial` or `miss`). Use letters, digits and `-` only. An empty value means the default. There is no flag. |
 | `DOWNSHIFT_TOL_{FLOAT32,FLOAT64,FLOAT16,BFLOAT16}_{ATOL,RTOL}` | refer to "Tolerances" | The default tolerances. |
+| `DOWNSHIFT_TOL_COSINE` | `0.9999` | The smallest cosine similarity between a torch embedding row and an ONNX Runtime row. |
+| `DOWNSHIFT_TOL_TF32_ATOL`, `DOWNSHIFT_TOL_TF32_RTOL` | `1e-3`, `1e-2` | The smallest tolerance of the serving check on a GPU when `--tf32` is on. The check uses the larger of this pair and the tolerance of the verdict. |
 
-A bad value (for example `DOWNSHIFT_PORT=abc`) stops the process at start with a message that names the variable. The library functions `check()`, `export()` and `intake()` use `8` as the default of `k`. They do not read `DOWNSHIFT_SAMPLES`.
+A bad value (for example `DOWNSHIFT_PORT=abc`) stops the process at start with a message that names the variable. The library functions `check()`, `export()` and `intake()` use `8` as the default of `samples`. They do not read `DOWNSHIFT_SAMPLES`.
 
 ## Exit codes
 
@@ -228,10 +246,11 @@ A bad value (for example `DOWNSHIFT_PORT=abc`) stops the process at start with a
 ## Add a `serve` option
 
 1. If the option has an environment variable, add its default to `settings.py`.
-2. Add a field to `ServeOptions` in `serve/options.py`. Take the default from `settings.py`.
+2. Add a field to `ServeOptions` in `entities/options.py`. Take the default from `settings.py`.
 3. Add an `Annotated` option type to `cli/options.py`.
-4. Add a parameter to `serve_cmd` in `cli/main.py`, and pass it to `ServeOptions(...)`.
-5. If the field is an enum, convert it in `ServeArgs.from_json` (`cli/runtime.py`). `--workers N` sends `ServeOptions` to each worker as JSON.
+4. Add a parameter to `serve_cmd` in `cli/main.py`. Give it the same name as the field. `serve_cmd` copies each `ServeOptions` field from the parameter with that name, so you add no other line. `tests/test_cli.py` fails if a field has no parameter, or if a parameter has no field and is not in its list of other parameters.
+   An option for uvicorn (like `--ssl-certfile`, `--root-path`, `--forwarded-allow-ips` and `--timeout-graceful-shutdown`) has no `ServeOptions` field. Put it in `uvicorn_kwargs` in `serve_cmd`. The kwargs reach `uvicorn.run` and so each worker.
+5. If the field is an enum, convert it in `ServeArgs.from_json` (`entities/cli.py`). `--workers N` sends `ServeOptions` to each worker as JSON.
 6. Add a row to the `serve` table and to "Environment variables" on this page, and describe the option in [`production.md`](production.md).
 7. Add a test, and record the option in `CHANGELOG.md`.
 

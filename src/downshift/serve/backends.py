@@ -1,7 +1,7 @@
 """The inference backends. Both map {input name: numpy array} to {output name: numpy array},
 so the HTTP layer does not know which one serves."""
 
-from dataclasses import asdict, dataclass
+import logging
 from pathlib import Path
 from typing import Protocol
 
@@ -10,9 +10,12 @@ import onnxruntime as ort
 import torch
 from torch import nn
 
-from downshift.core.feeds import WIDEN_DTYPES, example_feeds, widen_for_wire
-from downshift.core.verdict import BackendName
-from downshift.core.verify import first_line, new_session
+from downshift.core.feeds import WIDEN_DTYPES, example_feeds, to_feed, widen_for_wire
+from downshift.core.verify import OrtProvider, first_line, new_session
+from downshift.entities.backend import BackendMeta, IOSpec
+from downshift.entities.verdict import BackendName
+
+logger = logging.getLogger("downshift.serve")
 
 _CUDA_EP = "CUDAExecutionProvider"
 _CPU_EP = "CPUExecutionProvider"
@@ -27,31 +30,10 @@ class InferenceInputError(ValueError):
     dtypes, ranks and bounds before the inference."""
 
 
-@dataclass
-class IOSpec:
-    name: str
-    dtype: str | None
-    shape: list[int | str | None] | None
-
-    def to_dict(self) -> dict:
-        return asdict(self)
-
-
 def concrete_dim(dim: object) -> int:
     """A fixed axis keeps its size. A dynamic axis (a name, None or a placeholder) becomes 1, so
     the warmup feeds and the /schema example agree."""
     return dim if isinstance(dim, int) and dim > 0 else 1
-
-
-@dataclass
-class BackendMeta:
-    name: BackendName
-    device: str
-    inputs: list[IOSpec]
-    outputs: list[IOSpec]
-
-    def to_dict(self) -> dict:
-        return asdict(self)
 
 
 class Backend(Protocol):
@@ -72,34 +54,49 @@ def output_names(count: int) -> list[str]:
     return [f"output_{i}" for i in range(count)]
 
 
-def resolve_device(device: str) -> str:
+def resolve_device(device: str, *, ort_backend: bool = False) -> str:
+    """auto becomes cuda if torch has a GPU (for ONNX Runtime: and ONNX Runtime has the CUDA
+    provider), else cpu. A cuda:N with N too high is a ValueError."""
     if device == "auto":
-        return "cuda" if torch.cuda.is_available() else "cpu"
+        if not torch.cuda.is_available():
+            return "cpu"
+        return "cuda" if not ort_backend or _CUDA_EP in ort.get_available_providers() else "cpu"
+    _, _, index = device.partition(":")
+    if index and torch.cuda.is_available() and int(index) >= torch.cuda.device_count():
+        count = torch.cuda.device_count()
+        raise ValueError(
+            f"--device {device}: this machine has {count} GPUs (cuda:0 to cuda:{count - 1}). "
+            "Use a lower number, or pass --device cpu"
+        )
     return device
 
 
-def _ort_providers(device: str) -> list[str]:
+def _ort_providers(device: str, tf32: bool = False) -> list[OrtProvider]:
+    """The providers for `device`. For cuda:N, the CUDA provider gets device_id N. ORT allows
+    TF32 by default, so the provider gets use_tf32 as `tf32` says."""
+    if not device.startswith("cuda"):
+        return [_CPU_EP]
     available = ort.get_available_providers()
-    if device == "cuda":
-        if _CUDA_EP not in available:
-            raise ValueError(
-                "--device cuda: onnxruntime has no CUDA execution provider available "
-                f"(providers found: {', '.join(available)}). Install onnxruntime-gpu, or "
-                "pass --device cpu"
-            )
-        return [_CUDA_EP, _CPU_EP]
-    return [_CPU_EP]
+    if _CUDA_EP not in available:
+        raise ValueError(
+            f"--device {device}: onnxruntime has no CUDA execution provider available "
+            f"(providers found: {', '.join(available)}). Install onnxruntime-gpu, or "
+            "pass --device cpu"
+        )
+    _, _, index = device.partition(":")
+    options = {"device_id": index or "0", "use_tf32": "1" if tf32 else "0"}
+    return [(_CUDA_EP, options), _CPU_EP]
 
 
-def _require_cuda_provider(session: ort.InferenceSession, requested: list[str]) -> None:
+def _require_cuda_provider(session: ort.InferenceSession, device: str) -> None:
     """ORT drops the CUDA provider silently when the CUDA or cuDNN libraries do not load, and
     runs on the CPU. --device cuda promises the GPU, so fail instead."""
-    if requested[0] != _CUDA_EP:
+    if not device.startswith("cuda"):
         return
     actual = session.get_providers()[0]
     if actual != _CUDA_EP:
         raise ValueError(
-            f"--device cuda: onnxruntime could not start {_CUDA_EP} and would have served on "
+            f"--device {device}: onnxruntime could not start {_CUDA_EP} and would have served on "
             f"{actual}. onnxruntime-gpu needs the CUDA and cuDNN runtime libraries that it was "
             "built for on the library path of this machine. Its release notes name the CUDA "
             "major version. Downshift silences the load errors of onnxruntime. To see them, "
@@ -127,15 +124,28 @@ class OnnxRuntimeBackend:
         inter_op_threads: int = 0,
         *,
         session: ort.InferenceSession | None = None,
+        tf32: bool = False,
     ) -> None:
         if session is not None:
             self.session = session
         else:
             assert model is not None
-            providers = _ort_providers(resolve_device(device))
+            requested = device
+            device = resolve_device(device, ort_backend=True)
+            if requested == "auto" and device == "cpu" and torch.cuda.is_available():
+                logger.info(
+                    "--device auto: onnxruntime has no CUDA execution provider, so it serves on "
+                    "the CPU. To use the GPU, install onnxruntime-gpu"
+                )
             options = _session_options(intra_op_threads, inter_op_threads)
-            self.session = new_session(model, providers, options)
-            _require_cuda_provider(self.session, providers)
+            self.session = new_session(model, _ort_providers(device, tf32), options)
+            try:
+                _require_cuda_provider(self.session, device)
+            except ValueError as exc:
+                if requested != "auto":
+                    raise
+                logger.warning("%s. Serving on the CPU, because --device is auto", exc)
+                self.session = new_session(model, [_CPU_EP], options)
         self.provider = self.session.get_providers()[0]
         self.input_names = [i.name for i in self.session.get_inputs()]
         self.onnx_output_names = [o.name for o in self.session.get_outputs()]
@@ -181,6 +191,7 @@ class TorchBackend:
         example_inputs: tuple | None = None,
         intra_op_threads: int = 0,
         dynamic_shapes: tuple | None = None,
+        tf32: bool = False,
     ) -> None:
         if intra_op_threads > 0:  # 0 means "keep the default of torch"
             torch.set_num_threads(intra_op_threads)
@@ -191,6 +202,9 @@ class TorchBackend:
                 "(torch.cuda.is_available() is False). Install a CUDA build of torch, or "
                 "pass --device cpu"
             )
+        if self.device.startswith("cuda"):
+            torch.backends.cuda.matmul.allow_tf32 = tf32
+            torch.backends.cudnn.allow_tf32 = tf32
         self.module = module.eval().to(self.device)
         self.input_names = list(input_names)
         self.verified_provider: str | None = None
@@ -229,8 +243,7 @@ class TorchBackend:
         else:
             tensors = [t for t in out if isinstance(t, torch.Tensor)]
         return {
-            name: widen_for_wire(t.detach().cpu()).numpy()
-            for name, t in zip(output_names(len(tensors)), tensors, strict=True)
+            name: to_feed(t) for name, t in zip(output_names(len(tensors)), tensors, strict=True)
         }
 
     def metadata(self) -> BackendMeta:

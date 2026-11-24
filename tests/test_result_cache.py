@@ -150,9 +150,9 @@ def test_a_failure_goes_to_the_waiters_and_frees_the_row():
     cache.lookup([b"k"])
     waiter = cache.lookup([b"k"]).pending[0]
 
-    cache.fail([b"k"], RuntimeError("boom"))
+    cache.fail([b"k"])
 
-    with pytest.raises(RuntimeError, match="boom"):
+    with pytest.raises(RuntimeError, match="the owner of the row failed"):
         waiter.result()
     assert cache.lookup([b"k"]).missing == [0], "the next request may try again"
 

@@ -7,7 +7,7 @@ Wrong pooling gives vectors that look fine but are worse.
 """
 
 import json
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +15,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from downshift.adapters.pooling import PoolingChoice
+from downshift.entities.adapters import EmbeddingRecipe, PoolingChoice
 
 # Set on the loaded model by hf_repo.load_pretrained, read by the hf adapter: the recipe, and
 # the tokenizer's padding side (so verification pads as serving does).
@@ -35,29 +35,6 @@ _MASKED_OUT = -1e9  # the value that sentence-transformers puts in padding befor
 
 class RecipeError(ValueError):
     """The recipe cannot be applied, or --pooling and --normalize do not fit the repo."""
-
-
-@dataclass(frozen=True)
-class EmbeddingRecipe:
-    pooling: str
-    normalize: bool
-    max_seq_length: int | None  # the training length of the model. None if the repo does not say
-    origin: str  # "modules.json", or the flag that overrode it
-    prompts: dict[str, str] = field(default_factory=dict)  # name -> text for the start of a row
-    default_prompt: str | None = None  # the name that downshift applies if a request names none
-
-    def describe(self) -> str:
-        return f"{self.pooling} pooling" + (", L2-normalised" if self.normalize else "")
-
-    def info(self, dimension: int | None) -> dict[str, Any]:
-        """The recipe as /schema and the safetensors metadata report it (without prompts)."""
-        return {
-            "pooling": self.pooling,
-            "normalized": self.normalize,
-            "dimension": dimension,
-            "max_seq_length": self.max_seq_length,
-            "from": self.origin,
-        }
 
 
 def _read_json(path: Path) -> Any:

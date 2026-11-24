@@ -4,9 +4,10 @@ import pytest
 
 pytest.importorskip("transformers")
 
-from downshift.adapters.embedding import EMBEDDING_ATTR, PADDING_SIDE_ATTR, EmbeddingRecipe
+from downshift.adapters.embedding import EMBEDDING_ATTR, PADDING_SIDE_ATTR
 from downshift.core import rows
 from downshift.core.verdict import build_verdict, prepare_model
+from downshift.entities.adapters import EmbeddingRecipe
 from tests.models import clean_mlp, cross_row, tiny_bert
 
 
@@ -33,7 +34,6 @@ def test_a_model_that_reads_the_batch_mean_is_not_independent():
     assert "when it runs with other rows" in reason
 
 
-@pytest.mark.needs_torch_26
 def test_token_outputs_have_no_batch_axis():
     prepared, numerics, session = _rows_of(tiny_bert.make_model(), tiny_bert.make_inputs())
 
@@ -44,7 +44,6 @@ def test_token_outputs_have_no_batch_axis():
     assert "output_0 axis 1 changes" in reason
 
 
-@pytest.mark.needs_torch_26
 @pytest.mark.parametrize(("side", "independent"), [("right", True), ("left", False)])
 def test_padding_is_part_of_the_check(side, independent):
     # BERT has absolute position ids. Left padding moves a row to other positions, so the
@@ -123,10 +122,10 @@ def test_generic_rows_need_one_row_shape():
 
 def test_the_verdict_carries_the_row_facts_through_a_round_trip():
     import downshift
-    from downshift.core.verdict import ExportVerdict
+    from downshift.entities.verdict import ExportVerdict
 
-    clean = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(2), k=3)
-    mixed = downshift.check(cross_row.make_model(), cross_row.make_inputs(), k=3)
+    clean = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(2), samples=3)
+    mixed = downshift.check(cross_row.make_model(), cross_row.make_inputs(), samples=3)
 
     assert (clean.row_independent, clean.to_dict()["row_reason"]) == (True, None)
     assert mixed.row_independent is False
@@ -147,9 +146,9 @@ def test_a_verdict_without_numerics_says_that_the_rows_were_not_checked():
 
 def test_a_verdict_from_0_5_reads_as_not_independent():
     import downshift
-    from downshift.core.verdict import ExportVerdict
+    from downshift.entities.verdict import ExportVerdict
 
-    data = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(2), k=3).to_dict()
+    data = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(2), samples=3).to_dict()
     del data["row_independent"], data["row_reason"]
 
     old = ExportVerdict.from_dict(data)
@@ -160,7 +159,7 @@ def test_a_verdict_from_0_5_reads_as_not_independent():
 def test_the_row_reason_hides_the_paths_of_a_redacted_verdict():
     import downshift
 
-    verdict = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(2), k=3)
+    verdict = downshift.check(clean_mlp.make_model(), clean_mlp.make_inputs(2), samples=3)
     verdict.row_independent = None
     verdict.row_reason = "not checked: cannot read /secret/dir/model.onnx"
 

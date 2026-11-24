@@ -9,8 +9,8 @@ import onnxruntime
 import torch
 from onnx.external_data_helper import ExternalDataInfo, uses_external_data
 
-from downshift.core.memo import sha256_file
-from downshift.core.verdict import ExportVerdict
+from downshift.core.memo import FORMAT_VERSION, sha256_file
+from downshift.entities.verdict import ExportVerdict
 from downshift.sources import path_basename
 
 # The ONNX float dtype codes that the manifest labels.
@@ -53,6 +53,7 @@ def build_manifest(
     verdict_dict = verdict.redacted_dict((onnx_path, source_path))
     verdict_dict["onnx_path"] = onnx_path.name if verdict_dict["onnx_path"] else None
     return {
+        "format_version": FORMAT_VERSION,
         "downshift_version": package_version,
         "created_utc": datetime.now(UTC).isoformat(timespec="seconds"),
         "onnx_file": onnx_path.name,
@@ -61,7 +62,7 @@ def build_manifest(
             {"file": location, "sha256": sha256_file(onnx_path.parent / location)}
             for location in external_data_files(onnx_path)
         ],
-        "source_model": path_basename(str(source_path)) if source_path else None,
+        "source": path_basename(str(source_path)) if source_path else None,
         "source_sha256": sha256_file(source_path)
         if source_path and source_path.is_file()
         else None,

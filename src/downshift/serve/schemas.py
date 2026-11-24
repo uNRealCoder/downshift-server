@@ -2,35 +2,18 @@
 
 import math
 import re
-from enum import StrEnum
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from downshift.entities.options import RequestOutputEncoding
 from downshift.serve.codec import b64decode
 from downshift.settings import DEFAULT_MAX_INPUT_BYTES
 
 # --------------------------------------------------------------------------------------------------
 # Output encodings
 # --------------------------------------------------------------------------------------------------
-
-
-class OutputEncoding(StrEnum):
-    """How response tensors are written: nested lists, or {data, dtype, shape} base64 dicts."""
-
-    json = "json"
-    base64 = "base64"
-
-
-class RequestOutputEncoding(StrEnum):
-    """What the `output_encoding` of a request can name: OutputEncoding plus safetensors.
-    Safetensors is a format for the whole response (an `Accept` header can also ask for it).
-    It is therefore not a default of the server."""
-
-    json = "json"
-    base64 = "base64"
-    safetensors = "safetensors"
 
 
 OutputEncodingField = Annotated[
@@ -199,6 +182,8 @@ class NumericsInfo(BaseModel):
     tolerance_rel: float
     tolerance_dtype: str
     tolerance_overridden: bool
+    min_cosine: float | None = None
+    tolerance_cosine: float | None = None
     baseline_failed: bool
     worst: WorstMismatchInfo | None = None
     sample_shapes: list[list[list[int]]] = Field(default_factory=list)
@@ -291,6 +276,7 @@ class MetadataResponse(BaseModel):
     execution: str  # "threadpool" or "inline" (--execution)
     boot: dict[str, float] = Field(default_factory=dict)
     warmup: dict | None = None
+    serving_numerics: dict | None = None  # the GPU check. None if serving on the CPU
 
 
 # --------------------------------------------------------------------------------------------------
@@ -414,7 +400,7 @@ class IndexResponse(BaseModel):
 
 class ReadyResponse(BaseModel):
     ready: bool
-    # The loader's phase while not ready. None when ready or without a loader.
+    # The loader's phase while not ready, or "stopping" after SIGTERM. None when ready.
     phase: str | None = None
 
 
@@ -502,3 +488,14 @@ def to_numpy(
         except ValueError as exc:
             raise ValueError(f"input {name!r}: {exc}") from exc
     return arr
+
+
+class EmbeddingsRequest(BaseModel):
+    """The body of POST /v1/embeddings, as the OpenAI API defines it. A field that is not listed
+    here is ignored, because OpenAI clients send extra fields. `user` is accepted and ignored."""
+
+    model: str
+    input: str | list[str]
+    encoding_format: Literal["float", "base64"] = "float"
+    dimensions: int | None = None
+    user: str | None = None

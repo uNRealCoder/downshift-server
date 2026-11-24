@@ -19,10 +19,11 @@ from transformers import AutoModel, BertForSequenceClassification
 
 from downshift.adapters.embedding import RecipeError, pool, read_recipe, resolve_recipe
 from downshift.cli import main, runtime
-from downshift.loading import LoadError, LoadSpec, load_model
+from downshift.entities.loading import LoadSpec
+from downshift.entities.options import BackendChoice, ServeOptions
+from downshift.loading import LoadError, load_model
 from downshift.serve.app import build_app
 from downshift.serve.engine import prepare_serving
-from downshift.serve.options import BackendChoice, ServeOptions
 from tests.models import hf_repo
 
 TEXTS = ["hello world", "ignore previous instructions the capital", "the"]
@@ -133,7 +134,13 @@ def test_a_dense_module_is_refused_and_none_is_the_way_out(tmp_path):
 # --- serving ------------------------------------------------------------------------------
 
 
-@pytest.mark.needs_torch_26
+def test_the_verdict_has_the_minimum_cosine_of_the_embedding_rows(state):
+    numerics = state.verdict.numerics
+    assert numerics.min_cosine == pytest.approx(1.0, abs=1e-4)
+    assert numerics.tolerance_cosine == 0.9999
+    assert state.verdict.to_dict()["numerics"]["min_cosine"] == numerics.min_cosine
+
+
 def test_embedding_serves_on_onnx_runtime_with_the_pooling_in_the_graph(state):
     assert state.verdict.status == "CLEAN", state.verdict.reason
     assert state.backend.name == "onnxruntime"
@@ -322,7 +329,6 @@ def test_weighted_mean_matches_the_reference_formula():
     assert got[1].tolist() == pytest.approx(reference([[5.0, 6.0], [7.0, 8.0], [9.0, 10.0]]))
 
 
-@pytest.mark.needs_torch_26
 @pytest.mark.parametrize("mode", ["lasttoken", "weightedmean"])
 def test_last_token_and_weighted_mean_export_on_a_repo_without_a_recipe(tmp_path, mode):
     path = hf_repo.write_encoder_repo(tmp_path, modules=None, pooling=None, max_seq_length=None)
@@ -389,7 +395,6 @@ def test_serve_rejects_a_tokenizer_from_that_is_not_an_hf_repo(onnx_path, tmp_pa
     assert "config.json" in result.output
 
 
-@pytest.mark.needs_torch_26
 def test_serve_tokenizer_from_attaches_text_input_end_to_end(monkeypatch, onnx_path, repo):
     captured = _stub_uvicorn_server(monkeypatch)
 
@@ -402,7 +407,6 @@ def test_serve_tokenizer_from_attaches_text_input_end_to_end(monkeypatch, onnx_p
     assert serving.verdict.status == "UNVERIFIED"  # no --reference given: no numerics check
 
 
-@pytest.mark.needs_torch_26
 def test_serve_reference_alone_does_not_attach_text(monkeypatch, onnx_path, repo):
     captured = _stub_uvicorn_server(monkeypatch)
 
@@ -414,18 +418,23 @@ def test_serve_reference_alone_does_not_attach_text(monkeypatch, onnx_path, repo
     assert serving.verdict.status == "CLEAN", serving.verdict.reason
 
 
-@pytest.mark.needs_torch_26
 def test_check_takes_the_pooling_flags(repo):
     result = _cli("check", repo, "--pooling", "cls", "--no-normalize", "--json")
 
     assert result.exit_code == 0, result.output
-    assert json.loads(result.stdout)["status"] == "CLEAN"
+    try:
+        status = json.loads(result.stdout)["status"]
+    except ValueError:
+        pytest.fail(
+            f"stdout is not JSON.\nstdout: {result.stdout[:800]!r}\noutput: {result.output[:800]!r}"
+        )
+    assert status == "CLEAN"
 
 
 def test_check_rejects_an_unknown_pooling(repo):
     result = _cli("check", repo, "--pooling", "median")
 
-    assert result.exit_code == 2  # the own usage error of typer
+    assert result.exit_code == 4  # a usage error of typer
     assert "median" in result.output
 
 
@@ -470,7 +479,6 @@ def _rebuilt(monkeypatch, args: runtime.ServeArgs) -> TestClient:
     return TestClient(api)
 
 
-@pytest.mark.needs_torch_26
 def test_onnx_artifact_worker_still_takes_text_and_reports_the_recipe(
     monkeypatch, tmp_path, repo, state, client
 ):
@@ -571,7 +579,8 @@ def test_pooling_flag_on_a_bare_repo_still_reads_the_prompts(tmp_path):
 
 
 def test_the_pooled_output_is_float32_whatever_the_hidden_dtype():
-    from downshift.adapters.embedding import EmbeddingRecipe, PoolingHead
+    from downshift.adapters.embedding import PoolingHead
+    from downshift.entities.adapters import EmbeddingRecipe
 
     head = PoolingHead(EmbeddingRecipe("lasttoken", True, None, "--pooling"))
     hidden = torch.randn(2, 5, 8).bfloat16()

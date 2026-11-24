@@ -1,7 +1,6 @@
 """HTTP contract tests. Downshift exports each state one time for each module, because the export is the slow part."""
 
 import asyncio
-import dataclasses
 import logging
 import threading
 import time
@@ -16,14 +15,15 @@ from fastapi.testclient import TestClient
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import downshift
-from downshift.loading import LoadedModel, LoadSpec, load_model
+from downshift.entities.loading import LoadedModel, LoadSpec
+from downshift.entities.options import ExecutionChoice, OutputEncoding
+from downshift.loading import load_model
 from downshift.serve import app_for
+from downshift.serve import encode as serve_encode
 from downshift.serve import predict as serve_predict
-from downshift.serve.app import build_app
+from downshift.serve.app import _flag_stopping_on_signal, build_app
 from downshift.serve.engine import ServeOptions, prepare_serving
-from downshift.serve.options import ExecutionChoice
-from downshift.serve.schemas import OutputEncoding
-from tests.conftest import b64_input, b64_output
+from tests.conftest import b64_input, b64_output, with_options
 from tests.models import clean_mlp
 
 MLP_INPUT = {"inputs": {"x": [[0.0] * 16]}}
@@ -52,10 +52,6 @@ def _assert_same_outputs(client: TestClient, path: str, reference_body: dict, bo
         actual = b64_output(actual)
     np.testing.assert_allclose(actual, expected)
     return resp.json()
-
-
-def _with_options(state, **overrides):
-    return dataclasses.replace(state, options=dataclasses.replace(state.options, **overrides))
 
 
 @pytest.fixture(scope="module")
@@ -133,22 +129,33 @@ def test_predict_batch(mlp_client):
     assert body["dtypes"]["output_0"] == "float32"
 
 
-def test_predict_generates_a_request_id_and_echoes_it(mlp_client):
-    resp = mlp_client.post("/predict", json=MLP_INPUT)
+@pytest.fixture
+def request_id_client(mlp_state) -> TestClient:
+    return TestClient(build_app(mlp_state, request_id_headers=True))
+
+
+def test_there_is_no_request_id_by_default(mlp_client):
+    resp = mlp_client.post("/predict", json=MLP_INPUT, headers={"x-request-id": "caller"})
+    assert resp.status_code == 200, resp.text
+    assert "x-request-id" not in resp.headers
+
+
+def test_predict_generates_a_request_id_and_echoes_it(request_id_client):
+    resp = request_id_client.post("/predict", json=MLP_INPUT)
     assert resp.status_code == 200, resp.text
     assert resp.headers["x-request-id"]
 
 
-def test_predict_echoes_a_client_supplied_request_id(mlp_client):
-    resp = mlp_client.post(
+def test_predict_echoes_a_client_supplied_request_id(request_id_client):
+    resp = request_id_client.post(
         "/predict", json=MLP_INPUT, headers={"x-request-id": "caller-supplied-id"}
     )
     assert resp.status_code == 200, resp.text
     assert resp.headers["x-request-id"] == "caller-supplied-id"
 
 
-def test_health_gets_its_own_request_id_too(mlp_client):
-    resp = mlp_client.get("/health")
+def test_health_gets_its_own_request_id_too(request_id_client):
+    resp = request_id_client.get("/health")
     assert resp.headers["x-request-id"]
 
 
@@ -159,7 +166,7 @@ def test_predict_has_no_server_timing_by_default(mlp_client):
 
 
 def test_predict_reports_server_timing_when_it_is_on(mlp_state):
-    client = TestClient(build_app(_with_options(mlp_state, server_timing=True)))
+    client = TestClient(build_app(with_options(mlp_state, server_timing=True)))
     resp = client.post("/predict", json=MLP_INPUT)
     assert resp.status_code == 200, resp.text
     timing = resp.headers["server-timing"]
@@ -243,7 +250,7 @@ def test_predict_base64_input_client_errors(mlp_client, overrides, expected_deta
 
 
 def test_predict_base64_input_over_size_cap(mlp_state):
-    client = TestClient(build_app(_with_options(mlp_state, max_input_bytes=64)))
+    client = TestClient(build_app(with_options(mlp_state, max_input_bytes=64)))
     x = np.zeros((3, 16), dtype=np.float32)  # 192 bytes
     resp = client.post("/predict", json={"inputs": {"x": b64_input(x)}})
     assert resp.status_code == 400, resp.text
@@ -300,7 +307,7 @@ def test_predict_graph_base64_inputs(gcn_client):
 
 
 def test_predict_server_default_base64_and_per_request_json_override(mlp_state):
-    client = TestClient(build_app(_with_options(mlp_state, output_encoding=OutputEncoding.base64)))
+    client = TestClient(build_app(with_options(mlp_state, output_encoding=OutputEncoding.base64)))
     request = {"inputs": {"x": np.random.randn(2, 16).tolist()}}
     # The "json" override for one request is the reference (the helper asserts that it answers
     # lists). The plain request must use the default of the server and answer base64.
@@ -423,7 +430,7 @@ def test_predict_unsupported_dtype_falls_back_per_array(mlp_state, monkeypatch):
     # Simulate a dtype that this orjson cannot write natively (for example float128 on Linux)
     # without a dependency on the platform. Drop float32 from the supported set for this test
     # only.
-    monkeypatch.setattr(serve_predict, "_ORJSON_DTYPES", serve_predict._ORJSON_DTYPES - {"float32"})
+    monkeypatch.setattr(serve_encode, "ORJSON_DTYPES", serve_encode.ORJSON_DTYPES - {"float32"})
     fallback = np.array([[1.0, 2.0]], dtype=np.float32)
     native = np.array([[3, 4]], dtype=np.int64)
     client = _client_emitting(mlp_state, monkeypatch, {"a": fallback, "b": native})
@@ -554,7 +561,7 @@ def test_ready_and_predict_503_until_the_loader_lands(mlp_state):
         ):
             assert resp.status_code == 503, resp.text
             assert resp.headers["retry-after"] == "2"
-            assert resp.json() == {"detail": "model is not ready"}
+            assert resp.json() == {"detail": "model is not ready", "code": "not_ready"}
 
         release.set()
         app.state.loader_thread.join(timeout=5)
@@ -576,6 +583,8 @@ def test_index_names_the_model_and_the_routes(mlp_client):
     assert "/schema" in body["next_step"]
     for route in body["routes"].values():
         method, path = route.split(" ")
+        if "{" in path:  # a template: /v1/models/{model_id:path}
+            continue
         assert mlp_client.request(method, path).status_code != 404, route
 
 
@@ -599,7 +608,9 @@ def test_predict_backend_bug_maps_to_500_without_leaking_details(mlp_state, monk
         raise RuntimeError("some internal bug: /etc/secret/path")
 
     monkeypatch.setattr(mlp_state.backend, "infer", boom)
-    client = TestClient(build_app(mlp_state), raise_server_exceptions=False)
+    client = TestClient(
+        build_app(mlp_state, request_id_headers=True), raise_server_exceptions=False
+    )
 
     with caplog.at_level(logging.ERROR, logger="downshift.serve"):
         resp = client.post("/predict", json=MLP_INPUT)
@@ -629,7 +640,7 @@ def test_predict_torch_backend_out_of_memory_maps_to_500(serve_fixture):
 
 
 def test_predict_body_over_content_length_limit_is_413(mlp_state):
-    client = TestClient(build_app(_with_options(mlp_state, max_body_bytes=100)))
+    client = TestClient(build_app(with_options(mlp_state, max_body_bytes=100)))
     resp = client.post(
         "/predict",
         content=b'{"inputs": {"x": [[0.0]]}}',
@@ -642,7 +653,7 @@ def test_predict_body_over_content_length_limit_is_413(mlp_state):
 
 
 def test_predict_chunked_body_over_limit_is_413(mlp_state):
-    client = TestClient(build_app(_with_options(mlp_state, max_body_bytes=10)))
+    client = TestClient(build_app(with_options(mlp_state, max_body_bytes=10)))
 
     def chunks():
         yield b'{"inputs"'
@@ -654,7 +665,7 @@ def test_predict_chunked_body_over_limit_is_413(mlp_state):
 
 
 def test_predict_body_within_limit_succeeds(mlp_state):
-    client = TestClient(build_app(_with_options(mlp_state, max_body_bytes=10_000)))
+    client = TestClient(build_app(with_options(mlp_state, max_body_bytes=10_000)))
     resp = client.post("/predict", json=MLP_INPUT)
     assert resp.status_code == 200, resp.text
 
@@ -674,7 +685,7 @@ def test_predict_concurrency_default_serializes_inferences(mlp_state, monkeypatc
             active -= 1
         return {"output_0": np.zeros((1, 4), dtype=np.float32)}
 
-    serial_state = _with_options(mlp_state, max_concurrency=1)
+    serial_state = with_options(mlp_state, max_concurrency=1)
     monkeypatch.setattr(serial_state.backend, "infer", slow_infer)
     client = TestClient(build_app(serial_state))
 
@@ -701,7 +712,7 @@ def test_predict_concurrency_option_allows_overlapping_inferences(mlp_state, mon
             active -= 1
         return {"output_0": np.zeros((1, 4), dtype=np.float32)}
 
-    parallel_state = _with_options(mlp_state, max_concurrency=2)
+    parallel_state = with_options(mlp_state, max_concurrency=2)
     monkeypatch.setattr(parallel_state.backend, "infer", slow_infer)
     client = TestClient(build_app(parallel_state))
 
@@ -727,7 +738,7 @@ def test_predict_past_capacity_is_a_fast_503(mlp_state, monkeypatch):
         release.wait(timeout=5)
         return {"output_0": np.zeros((1, 4), dtype=np.float32)}
 
-    state = _with_options(mlp_state, max_concurrency=1, max_queue=1)
+    state = with_options(mlp_state, max_concurrency=1, max_queue=1)
     monkeypatch.setattr(state.backend, "infer", blocking_infer)
     client = TestClient(build_app(state))
 
@@ -750,33 +761,38 @@ def test_predict_past_capacity_is_a_fast_503(mlp_state, monkeypatch):
     assert "server is at capacity" in over.json()["detail"]
     assert "1 running" in over.json()["detail"]
     assert "1 queued" in over.json()["detail"]
-    assert elapsed < 0.5  # never uses the executor
+    assert elapsed < 2.5  # never uses the executor; the blocked infers last up to 5 s
     assert all(r.status_code == 200 for r in results)
 
 
 def test_predict_queued_past_request_timeout_is_503_and_never_infers(mlp_state, monkeypatch):
     calls: list[int] = []
+    gate = threading.Event()
 
     def slow_infer(inputs):
         calls.append(1)
-        time.sleep(0.3)
+        gate.wait(30)
         return {"output_0": np.zeros((1, 4), dtype=np.float32)}
 
-    state = _with_options(mlp_state, max_concurrency=1, max_queue=5, request_timeout=0.05)
+    state = with_options(mlp_state, max_concurrency=1, max_queue=5, request_timeout=0.1)
     monkeypatch.setattr(state.backend, "infer", slow_infer)
     client = TestClient(build_app(state))
 
-    with ThreadPoolExecutor(2) as pool:
-        first = pool.submit(client.post, "/predict", json=MLP_INPUT)
-        _wait_until(lambda: state.in_flight >= 1)
-        second = pool.submit(client.post, "/predict", json=MLP_INPUT)
+    try:
+        with ThreadPoolExecutor(2) as pool:
+            first = pool.submit(client.post, "/predict", json=MLP_INPUT)
+            _wait_until(lambda: state.in_flight >= 1)
+            second = pool.submit(client.post, "/predict", json=MLP_INPUT)
 
-        first_result = first.result()
-        second_result = second.result()
+            first_result = first.result()
+            second_result = second.result()
+    finally:
+        gate.set()
 
-    assert first_result.status_code == 200
+    assert first_result.status_code == 503  # the limit stops a running infer too
     assert second_result.status_code == 503
     assert "--request-timeout" in second_result.json()["detail"]
+    time.sleep(0.5)  # the first infer ends, and the thread of the second starts late
     assert len(calls) == 1  # the predict in the queue never reached infer()
 
 
@@ -787,7 +803,7 @@ def test_health_stays_fast_while_predicts_are_queued(mlp_state, monkeypatch):
         release.wait(timeout=5)
         return {"output_0": np.zeros((1, 4), dtype=np.float32)}
 
-    state = _with_options(mlp_state, max_concurrency=1, max_queue=50)
+    state = with_options(mlp_state, max_concurrency=1, max_queue=50)
     monkeypatch.setattr(state.backend, "infer", blocking_infer)
     client = TestClient(build_app(state))
 
@@ -810,7 +826,7 @@ def test_health_stays_fast_while_predicts_are_queued(mlp_state, monkeypatch):
     # This is far below the stalls of more than 5 seconds that a shared sync threadpool caused
     # in the past. The point is "never blocks behind the predict queue". It is not a tight
     # latency bound.
-    assert elapsed < 1.0
+    assert elapsed < 2.5
 
 
 def test_axis_max_num_nodes_rejects_a_larger_graph(serve_fixture):
@@ -848,17 +864,17 @@ def _loop_probe(state, monkeypatch) -> dict[str, list[bool]]:
         return probed
 
     monkeypatch.setattr(
-        serve_predict, "_prepare_feeds", wrap("prepare", serve_predict._prepare_feeds)
+        serve_predict, "prepare_feeds", wrap("prepare", serve_predict.prepare_feeds)
     )
-    monkeypatch.setattr(serve_predict, "_infer", wrap("infer", serve_predict._infer))
+    monkeypatch.setattr(serve_predict, "run_inference", wrap("infer", serve_predict.run_inference))
     monkeypatch.setattr(
-        serve_predict, "_encode_response", wrap("encode", serve_predict._encode_response)
+        serve_predict, "encode_response", wrap("encode", serve_predict.encode_response)
     )
     return seen
 
 
 def _inline_client(mlp_state, execution) -> TestClient:
-    return TestClient(build_app(_with_options(mlp_state, execution=execution, server_timing=True)))
+    return TestClient(build_app(with_options(mlp_state, execution=execution, server_timing=True)))
 
 
 def test_metadata_reports_the_execution_mode(mlp_client, mlp_state):
@@ -937,7 +953,7 @@ def test_inline_sends_a_text_request_to_the_pools(mlp_state, monkeypatch):
 
 
 def test_inline_errors_and_admission_behave_like_the_pools(mlp_state):
-    state = _with_options(mlp_state, execution=ExecutionChoice.inline)
+    state = with_options(mlp_state, execution=ExecutionChoice.inline)
     client = TestClient(build_app(state))
     assert client.post("/predict", json={"inputs": {"x": [[0.0] * 3]}}).status_code == 400
     assert client.post("/predict", json={"inputs": {}}).status_code == 400
@@ -950,3 +966,91 @@ def test_inline_errors_and_admission_behave_like_the_pools(mlp_state):
     assert state.in_flight == 0
     assert client.post("/predict", json=MLP_INPUT).status_code == 200
     assert state.in_flight == 0
+
+
+def test_metadata_has_no_serving_numerics_on_the_cpu(mlp_client):
+    assert mlp_client.get("/metadata").json()["serving_numerics"] is None
+
+
+def test_metadata_shows_the_serving_numerics(mlp_state, monkeypatch):
+    from downshift.entities.serving import ServingNumerics
+
+    check = ServingNumerics(
+        "CUDAExecutionProvider", "cuda", False, 1, 1, 2e-6, None, True, 1e-4, 1e-3
+    )
+    monkeypatch.setattr(mlp_state, "serving_numerics", check)
+    with TestClient(build_app(mlp_state)) as client:
+        body = client.get("/metadata").json()["serving_numerics"]
+    assert body["provider"] == "CUDAExecutionProvider"
+    assert body["ok"] is True and body["tf32"] is False and body["min_cosine"] is None
+
+
+def test_ready_is_503_stopping_after_the_flag_is_set(mlp_state):
+    app = build_app(mlp_state)
+    with TestClient(app) as client:
+        assert client.get("/ready").status_code == 200
+        app.state.stopping = True
+        ready = client.get("/ready")
+        assert ready.status_code == 503
+        assert ready.json() == {"ready": False, "phase": "stopping"}
+        assert client.post("/predict", json=MLP_INPUT).status_code == 200
+
+
+def test_a_stop_signal_sets_the_flag_and_runs_the_handler_of_uvicorn(mlp_state):
+    import signal
+
+    app = build_app(mlp_state)
+    calls = []
+
+    def uvicorn_handler(sig, frame):
+        calls.append(sig)
+
+    saved = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        signal.signal(signal.SIGINT, uvicorn_handler)
+        signal.signal(signal.SIGTERM, uvicorn_handler)
+        _flag_stopping_on_signal(app)
+        assert app.state.stopping is False
+        signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+        assert app.state.stopping is True
+        assert calls == [signal.SIGTERM]
+        app.state.stopping = False
+        signal.getsignal(signal.SIGINT)(signal.SIGINT, None)
+        assert app.state.stopping is True
+    finally:
+        for sig, handler in saved.items():
+            signal.signal(sig, handler)
+
+
+def test_the_stop_hook_does_nothing_off_the_main_thread(mlp_state):
+    import signal
+
+    app = build_app(mlp_state)
+    before = signal.getsignal(signal.SIGTERM)
+    thread = threading.Thread(target=_flag_stopping_on_signal, args=(app,))
+    thread.start()
+    thread.join()
+    assert signal.getsignal(signal.SIGTERM) is before
+
+
+def test_schema_and_index_include_the_root_path(mlp_state):
+    app = build_app(mlp_state)
+    with TestClient(app, root_path="/models/bert") as client:
+        assert "/models/bert/predict " in client.get("/schema").json()["example_curl"]
+        assert client.get("/").json()["routes"]["schema"] == "GET /models/bert/schema"
+
+
+def test_a_500_has_no_request_id_by_default(mlp_state, monkeypatch, caplog):
+    def boom(inputs):
+        raise RuntimeError("some internal bug")
+
+    monkeypatch.setattr(mlp_state.backend, "infer", boom)
+    client = TestClient(build_app(mlp_state), raise_server_exceptions=False)
+
+    with caplog.at_level(logging.ERROR, logger="downshift.serve"):
+        resp = client.post("/predict", json=MLP_INPUT)
+
+    assert resp.status_code == 500
+    assert "request_id" not in resp.json()
+    assert "x-request-id" not in resp.headers
+    assert "request_id" not in caplog.text

@@ -10,6 +10,7 @@ This page describes every name in `downshift.__all__`: the functions that run th
 - `downshift.core.verify`
 - `downshift.adapters.base`
 - `downshift.serve`
+- `downshift.serve.app`
 
 It then caches the result in `globals()` of `downshift`. Each later access is a plain attribute lookup. There is no more call to `__getattr__`.
 
@@ -27,7 +28,7 @@ For this reason, `downshift --help` and `--version` do not import torch. The CLI
 def check(
     model: torch.nn.Module,
     example_inputs: tuple | None = None,
-    k: int = 8,
+    samples: int = 8,
     adapter: Adapter | str | None = None,
     dynamic: dict[str, list[int]] | None = None,
     fp16: bool = False,
@@ -44,10 +45,10 @@ def check(
 `check` exports `model` to ONNX in memory and verifies it against PyTorch. It writes nothing to disk. `export()` is `check()` plus the writing of the artifact.
 
 - `example_inputs`: a tuple of forward arguments. If it is `None`, the adapter that downshift resolves makes a guess (see `prepare_model`).
-- `k`: the number of verification samples.
+- `samples`: the number of verification samples.
 - `adapter`: an `Adapter` instance, an adapter name (`"generic"`, `"pyg"`, `"hf"`), a `path/to/adapter.py[:attr]` spec, or `None` to detect the adapter.
 - `dynamic`: `{input_name: [axis, ...]}`. It overrides the dynamic axes. The default is axis 0 of every input.
-- `fp16`: casts a deep copy of `model` to `float16` before the export. The model of the caller and the tensors in `example_inputs` do not change. Downshift sets the model to `eval()` in place if it was in training mode. When `fp16=True`, downshift does this on the copy. The model of the caller then stays in its own mode.
+- `fp16`: exports `model` in fp32, then changes the ONNX graph to fp16 weights (`onnxruntime.transformers.float16`). The graph keeps fp32 inputs and outputs. Downshift verifies it against the fp32 `model` with the `float16` tolerances. The model and the tensors in `example_inputs` do not change. If ONNX Runtime has no CPU kernel for an fp16 operation, the verdict is `FAILED`. Then export without `fp16`, or use a newer ONNX Runtime.
 - `verify_numerics`: `False` skips the numerics check. This is the `--no-verify` behaviour. The graph is still exported, but the verdict can be only `UNVERIFIED` and never `CLEAN`.
 - `atol` and `rtol`: override the absolute and relative tolerance. `None` (the default for both) selects the tolerance from the floating dtype of the model. Refer to `downshift.core.verify.default_tolerances` and `settings.TOLERANCES`.
 - `seed`: seeds the generator of verification samples. `verify()` runs under `torch.random.fork_rng`, so the global RNG state of the caller does not change.
@@ -72,7 +73,7 @@ def export(
     model,
     output: str | Path,
     example_inputs: tuple | None = None,
-    k: int = 8,
+    samples: int = 8,
     adapter: Adapter | str | None = None,
     dynamic: dict[str, list[int]] | None = None,
     fp16: bool = False,
@@ -91,7 +92,7 @@ def export(
 `export` is `check()` plus the writing of `output` (the `.onnx` path) and a `.manifest.json` file next to it (`downshift.core.manifest.write_manifest`). Each parameter that is not in this list has the same meaning as on `check()`.
 
 - `output`: the path of the `.onnx` file. Downshift creates missing parent directories.
-- `export_cache_dir`: a directory for the disk tier of the export cache. The default is `DOWNSHIFT_EXPORT_CACHE_DIR`. If it is unset, nothing goes to disk. The key is the content of the weights. A restart then reuses a verified export.
+- `export_cache_dir`: a directory for the disk tier of the export cache. The default is the value of `DOWNSHIFT_EXPORT_CACHE_DIR` when you call `export()`. If it is unset, or you pass `None`, nothing goes to disk. The key is the content of the weights. A restart then reuses a verified export.
 - `source_path`: if it points to a real file, downshift records it in the manifest as the source checkpoint. The manifest has the file name only, never the directory. It also has the SHA-256 of the file.
 
 A `FAILED` verdict writes nothing. There is no `.onnx` file and no manifest. A `DEGRADED` verdict writes the artifact, because the manifest records how far the numbers differ. In that case, `verdict.onnx_path` is set on the returned verdict. `export` raises the same errors as `check()`.
@@ -104,7 +105,7 @@ def intake(
     reference: torch.nn.Module | None = None,
     example_inputs: tuple | None = None,
     adapter: Adapter | str | None = None,
-    k: int = 8,
+    samples: int = 8,
     dynamic: dict[str, list[int]] | None = None,
     atol: float | None = None,
     rtol: float | None = None,
@@ -128,7 +129,7 @@ The command `downshift check some.onnx --reference some_model.py:build` runs thi
 ```python
 def build_verdict(
     prepared: Prepared,
-    k: int = 8,
+    samples: int = 8,
     verify_numerics: bool = True,
     atol: float | None = None,
     rtol: float | None = None,
@@ -137,7 +138,7 @@ def build_verdict(
 ) -> ExportVerdict
 ```
 
-`build_verdict` is the half of `check()` that runs after the resolution of the adapter and the synthesis of the inputs. It does the capture (`torch.export` plus the ONNX translation) and then the numerics verification. `check()` is `build_verdict(prepare_model(...))`, with `fp16` handled between the two calls.
+`build_verdict` is the half of `check()` that runs after the resolution of the adapter and the synthesis of the inputs. It does the capture (`torch.export` plus the ONNX translation) and then the numerics verification. `check()` is `build_verdict(prepare_model(...))`, with the same `fp16` value.
 
 Use it directly when you already have a `Prepared`. For example, you can run a custom adapter once and inspect the result before you decide to export.
 
@@ -204,7 +205,7 @@ app.mount("/model", app_for(my_model, example_inputs))
 - `reference`: a PyTorch model to verify a `.onnx` `model` against. It has the same role as `--reference` on the CLI. Without it, downshift serves a `.onnx` `model` as `UNVERIFIED`.
 - `tokenizer_from`: a downloaded Hugging Face repo directory. It supplies the tokenizer, the pooling recipe and the label metadata for a `.onnx` `model`. It has the same role as `--tokenizer-from` on the CLI.
 - `cache`: if `True` (the default), `app_for` reuses an earlier export of the same model and options from the memo of the process, and from `export_cache_dir` if you give that `ServeOptions` field. `False` skips both.
-- `api_key`: if you set it, every route except `/health` and `/ready` needs `Authorization: Bearer <api_key>`. Without it, the route answers `401`. If you do not pass it, downshift uses the `DOWNSHIFT_SERVER_API_KEY` environment variable. Pass a value to override it for this app. If the key is unset or empty, downshift logs one `WARNING` that the endpoints are unauthenticated.
+- `api_key`: if you set it, every route except `/health` and `/ready` needs `Authorization: Bearer <api_key>`. Without it, the route answers `401`. If you do not pass it, downshift uses the `DOWNSHIFT_API_KEY` environment variable. Pass a value to override it for this app. If the key is unset or empty, downshift logs one `WARNING` that the endpoints are unauthenticated.
 - `options`: downshift forwards these as `ServeOptions` fields (`backend=`, `warmup=`, `max_concurrency=`, and others). [`serving.md`](serving.md) has the full list of fields. Every default comes from `downshift.settings`. The `DOWNSHIFT_*` environment variables therefore also apply here, not only to the CLI. Downshift reads them once, when `downshift` is imported. A keyword argument has priority. `check()`, `export()` and `intake()` are an exception for `k`. They use the constant `8` as the default and not `DOWNSHIFT_SAMPLES`.
 
 ### HTTPS with `app_for`
@@ -222,6 +223,24 @@ uvicorn.run(
 ```
 
 Use `ssl_ciphers=None`. With `None`, uvicorn keeps the cipher list of the Python standard library. The default of uvicorn (`"TLSv1"`) also enables NULL ciphers and anonymous ciphers. `downshift serve --ssl-certfile` uses the same settings. Refer to [HTTPS in production.md](production.md#https).
+
+### `build_app`
+
+```python
+def build_app(
+    state: ServingState | None = None,
+    *,
+    loader: Callable[[], ServingState] | None = None,
+    middleware: Sequence[str] = (),
+    api_key: str | None = settings.API_KEY,
+    access_log: bool = True,
+    metrics: bool = False,
+    request_id_headers: bool = False,
+    worker: str = "0",
+) -> FastAPI
+```
+
+`build_app` builds the FastAPI app over a serving state that you made yourself, or over a `loader` that makes it. Give exactly one of `state` and `loader`. Most code uses `app_for`, which calls `build_app`. If you do not pass `api_key`, downshift uses `DOWNSHIFT_API_KEY`. Refer to "`build_app`" in [`serving.md`](serving.md) for the details.
 
 ## Types
 
@@ -315,6 +334,8 @@ class NumericsReport:
     tolerance_rel: float
     tolerance_dtype: str = "float32"
     tolerance_overridden: bool = False
+    min_cosine: float | None = None
+    tolerance_cosine: float | None = None
     baseline_failed: bool = False
     worst: WorstMismatch | None = None
     sample_shapes: list[list[tuple[int, ...]]] = []
@@ -325,7 +346,7 @@ class NumericsReport:
 
 | Field | Type | Meaning |
 |---|---|---|
-| `samples_tested` | `int` | `k`, the number of samples that ran. |
+| `samples_tested` | `int` | `samples`, the number of samples that ran. |
 | `max_abs_err` | `float` | The largest absolute error across all output elements and samples. |
 | `max_rel_err` | `float` | The largest relative error, with the same scope. |
 | `failures` | `int` | The number of samples that failed the comparison in the style of `numpy.allclose`. `NumericsReport.passed` is `failures == 0`. |
@@ -333,6 +354,8 @@ class NumericsReport:
 | `tolerance_abs` / `tolerance_rel` | `float` | The `atol` and `rtol` that downshift used. |
 | `tolerance_dtype` | `str` | The floating dtype whose default tolerance applied (`"float32"`, `"float16"`, `"bfloat16"`, `"float64"`). Refer to `default_tolerances`. |
 | `tolerance_overridden` | `bool` | `True` if `--atol` or `--rtol` (or the `atol=` or `rtol=` keyword arguments) set the values, and not the default of `tolerance_dtype`. |
+| `min_cosine` | `float \| None` | For a text embedding model: the smallest cosine similarity between a torch row and an ONNX Runtime row, across all samples. `None` for other models. If it is lower than `tolerance_cosine`, the sample fails. |
+| `tolerance_cosine` | `float \| None` | The cosine tolerance (`DOWNSHIFT_TOL_COSINE`, default `0.9999`). `None` for a model that is not a text embedder. |
 | `baseline_failed` | `bool` | `True` if sample 0 (the example without a variation) failed. |
 | `worst` | `WorstMismatch \| None` | The element with the largest error across all samples. |
 | `sample_shapes` | `list[list[tuple[int, ...]]]` | The shapes of each input in each sample. The `Samples` row of the CLI prints them. |
@@ -368,19 +391,7 @@ class WorstMismatch:
 
 ### `Adapter`
 
-```python
-@runtime_checkable
-class Adapter(Protocol):
-    name: str
-
-    def matches(self, model: nn.Module, example_inputs: tuple | None) -> bool: ...
-    def example_inputs(self, model: nn.Module) -> tuple | None: ...
-    def prepare(
-        self, model: nn.Module, example_inputs: tuple, axis_max: dict[str, int] | None = None
-    ) -> Prepared: ...
-```
-
-`Adapter` is a `typing.Protocol` with `@runtime_checkable`, so `isinstance(obj, Adapter)` works. `registry.load_from_file` uses this to validate a custom adapter. [`adapters.md`](adapters.md) has the full contract, the resolution order and a worked example.
+`Adapter` is a `typing.Protocol` with `@runtime_checkable`, so `isinstance(obj, Adapter)` works. It has the attribute `name` and the methods `matches`, `example_inputs` and `prepare`. `registry.load_from_file` uses this to validate a custom adapter. [`adapters.md`](adapters.md) has the full contract, the resolution order and a worked example.
 
 ### `Prepared`
 
@@ -420,7 +431,7 @@ It is different from a numeric mismatch. A mismatch is a `NumericsReport` with `
 ### `__version__`
 
 ```python
-__version__: str  # "0.6.0"
+__version__: str  # "1.0.0rc1"
 ```
 
 Downshift reads it from `downshift._version`. It imports it eagerly, and not through the lazy `_LAZY` map. `downshift.__version__` and `downshift --version` therefore never cause the import of torch.

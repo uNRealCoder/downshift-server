@@ -27,6 +27,7 @@ from bench.run import (
     environment,
     free_port,
     run_load,
+    spawn_server,
     stage_split,
     stop_server,
     version_tuple,
@@ -68,8 +69,12 @@ DOWNSHIFT_VARIANTS = {
     # lets FastAPI's 40-thread pool overlap them; this is the tuned configuration.
     "downshift_auto_mc4": ["--backend", "auto", "--max-concurrency", "4"],
     "downshift_auto_inline": ["--backend", "auto", "--execution", "inline"],
+    "downshift_auto_cache": ["--backend", "auto"],
 }
-NEW_IN = {"downshift_auto_inline": (0, 5)}
+NEW_IN = {"downshift_auto_inline": (0, 5), "downshift_auto_cache": (0, 6)}
+# The harness sends the same body again and again, so a result cache would answer from memory.
+# Every variant but `downshift_auto_cache` turns it off (from 0.6.0, where the option starts).
+CACHE_OFF = ["--result-cache-rows", "0"]
 # Inline execution only pays off when compute is short: measured on the small encoder only.
 INLINE_MODELS = ("all-MiniLM-L6-v2",)
 
@@ -101,9 +106,14 @@ def run_check(path: str, target: str) -> dict:
     return {"exit_code": proc.returncode, "wall_s": round(elapsed, 2), "report": "\n".join(lines)}
 
 
-def start(path: str, variant: str, target: str | None) -> tuple[subprocess.Popen, int, float]:
+def start(
+    path: str, variant: str, target: str | None, version: str = ""
+) -> tuple[subprocess.Popen, int, float]:
     port = free_port()
     if target:
+        extra = list(DOWNSHIFT_VARIANTS[variant])
+        if variant != "downshift_auto_cache" and version_tuple(version) >= (0, 6):
+            extra += CACHE_OFF
         cmd = [
             PYTHON,
             "-m",
@@ -115,15 +125,13 @@ def start(path: str, variant: str, target: str | None) -> tuple[subprocess.Popen
             "--log-level",
             "warning",
             "--no-access-log",
-            *DOWNSHIFT_VARIANTS[variant],
+            *extra,
         ]
         env, ready_path = cli_env(target), "/ready"
     else:
         cmd = [PYTHON, "-m", "bench.naive_hf_server", path, str(port), variant.split("_")[1]]
         env, ready_path = None, "/health"
-    proc = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=str(ROOT), env=env
-    )
+    proc = spawn_server(cmd, env=env)
     return proc, port, wait_ready(port, proc, timeout=600, path=ready_path)
 
 
@@ -235,7 +243,7 @@ def main() -> None:
             version = versions[target] if target else None
             label = f"{variant}@{version}" if version else variant
             try:
-                proc, port, ready_s = start(path, variant, target)
+                proc, port, ready_s = start(path, variant, target, version)
             except Exception as exc:
                 print(f"  !! {label} failed to start: {exc}", flush=True)
                 continue

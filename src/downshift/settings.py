@@ -8,14 +8,13 @@ import os
 import re
 from collections.abc import Callable, Iterable
 
+from downshift._defaults import DEFAULT_SAMPLES
+
 # The decoded size that one base64 tensor input can reach. The server passes its own limit.
 DEFAULT_MAX_INPUT_BYTES = 256 * 1024 * 1024
 
 # The total size of a request body that the server reads before it parses the JSON.
 DEFAULT_MAX_BODY_BYTES = 32 * 1024 * 1024
-
-# The verification samples for check(), export(), intake(), build_verdict() and ServeOptions.k.
-DEFAULT_SAMPLES = 8
 
 
 _CGROUP_CPU_MAX = "/sys/fs/cgroup/cpu.max"
@@ -97,6 +96,13 @@ def _env_header(name: str, default: str) -> str:
     return raw
 
 
+def check_device(value: str) -> str:
+    """auto, cpu, cuda or cuda:N (N is 0 or more), else ValueError."""
+    if not re.fullmatch(r"auto|cpu|cuda(:[0-9]+)?", value):
+        raise ValueError(f"device {value!r} is not valid. Use auto, cpu, cuda or cuda:N")
+    return value
+
+
 def parse_axis_max(items: Iterable[str]) -> dict[str, int]:
     """ "seq=4096,num_nodes=500" (or one NAME=N per item) -> {name: N}, else ValueError."""
     result: dict[str, int] = {}
@@ -113,7 +119,9 @@ def parse_axis_max(items: Iterable[str]) -> dict[str, int]:
 
 HOST = os.environ.get("DOWNSHIFT_HOST", "127.0.0.1")
 PORT = _env_int("DOWNSHIFT_PORT", 8000)
-DEVICE = os.environ.get("DOWNSHIFT_DEVICE", "auto")
+DEVICE = _env_cast(
+    "DOWNSHIFT_DEVICE", "auto", check_device, "device (one of auto, cpu, cuda, cuda:N)"
+)
 BACKEND = _env_choice("DOWNSHIFT_BACKEND", "auto", ("auto", "onnxruntime", "torch"), "backend")
 WARMUP = _env_int("DOWNSHIFT_WARMUP", 3)
 SAMPLES = _env_int("DOWNSHIFT_SAMPLES", DEFAULT_SAMPLES)
@@ -181,8 +189,8 @@ RESULT_CACHE_ROWS: int | None = (
     else None
 )
 
-# The number of seconds that an admitted predict can wait without a start. After this time, it
-# gets a 503 and no inference. 0 means no limit.
+# The time limit in seconds for a whole predict, from its admission. At the limit, the client
+# gets a 503 and the slot is free. A running inference is not stopped. 0 means no limit.
 DEFAULT_REQUEST_TIMEOUT = 30.0
 REQUEST_TIMEOUT = _env_float("DOWNSHIFT_REQUEST_TIMEOUT", DEFAULT_REQUEST_TIMEOUT)
 
@@ -193,10 +201,17 @@ WORKERS = _env_int("DOWNSHIFT_WORKERS", 1)
 
 # If it is set, every route except /health and /ready needs "Authorization: Bearer <this value>".
 # None (unset) means no authentication, with a startup warning that says so.
-API_KEY = os.environ.get("DOWNSHIFT_SERVER_API_KEY")
+# DOWNSHIFT_SERVER_API_KEY is the old name. It works until 1.1 at the earliest, and the new
+# name wins. build_app warns if the old name is set.
+# A new name that is set to "" wins: it turns the key off.
+API_KEY = os.environ.get("DOWNSHIFT_API_KEY", os.environ.get("DOWNSHIFT_SERVER_API_KEY"))
+
+# Read the request ID from each request and set it on each response. It is off by default: with
+# it off, the server has no request ID middleware, and no log line or error body has an ID.
+ENABLE_REQUEST_ID_HEADERS = _env_bool("DOWNSHIFT_ENABLE_REQUEST_ID_HEADERS", False)
 
 # The header that carries the request ID: the server reads it from a request and sets it on
-# each response.
+# each response. It has an effect only with ENABLE_REQUEST_ID_HEADERS.
 REQUEST_ID_HEADER = _env_header("DOWNSHIFT_REQUEST_ID_HEADER", "X-Request-Id")
 
 # The header of a /predict response that says hit, partial or miss for the result cache.
@@ -207,12 +222,40 @@ CACHE_HEADER = _env_header("DOWNSHIFT_CACHE_HEADER", "X-Downshift-Cache")
 # that another client sent the same row. The access log has the timings in both cases.
 SERVER_TIMING = _env_bool("DOWNSHIFT_SERVER_TIMING", False)
 
+# Count the requests and serve them as Prometheus text on GET /metrics. It is off by default.
+# Each worker counts for itself.
+METRICS = _env_bool("DOWNSHIFT_METRICS", False)
+
+# The model name that GET /v1/models shows and that POST /v1/embeddings requires. Unset: the
+# name of the model source (the last part of a path).
+SERVED_MODEL_NAME = os.environ.get("DOWNSHIFT_SERVED_MODEL_NAME") or None
+
+# Tell downshift that the model was trained for Matryoshka cuts. Then POST /v1/embeddings accepts
+# `dimensions`: it keeps the first values of each vector and scales the vector to unit length.
+MATRYOSHKA = _env_bool("DOWNSHIFT_MATRYOSHKA", False)
+
+# Allow TF32 math on the GPU (Ampere and newer). It is faster and less exact. It is off by
+# default, so the GPU result stays close to the CPU result that the verdict checked.
+TF32 = _env_bool("DOWNSHIFT_TF32", False)
+
 # HTTPS. If SSL_CERTFILE is set, `serve` uses TLS. The key can be in the cert file, or in its
 # own file. The password of an encrypted key is an environment variable only, so that it does
 # not show in the process list.
 SSL_CERTFILE = os.environ.get("DOWNSHIFT_SSL_CERTFILE") or None
 SSL_KEYFILE = os.environ.get("DOWNSHIFT_SSL_KEYFILE") or None
 SSL_KEYFILE_PASSWORD = os.environ.get("DOWNSHIFT_SSL_KEYFILE_PASSWORD") or None
+
+# The path prefix that a reverse proxy strips before it sends a request to downshift. The links
+# in GET / and the example URL in GET /schema then include it. "" = no prefix.
+ROOT_PATH = os.environ.get("DOWNSHIFT_ROOT_PATH", "")
+
+# The proxies (comma-separated IPs, or "*") whose X-Forwarded-For and X-Forwarded-Proto headers
+# downshift trusts. None (unset) = the default of uvicorn, 127.0.0.1.
+FORWARDED_ALLOW_IPS = os.environ.get("DOWNSHIFT_FORWARDED_ALLOW_IPS") or None
+
+# On SIGTERM, the seconds that the server waits for the running requests before it stops.
+# 0 = wait without a limit.
+TIMEOUT_GRACEFUL_SHUTDOWN = _env_int("DOWNSHIFT_TIMEOUT_GRACEFUL_SHUTDOWN", 30)
 
 # (atol, rtol) for the narrowest float dtype in the numerics verification. You can loosen one
 # value and not change the others. Example: DOWNSHIFT_TOL_FLOAT16_ATOL=0.05 for an fp16 model
@@ -231,3 +274,15 @@ TOLERANCES: dict[str, tuple[float, float]] = {
     )
     for name, (atol, rtol) in _TOLERANCE_DEFAULTS.items()
 }
+
+# The smallest cosine similarity between a torch embedding and an ONNX Runtime embedding. The
+# verification checks it for each row of an embedding model, in addition to atol and rtol.
+TOLERANCE_COSINE = _env_float("DOWNSHIFT_TOL_COSINE", 0.9999)
+
+# (atol, rtol) of the serving check when TF32 is on. TF32 has a 10-bit mantissa, so its error is
+# about 1e-3 relative. The serving check uses the larger of this pair and the tolerance of the
+# verdict. Experimental.
+TOLERANCE_TF32 = (
+    _env_float("DOWNSHIFT_TOL_TF32_ATOL", 1e-3),
+    _env_float("DOWNSHIFT_TOL_TF32_RTOL", 1e-2),
+)

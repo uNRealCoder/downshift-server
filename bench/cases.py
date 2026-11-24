@@ -208,7 +208,7 @@ def prepare(name: str, export: bool = True) -> Case:
             max_abs_err=None,
         )
 
-    verdict = build_verdict(prepared, k=8)
+    verdict = build_verdict(prepared, samples=8)
     onnx_bytes = None
     if verdict.onnx_program is not None:
         onnx_bytes = verdict.onnx_program.model_proto.SerializeToString()

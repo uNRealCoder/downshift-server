@@ -1,0 +1,48 @@
+site_name: downshift
+site_description: Serve PyTorch models over HTTP through ONNX Runtime, with an export check.
+repo_url: https://github.com/uNRealCoder/downshift-server
+edit_uri: edit/main/docs/
+docs_dir: docs
+use_directory_urls: false  # page.html next to openapi.json keeps the Swagger UI path simple
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - content.code.copy
+
+plugins:
+  - search
+  - swagger-ui-tag
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]  # reads the source with griffe; it does not import torch
+          options:
+            show_source: false
+            members_order: source
+            docstring_style: google
+
+markdown_extensions:
+  - tables
+  - toc:
+      permalink: true
+      slugify: !!python/object/apply:pymdownx.slugs.slugify {kwds: {case: lower}}  # same anchors as GitHub
+
+nav:
+  - Home: README.md
+  - Guides:
+      - architecture.md
+      - walkthrough.md
+      - cli.md
+      - production.md
+      - openai.md
+      - adapters.md
+      - serving.md
+      - stability.md
+      - compatibility.md
+  - API reference:
+      - HTTP API (OpenAPI): reference/http.md
+      - HTTP API (notes): http-api.md
+      - Python API (generated): reference/python.md
+      - Python API (notes): python-api.md

@@ -33,8 +33,8 @@ _UNKNOWN_HELP = (
 def eager_output_axes(prepared: Any, samples: int = 4) -> list[str]:
     """The output kinds of a PyG model that was not verified, from a few eager passes over
     the adapter's samples. [] if they cannot be found."""
-    from downshift.adapters.base import Family
     from downshift.core.axes import classify_outputs
+    from downshift.entities.adapters import Family
 
     if prepared.family != Family.pyg or prepared.vary_fn is None:
         return []

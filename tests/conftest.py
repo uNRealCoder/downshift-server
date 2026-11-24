@@ -5,6 +5,7 @@ that more than one module needs one time for each session.
 """
 
 import base64
+import dataclasses
 import os
 import shutil
 import subprocess
@@ -19,9 +20,11 @@ from fastapi.testclient import TestClient
 
 import downshift
 from downshift.core.memo import MEMO
-from downshift.loading import LoadSpec, load_model
+from downshift.entities.loading import LoadSpec
+from downshift.entities.serving import ServingState
+from downshift.loading import load_model
 from downshift.serve.app import build_app
-from downshift.serve.engine import ServeOptions, ServingState, prepare_serving
+from downshift.serve.engine import ServeOptions, prepare_serving
 from tests.models import clean_mlp
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -60,23 +63,6 @@ def tls_files(tmp_path_factory) -> TlsFiles:
         "-out", files.key_encrypted,
     )  # fmt: skip
     return files
-
-
-_TORCH_VERSION = tuple(int(p) for p in torch.__version__.split("+")[0].split(".")[:2])
-
-
-def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Skip `needs_torch_26` tests on the CI floor job, which uses torch 2.5.1.
-
-    A marker next to the tests replaces an inline `--deselect` list in the CI YAML. The marker
-    cannot become old when you add, rename or remove tests.
-    """
-    if _TORCH_VERSION >= (2, 6):
-        return
-    skip = pytest.mark.skip(reason=f"needs torch>=2.6, running {torch.__version__}")
-    for item in items:
-        if "needs_torch_26" in item.keywords:
-            item.add_marker(skip)
 
 
 class WorkerExit(Exception):
@@ -125,6 +111,11 @@ def subprocess_env(*extra_paths: Path) -> dict[str, str]:
     paths = [str(REPO_ROOT / "src"), *map(str, extra_paths), env.get("PYTHONPATH", "")]
     env["PYTHONPATH"] = os.pathsep.join(paths)
     return env
+
+
+def with_options(state: ServingState, **overrides) -> ServingState:
+    """A copy of `state` whose ServeOptions have the changes in `overrides`."""
+    return dataclasses.replace(state, options=dataclasses.replace(state.options, **overrides))
 
 
 def b64_input(arr: np.ndarray, **overrides) -> dict:

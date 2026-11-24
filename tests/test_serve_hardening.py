@@ -2,7 +2,6 @@
 request body, the admission before the body is read, bf16 models, the checks of input ranges,
 the /ready phases and the mapping of torch errors."""
 
-import dataclasses
 import logging
 import threading
 import time
@@ -15,15 +14,19 @@ from fastapi.testclient import TestClient
 from torch import nn
 
 from downshift import settings
-from downshift.core.phase import Phase, report
-from downshift.loading import LoadSpec, load_model
+from downshift.core.phase import report
+from downshift.entities.loading import LoadSpec
+from downshift.entities.options import BackendChoice
+from downshift.entities.phase import Phase
+from downshift.entities.serving import ServingState
+from downshift.loading import load_model
 from downshift.serve.app import build_app
 from downshift.serve.backends import OnnxRuntimeBackend, TorchBackend
-from downshift.serve.engine import ServeOptions, ServingState, prepare_serving
-from downshift.serve.options import BackendChoice
+from downshift.serve.engine import ServeOptions, prepare_serving
+from tests.conftest import with_options
 
 MLP_INPUT = {"inputs": {"x": [[0.0] * 16]}}
-NOT_SET = "DOWNSHIFT_SERVER_API_KEY is not set"
+NOT_SET = "DOWNSHIFT_API_KEY is not set"
 KEY = "s3cret"
 AUTH = {"Authorization": f"Bearer {KEY}"}
 BODY_LIMIT = 200
@@ -33,10 +36,6 @@ def _serve(spec: str, **opts) -> ServingState:
     return prepare_serving(load_model(LoadSpec(spec)), ServeOptions(warmup=1, **opts))
 
 
-def _with_options(state: ServingState, **overrides) -> ServingState:
-    return dataclasses.replace(state, options=dataclasses.replace(state.options, **overrides))
-
-
 @pytest.fixture(scope="module")
 def mlp_state() -> ServingState:
     return _serve("tests.models.clean_mlp:make_model", result_cache_rows=0)
@@ -44,7 +43,7 @@ def mlp_state() -> ServingState:
 
 @pytest.fixture(scope="module")
 def small_body_state(mlp_state) -> ServingState:
-    return _with_options(mlp_state, max_body_bytes=BODY_LIMIT)
+    return with_options(mlp_state, max_body_bytes=BODY_LIMIT)
 
 
 # --- API key ---------------------------------------------------------------------------------
@@ -60,7 +59,10 @@ def test_predict_without_the_key_is_401_with_a_bearer_challenge(keyed):
 
     assert resp.status_code == 401
     assert resp.headers["www-authenticate"] == "Bearer"
-    assert resp.json() == {"detail": "Authorization header is not set or incorrect"}
+    assert resp.json() == {
+        "detail": "Authorization header is not set or incorrect",
+        "code": "unauthorized",
+    }
 
 
 @pytest.mark.parametrize("header", ["Bearer nope", "Bearer ", f"Basic {KEY}", KEY])
@@ -115,6 +117,28 @@ def test_a_key_set_does_not_warn(mlp_state, caplog):
     with caplog.at_level(logging.WARNING, logger="downshift.serve"):
         build_app(mlp_state, api_key=KEY)
     assert not [r for r in caplog.records if NOT_SET in r.getMessage()]
+
+
+@pytest.mark.parametrize(
+    ("new_name_set", "expected"),
+    [(False, "Set DOWNSHIFT_API_KEY instead"), (True, "uses DOWNSHIFT_API_KEY")],
+)
+def test_the_old_api_key_name_warns_at_build(
+    mlp_state, caplog, monkeypatch, new_name_set, expected
+):
+    monkeypatch.setenv("DOWNSHIFT_SERVER_API_KEY", "old")
+    if new_name_set:
+        monkeypatch.setenv("DOWNSHIFT_API_KEY", "new")
+    else:
+        monkeypatch.delenv("DOWNSHIFT_API_KEY", raising=False)
+    with caplog.at_level(logging.WARNING, logger="downshift.serve"):
+        build_app(mlp_state, api_key=KEY)
+
+    warned = [
+        r.getMessage() for r in caplog.records if "DOWNSHIFT_SERVER_API_KEY" in r.getMessage()
+    ]
+    assert len(warned) == 1
+    assert expected in warned[0]
 
 
 def test_the_probes_stay_exempt_when_the_app_is_mounted_under_a_prefix(mlp_state):
@@ -195,7 +219,7 @@ def test_a_content_length_over_the_limit_is_413_before_the_handler_runs(
 
 @pytest.fixture
 def tight_state(mlp_state) -> ServingState:
-    return _with_options(mlp_state, max_concurrency=1, max_queue=0, max_body_bytes=BODY_LIMIT)
+    return with_options(mlp_state, max_concurrency=1, max_queue=0, max_body_bytes=BODY_LIMIT)
 
 
 def test_a_full_server_answers_503_without_reading_the_body(tight_state):
@@ -497,7 +521,10 @@ def test_a_client_shape_mistake_on_torch_is_a_400(torch_state):
 )
 def test_a_server_side_runtime_error_in_forward_is_a_500(torch_state, monkeypatch, message):
     monkeypatch.setattr(torch_state.backend, "module", _Failing(message))
-    client = TestClient(build_app(torch_state, api_key=None), raise_server_exceptions=False)
+    client = TestClient(
+        build_app(torch_state, api_key=None, request_id_headers=True),
+        raise_server_exceptions=False,
+    )
 
     resp = client.post("/predict", json=MLP_INPUT)
 
@@ -533,7 +560,7 @@ def test_device_cuda_without_cuda_fails_at_construction(monkeypatch, device):
 def test_a_slow_text_encode_does_not_hold_the_inference_slot(tmp_path, monkeypatch):
     pytest.importorskip("transformers")
     pytest.importorskip("tokenizers")
-    from downshift.adapters.text import TextIO
+    from downshift.entities.adapters import TextIO
     from tests.models import hf_repo
 
     repo = hf_repo.write_encoder_repo(tmp_path)
@@ -543,10 +570,11 @@ def test_a_slow_text_encode_does_not_hold_the_inference_slot(tmp_path, monkeypat
     )
     client = TestClient(build_app(state, api_key=None))
     started = threading.Event()
+    gate = threading.Event()
 
     def slow_encode(self, text):
         started.set()
-        time.sleep(2.0)
+        gate.wait(30)
         raise ValueError("never mind")
 
     monkeypatch.setattr(TextIO, "encode", slow_encode)
@@ -558,24 +586,28 @@ def test_a_slow_text_encode_does_not_hold_the_inference_slot(tmp_path, monkeypat
     assert started.wait(5)
 
     began = time.perf_counter()
-    resp = client.post("/predict", json=_ids([2, 3, 4]))
-    elapsed = time.perf_counter() - began
+    try:
+        resp = client.post("/predict", json=_ids([2, 3, 4]))
+        elapsed = time.perf_counter() - began
+    finally:
+        gate.set()
     slow.join()
 
     assert resp.status_code == 200, resp.text
-    assert elapsed < 1.0
+    assert elapsed < 2.5, "the blocked encode must not hold this request"
     assert results == [400]
 
 
 def test_a_request_queued_for_inference_still_times_out(mlp_state, monkeypatch):
     calls: list[int] = []
+    gate = threading.Event()
 
     def slow_infer(inputs):
         calls.append(1)
-        time.sleep(0.4)
+        gate.wait(30)
         return {"output_0": np.zeros((1, 4), dtype=np.float32)}
 
-    state = _with_options(mlp_state, max_concurrency=1, max_queue=5, request_timeout=0.1)
+    state = with_options(mlp_state, max_concurrency=1, max_queue=5, request_timeout=0.1)
     monkeypatch.setattr(state.backend, "infer", slow_infer)
     client = TestClient(build_app(state, api_key=None))
     results: list[int] = []
@@ -584,12 +616,16 @@ def test_a_request_queued_for_inference_still_times_out(mlp_state, monkeypatch):
     )
     first.start()
     time.sleep(0.05)
-    second = client.post("/predict", json=MLP_INPUT)
-    first.join()
+    try:
+        second = client.post("/predict", json=MLP_INPUT)
+        first.join()
+    finally:
+        gate.set()
 
     assert second.status_code == 503
     assert "--request-timeout" in second.json()["detail"]
-    assert results == [200]
+    assert results == [503]  # the limit stops a running infer too
+    time.sleep(0.5)  # the first infer ends, and the thread of the second starts late
     assert len(calls) == 1
 
 
@@ -605,9 +641,53 @@ def test_server_timing_and_the_access_log_carry_the_wait_stages(mlp_state, monke
 def test_a_500_sets_the_configured_request_id_header(torch_state, monkeypatch):
     monkeypatch.setattr(settings, "REQUEST_ID_HEADER", "X-Correlation-Id")
     monkeypatch.setattr(torch_state.backend, "module", _Failing("boom"))
-    client = TestClient(build_app(torch_state, api_key=None), raise_server_exceptions=False)
+    client = TestClient(
+        build_app(torch_state, api_key=None, request_id_headers=True),
+        raise_server_exceptions=False,
+    )
 
     resp = client.post("/predict", json=MLP_INPUT, headers={"X-Correlation-Id": "trace-500"})
 
     assert resp.status_code == 500
     assert resp.json()["request_id"] == resp.headers["x-correlation-id"] == "trace-500"
+
+
+def test_a_timeout_error_inside_the_backend_is_not_a_request_timeout(mlp_state, monkeypatch):
+    state = with_options(mlp_state, request_timeout=30.0)
+
+    def broken(_inputs):
+        raise TimeoutError("the backend lost a socket")
+
+    monkeypatch.setattr(state.backend, "infer", broken)
+    client = TestClient(build_app(state, api_key=None), raise_server_exceptions=False)
+
+    response = client.post("/predict", json=MLP_INPUT)
+
+    assert response.status_code == 500
+    assert response.json()["code"] == "internal_error"
+
+
+@pytest.mark.parametrize("supplied", ["bad id", "a" * 129, "x<script>", "caf\u00e9"])
+def test_a_request_id_with_unsafe_characters_is_replaced(mlp_state, supplied):
+    client = TestClient(build_app(mlp_state, api_key=None, request_id_headers=True))
+
+    response = client.get("/health", headers={"X-Request-Id": supplied.encode("latin-1")})
+
+    assert response.headers["x-request-id"] != supplied
+    assert len(response.headers["x-request-id"]) == 16
+
+
+def test_a_safe_request_id_is_kept(mlp_state):
+    client = TestClient(build_app(mlp_state, api_key=None, request_id_headers=True))
+
+    response = client.get("/health", headers={"X-Request-Id": "trace.1:a_b-C"})
+
+    assert response.headers["x-request-id"] == "trace.1:a_b-C"
+
+
+def test_the_v1_path_without_a_slash_has_the_openai_error_shape(mlp_state):
+    client = TestClient(build_app(mlp_state, api_key=None))
+
+    body = client.get("/v1").json()
+
+    assert body["error"]["code"] == "not_found"

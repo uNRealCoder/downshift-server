@@ -94,6 +94,12 @@ def test_per_dtype_tolerance_override(monkeypatch: pytest.MonkeyPatch) -> None:
     assert mod.TOLERANCES["float32"] == (1e-4, 1e-3)
 
 
+def test_cosine_tolerance_default_and_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert importlib.reload(settings).TOLERANCE_COSINE == 0.9999
+    monkeypatch.setenv("DOWNSHIFT_TOL_COSINE", "0.99")
+    assert importlib.reload(settings).TOLERANCE_COSINE == 0.99
+
+
 def test_axis_max_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DOWNSHIFT_AXIS_MAX", "seq=4096, num_nodes=500")
     assert importlib.reload(settings).AXIS_MAX == {"seq": 4096, "num_nodes": 500}
@@ -138,6 +144,41 @@ def test_prep_threads_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.PREP_THREADS == 7
 
 
+def test_api_key_new_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DOWNSHIFT_API_KEY", "new")
+    monkeypatch.delenv("DOWNSHIFT_SERVER_API_KEY", raising=False)
+    assert importlib.reload(settings).API_KEY == "new"
+
+
+def test_api_key_old_name_works(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DOWNSHIFT_API_KEY", raising=False)
+    monkeypatch.setenv("DOWNSHIFT_SERVER_API_KEY", "old")
+    assert importlib.reload(settings).API_KEY == "old"
+
+
+def test_api_key_new_name_wins_over_old_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DOWNSHIFT_API_KEY", "new")
+    monkeypatch.setenv("DOWNSHIFT_SERVER_API_KEY", "old")
+    assert importlib.reload(settings).API_KEY == "new"
+
+
+@pytest.mark.parametrize("value", ["auto", "cpu", "cuda", "cuda:0", "cuda:12"])
+def test_device_env_var_accepts_the_allowed_values(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("DOWNSHIFT_DEVICE", value)
+    assert importlib.reload(settings).DEVICE == value
+
+
+@pytest.mark.parametrize("value", ["gpu", "cuda:", "cuda:-1", "cuda:x", "cuda:1:2"])
+def test_bad_device_env_var_lists_the_allowed_values(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("DOWNSHIFT_DEVICE", value)
+    with pytest.raises(ValueError, match="DOWNSHIFT_DEVICE.*auto, cpu, cuda, cuda:N"):
+        importlib.reload(settings)
+
+
 def test_execution_defaults_to_threadpool(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DOWNSHIFT_EXECUTION", raising=False)
     assert importlib.reload(settings).EXECUTION == "threadpool"
@@ -165,10 +206,10 @@ def test_the_body_and_timeout_defaults():
 
 def _serve_options_in_a_child(**env: str) -> dict:
     """ServeOptions() as a new interpreter sees it. Downshift reads its defaults from settings
-    when downshift.serve.options is first imported. A reload in the same process cannot show
+    when downshift.entities.options is first imported. A reload in the same process cannot show
     them."""
     code = (
-        "import json; from downshift.serve.options import ServeOptions; o = ServeOptions(); "
+        "import json; from downshift.entities.options import ServeOptions; o = ServeOptions(); "
         "print(json.dumps({'max_body_bytes': o.max_body_bytes, 'request_timeout': o.request_timeout}))"
     )
     child_env = {k: v for k, v in subprocess_env().items() if not k.startswith("DOWNSHIFT_")}
@@ -239,3 +280,61 @@ def test_cache_header_defaults_and_reads_the_env(monkeypatch: pytest.MonkeyPatch
     assert importlib.reload(settings).CACHE_HEADER == "X-Downshift-Cache"
     monkeypatch.setenv("DOWNSHIFT_CACHE_HEADER", "X-Result-Cache")
     assert importlib.reload(settings).CACHE_HEADER == "X-Result-Cache"
+
+
+def test_served_model_name_is_unset_by_default_and_read_from_the_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DOWNSHIFT_SERVED_MODEL_NAME", raising=False)
+    assert importlib.reload(settings).SERVED_MODEL_NAME is None
+
+    monkeypatch.setenv("DOWNSHIFT_SERVED_MODEL_NAME", "my-model")
+    assert importlib.reload(settings).SERVED_MODEL_NAME == "my-model"
+
+
+def test_matryoshka_is_off_by_default_and_read_from_the_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DOWNSHIFT_MATRYOSHKA", raising=False)
+    assert importlib.reload(settings).MATRYOSHKA is False
+
+    monkeypatch.setenv("DOWNSHIFT_MATRYOSHKA", "1")
+    assert importlib.reload(settings).MATRYOSHKA is True
+
+
+def test_an_empty_new_api_key_wins_over_the_old_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DOWNSHIFT_API_KEY", "")
+    monkeypatch.setenv("DOWNSHIFT_SERVER_API_KEY", "old")
+    assert importlib.reload(settings).API_KEY == ""
+
+
+def test_tf32_is_off_by_default_and_read_from_the_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DOWNSHIFT_TF32", raising=False)
+    assert importlib.reload(settings).TF32 is False
+
+    monkeypatch.setenv("DOWNSHIFT_TF32", "1")
+    assert importlib.reload(settings).TF32 is True
+
+
+def test_the_tf32_tolerance_is_read_from_the_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert importlib.reload(settings).TOLERANCE_TF32 == (1e-3, 1e-2)
+
+    monkeypatch.setenv("DOWNSHIFT_TOL_TF32_ATOL", "0.5")
+    assert importlib.reload(settings).TOLERANCE_TF32 == (0.5, 1e-2)
+
+
+def test_proxy_and_shutdown_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("ROOT_PATH", "FORWARDED_ALLOW_IPS", "TIMEOUT_GRACEFUL_SHUTDOWN"):
+        monkeypatch.delenv(f"DOWNSHIFT_{name}", raising=False)
+    mod = importlib.reload(settings)
+    assert (mod.ROOT_PATH, mod.FORWARDED_ALLOW_IPS, mod.TIMEOUT_GRACEFUL_SHUTDOWN) == ("", None, 30)
+
+    monkeypatch.setenv("DOWNSHIFT_ROOT_PATH", "/models/bert")
+    monkeypatch.setenv("DOWNSHIFT_FORWARDED_ALLOW_IPS", "*")
+    monkeypatch.setenv("DOWNSHIFT_TIMEOUT_GRACEFUL_SHUTDOWN", "0")
+    mod = importlib.reload(settings)
+    assert (mod.ROOT_PATH, mod.FORWARDED_ALLOW_IPS, mod.TIMEOUT_GRACEFUL_SHUTDOWN) == (
+        "/models/bert",
+        "*",
+        0,
+    )

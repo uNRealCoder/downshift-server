@@ -5,6 +5,7 @@ on:
     branches: [ main, develop ]
   pull_request:
     branches: [ main, develop ]
+  workflow_call:
 
 jobs:
   test:
@@ -29,14 +30,9 @@ jobs:
       - run: mypy src
       - run: pytest -q --cov=src/downshift --cov-report=term-missing --cov-fail-under=95
 
-  floor:
-    # This job pins the oldest torch that the dynamo exporter supports (report= on
-    # torch.onnx.export is a feature of 2.5). It also pins the oldest onnx, onnxruntime and
-    # onnxscript that we verified locally for export and run with it. onnx 1.14 (the previous
-    # floor) does not install together with the requirement onnx>=1.16 of onnxscript. onnxscript
-    # below 0.5 has a real bug in the type-promotion pass of torch 2.5 on a plain Conv2d with a
-    # dynamic batch. Neither fault is specific to the code of this project. onnxruntime 1.17
-    # needs numpy<2 for its ABI.
+  docs:
+    # Read the Docs builds the site from the same files. The build needs no torch: mkdocstrings
+    # reads the source without an import, and docs/openapi.json is a committed file.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,10 +40,37 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install "torch==2.5.1" --index-url https://download.pytorch.org/whl/cpu
-      # transformers 5.19 calls torch.accelerator (torch 2.6 and later) on import. 5.17.0 is the
-      # last release with which this job passed.
-      - run: pip install "onnx==1.16.0" "onnxruntime==1.17.0" "onnxscript==0.5.0" "numpy<2" "transformers==5.17.0"
+          cache-dependency-path: docs/requirements.txt
+      - run: pip install -r docs/requirements.txt
+      - run: mkdocs build --strict
+        env:
+          NO_MKDOCS_2_WARNING: "1"
+
+  floor:
+    # This job pins the oldest torch that downshift supports (2.8), the oldest onnxruntime (1.20:
+    # torch 2.8 writes IR version 10 graphs and ArgMax for last-token pooling needs a CPU kernel),
+    # the oldest onnxscript, transformers at its floor (5.17.0), and the oldest web and CLI
+    # libraries. Downshift uses only the dynamo exporter (torch.onnx.export(dynamo=True)), so the
+    # onnx package has no old-version limit: the job uses the latest stable onnx.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install "torch==2.8.0" --index-url https://download.pytorch.org/whl/cpu
+      # onnx-ir 0.1.16 and later broke the exporter of torch 2.6: its version converter said "The
+      # model contains functions" and every export was FAILED. 0.1.15 is the newest that worked
+      # there. The pin keeps the floor job the same on each run.
+      # One pip command for all pins, so that pip resolves them together. typer 0.12 to 0.14 were
+      # three packages (typer, typer-slim, typer-cli) that share one folder. If pip installs them
+      # on top of a newer typer, its uninstall step deletes the new files, and `import typer` fails.
+      # The typer floor is 0.19 for another reason: typer 0.18 and earlier import rich at load time.
+      - run: >-
+          pip install "onnx==1.23.2" "onnxruntime==1.20.1" "onnxscript==0.5.0" "onnx-ir<0.1.16"
+          "numpy==2.0.2" "transformers==5.17.0" "typer==0.19.0" "fastapi==0.115.0"
+          "uvicorn[standard]==0.30.0" "pydantic==2.5.0" "orjson==3.10.7" "torch-geometric==2.7.0"
       - run: pip install -e ".[dev,gnn,hf,fast]"
       # The HTTPS tests make a throwaway certificate with the openssl command (tests/conftest.py).
       # The runner images have it. The install is only a fallback.
@@ -56,17 +79,7 @@ jobs:
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy src
-      - name: pytest
-        # The newest releases of transformers and torch-geometric that are compatible with these
-        # pins do not change this. The dynamo tracer of torch 2.5.1 cannot export a BertModel
-        # that is built from scratch with a dynamic sequence axis. It also cannot export a few
-        # PyG message-passing patterns (ConstraintViolationError or "Unsupported: call_method"
-        # from torch itself). These errors do not come from the code of this project, and no
-        # combination of onnx, onnxruntime and onnxscript that we tried fixes them. These tests
-        # have `@pytest.mark.needs_torch_26`. conftest.py skips them here, based on
-        # torch.__version__, until the floor moves above 2.5.x. All other tests run and pass,
-        # including the rest of the hf and gnn suites.
-        run: pytest -q
+      - run: pytest -q
 
   windows:
     runs-on: windows-latest

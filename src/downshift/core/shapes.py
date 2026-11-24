@@ -9,8 +9,8 @@ from typing import Any
 
 import torch
 
-from downshift.adapters.base import VaryFn
-from downshift.core.axes import AxisBounds, DimBound
+from downshift.entities.adapters import VaryFn
+from downshift.entities.axes import AxisBounds, DimBound
 
 # The default maximum of each Dim that downshift makes itself (the default rule, --dynamic,
 # PyG). --axis-max can raise it.
@@ -138,12 +138,14 @@ def resize_axis(tensor: torch.Tensor, axis: int, size: int) -> torch.Tensor:
         reps = -(-size // moved.shape[0])
         tiled = moved.repeat(reps, *([1] * (moved.ndim - 1)))[:size]
         resized = tiled + 0.1 * moved.std(unbiased=False) * torch.randn(
-            tiled.shape, dtype=moved.dtype
+            tiled.shape, dtype=moved.dtype, device=moved.device
         )
     else:
         lo = int(moved.min().item())
         hi = max(int(moved.max().item()) + 1, lo + 1)
-        resized = torch.randint(lo, hi, (size, *moved.shape[1:]), dtype=moved.dtype)
+        resized = torch.randint(
+            lo, hi, (size, *moved.shape[1:]), dtype=moved.dtype, device=moved.device
+        )
     return resized.movedim(0, axis)
 
 

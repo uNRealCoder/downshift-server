@@ -7,21 +7,28 @@ entries. To clear the cache, delete the directory.
 The key is the memo key, except that HF repo files are identified by content (inodes differ
 between pods on one volume). `DIR/index.json` keeps those digests by file identity.
 
+Both the manifest of an entry and `index.json` have `format_version`. Downshift ignores a file
+with another version (or none) and makes it again, with one warning.
+
 A write builds the entry in a temporary directory and renames it into place. A read checks the
 graph against the manifest hashes. A bad entry is a miss, with one warning.
 """
 
+import contextlib
 import json
 import logging
 import os
 import shutil
 import tempfile
+import time
 import uuid
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
-from downshift.core.memo import MEMO, STORED_STATUSES, ExportEntry, file_identity, sha256_file
+from downshift.core.memo import FORMAT_VERSION, MEMO, STORED_STATUSES, file_identity, sha256_file
+from downshift.entities.cache import ExportEntry
 
 logger = logging.getLogger("downshift.export_cache")
 
@@ -30,6 +37,41 @@ VERDICT = "verdict.json"
 FEEDS = "feeds.npz"
 SERVING = "serving.json"
 INDEX = "index.json"
+
+# numpy.savez takes `file` and `allow_pickle` as its own keywords: a prefix keeps an input of
+# that name apart.
+FEED_PREFIX = "in."
+SAMPLE_PREFIX = "s"  # a verification sample is "s<i>.in.<name>"
+
+
+def pack_feeds(
+    feeds: dict[str, np.ndarray] | None, samples: list[dict[str, np.ndarray]]
+) -> dict[str, np.ndarray]:
+    """The arrays of feeds.npz: the example as "in.<name>", sample i as "s<i>.in.<name>"."""
+    packed = {FEED_PREFIX + n: a for n, a in (feeds or {}).items()}
+    for i, sample in enumerate(samples):
+        packed.update({f"{SAMPLE_PREFIX}{i}.{FEED_PREFIX}{n}": a for n, a in sample.items()})
+    return packed
+
+
+def unpack_feeds(
+    archive: Any,
+) -> tuple[dict[str, np.ndarray] | None, list[dict[str, np.ndarray]]]:
+    """The inverse of pack_feeds(): (the example or None, the samples in order)."""
+    feeds: dict[str, np.ndarray] = {}
+    samples: dict[int, dict[str, np.ndarray]] = {}
+    for name in archive.files:
+        if name.startswith(FEED_PREFIX):
+            feeds[name.removeprefix(FEED_PREFIX)] = archive[name]
+        else:
+            index, _, rest = name.removeprefix(SAMPLE_PREFIX).partition(".")
+            samples.setdefault(int(index), {})[rest.removeprefix(FEED_PREFIX)] = archive[name]
+    return feeds or None, [samples[i] for i in sorted(samples)]
+
+
+# A writer that a signal killed leaves a temporary or an old directory. The cache removes it
+# when it is older than this.
+_STALE_SECONDS = 3600
 
 
 def check_dir(path: str | Path) -> Path:
@@ -83,14 +125,33 @@ class ExportCache:
     def __init__(self, root: str | Path) -> None:
         self.root = check_dir(root)
         self._index: dict[str, str] | None = None
+        self._remove_stale()
+
+    def _remove_stale(self) -> None:
+        """Delete the `.tmp-*` and `.old-*` directories that are older than an hour."""
+        cutoff = time.time() - _STALE_SECONDS
+        with contextlib.suppress(OSError):
+            for path in self.root.iterdir():
+                if (".tmp-" in path.name or ".old-" in path.name) and path.stat().st_mtime < cutoff:
+                    shutil.rmtree(path, ignore_errors=True)
 
     def _load_index(self) -> dict[str, str]:
         if self._index is None:
+            self._index = {}
             try:
                 data = json.loads((self.root / INDEX).read_text(encoding="utf-8"))
-                self._index = data if isinstance(data, dict) else {}
             except (OSError, ValueError):
-                self._index = {}
+                return self._index
+            if not isinstance(data, dict) or data.get("format_version") != FORMAT_VERSION:
+                logger.warning(
+                    "export cache index %s has format version %r, and downshift reads %d. "
+                    "Downshift makes the index again",
+                    self.root / INDEX,
+                    data.get("format_version") if isinstance(data, dict) else None,
+                    FORMAT_VERSION,
+                )
+            elif isinstance(data.get("digests"), dict):
+                self._index = data["digests"]
         return self._index
 
     def fingerprint(self, path: str | Path) -> str:
@@ -102,7 +163,9 @@ class ExportCache:
             digest = sha256_file(path)
             index[identity] = digest
             try:
-                _write_json_atomic(self.root / INDEX, index)
+                _write_json_atomic(
+                    self.root / INDEX, {"format_version": FORMAT_VERSION, "digests": index}
+                )
             except OSError as exc:
                 logger.warning("export cache index not saved: %s", exc)
         return digest
@@ -124,6 +187,11 @@ class ExportCache:
 
     def _read(self, entry_dir: Path) -> ExportEntry:
         manifest = json.loads((entry_dir / "model.manifest.json").read_text(encoding="utf-8"))
+        if manifest.get("format_version") != FORMAT_VERSION:
+            raise ValueError(
+                f"its format version is {manifest.get('format_version')!r}, "
+                f"and downshift reads {FORMAT_VERSION}"
+            )
         onnx_path = entry_dir / MODEL
         if sha256_file(onnx_path) != manifest["onnx_sha256"]:
             raise ValueError(f"{MODEL} does not match its manifest hash")
@@ -136,14 +204,16 @@ class ExportCache:
         verdict = json.loads((entry_dir / VERDICT).read_text(encoding="utf-8"))
         serving = json.loads((entry_dir / SERVING).read_text(encoding="utf-8"))
         feeds = None
+        samples: list[dict[str, np.ndarray]] = []
         if (entry_dir / FEEDS).exists():
             with np.load(entry_dir / FEEDS, allow_pickle=False) as archive:
-                feeds = {name: archive[name] for name in archive.files}
+                feeds, samples = unpack_feeds(archive)
         return ExportEntry(
             verdict=verdict,
             input_names=list(serving["input_names"]),
             axis_bounds=serving["axis_bounds"],
             feeds=feeds,
+            samples=samples,
             onnx_path=onnx_path,
         )
 
@@ -151,7 +221,7 @@ class ExportCache:
         """Save a CLEAN or DEGRADED entry. Raises OSError if the directory cannot be written."""
         from downshift._version import __version__
         from downshift.core.manifest import external_data_files, write_manifest
-        from downshift.core.verdict import ExportVerdict
+        from downshift.entities.verdict import ExportVerdict
 
         if entry.status not in STORED_STATUSES:
             return
@@ -173,9 +243,9 @@ class ExportCache:
                 tmp / SERVING,
                 {"input_names": entry.input_names, "axis_bounds": entry.axis_bounds},
             )
-            feeds = entry.feeds
-            if feeds and all(array.dtype.kind != "O" for array in feeds.values()):
-                np.savez(tmp / FEEDS, **feeds)  # type: ignore[arg-type]  # the numpy stub misreads **kwds
+            packed = pack_feeds(entry.feeds, entry.samples)
+            if packed and all(array.dtype.kind != "O" for array in packed.values()):
+                np.savez(tmp / FEEDS, **packed)  # type: ignore[arg-type]  # the numpy stub misreads **kwds
             self._install(tmp, self.root / key)
         except BaseException:
             shutil.rmtree(tmp, ignore_errors=True)

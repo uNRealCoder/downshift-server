@@ -1,0 +1,122 @@
+[
+ {
+  "rps": 2646.7,
+  "p50_ms": 2.72,
+  "p99_ms": 6.46,
+  "errors": 0,
+  "case": "clean_mlp",
+  "config": "0.5.1",
+  "traffic": "distinct rows",
+  "cache": false
+ },
+ {
+  "rps": 898.5,
+  "p50_ms": 8.73,
+  "p99_ms": 13.31,
+  "errors": 0,
+  "case": "clean_mlp",
+  "config": "0.5.1",
+  "traffic": "one row",
+  "cache": false
+ },
+ {
+  "rps": 2022.8,
+  "p50_ms": 3.97,
+  "p99_ms": 7.43,
+  "errors": 0,
+  "case": "clean_mlp",
+  "config": "0.6.0",
+  "traffic": "distinct rows",
+  "cache": true
+ },
+ {
+  "rps": 1276.7,
+  "p50_ms": 6.03,
+  "p99_ms": 9.2,
+  "errors": 0,
+  "case": "clean_mlp",
+  "config": "0.6.0",
+  "traffic": "one row",
+  "cache": true
+ },
+ {
+  "rps": 2532.3,
+  "p50_ms": 3.17,
+  "p99_ms": 5.96,
+  "errors": 0,
+  "case": "clean_mlp",
+  "config": "0.6.0 cache off",
+  "traffic": "distinct rows",
+  "cache": false
+ },
+ {
+  "rps": 1039.3,
+  "p50_ms": 7.64,
+  "p99_ms": 11.13,
+  "errors": 0,
+  "case": "clean_mlp",
+  "config": "0.6.0 cache off",
+  "traffic": "one row",
+  "cache": false
+ },
+ {
+  "rps": 2248.7,
+  "p50_ms": 3.4,
+  "p99_ms": 6.59,
+  "errors": 0,
+  "case": "tiny_bert",
+  "config": "0.5.1",
+  "traffic": "distinct rows",
+  "cache": false
+ },
+ {
+  "rps": 958.5,
+  "p50_ms": 8.22,
+  "p99_ms": 11.58,
+  "errors": 0,
+  "case": "tiny_bert",
+  "config": "0.5.1",
+  "traffic": "one row",
+  "cache": false
+ },
+ {
+  "rps": 2277.3,
+  "p50_ms": 3.67,
+  "p99_ms": 5.98,
+  "errors": 0,
+  "case": "tiny_bert",
+  "config": "0.6.0",
+  "traffic": "distinct rows",
+  "cache": false
+ },
+ {
+  "rps": 890.5,
+  "p50_ms": 8.85,
+  "p99_ms": 14.33,
+  "errors": 0,
+  "case": "tiny_bert",
+  "config": "0.6.0",
+  "traffic": "one row",
+  "cache": false
+ },
+ {
+  "rps": 2270.5,
+  "p50_ms": 3.67,
+  "p99_ms": 6.08,
+  "errors": 0,
+  "case": "tiny_bert",
+  "config": "0.6.0 cache off",
+  "traffic": "distinct rows",
+  "cache": false
+ },
+ {
+  "rps": 935.2,
+  "p50_ms": 8.43,
+  "p99_ms": 11.87,
+  "errors": 0,
+  "case": "tiny_bert",
+  "config": "0.6.0 cache off",
+  "traffic": "one row",
+  "cache": false
+ }
+]

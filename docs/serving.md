@@ -2,16 +2,7 @@
 
 This page describes the code under `downshift serve` and `app_for`, for a person who changes it. To run a server, read [`production.md`](production.md). To call one, read [`http-api.md`](http-api.md).
 
-| Module | Contents |
-|---|---|
-| `serve/options.py` | `ServeOptions`, `BackendChoice`, `ExecutionChoice`. No torch import. |
-| `serve/engine.py` | `ServingState`, `choose_backend`, the boot builders and the warmup. |
-| `serve/reuse.py` | The boot from an earlier export: the memo, the disk cache, or the `--workers` handoff. |
-| `serve/app.py` | `build_app`, the routes, `PredictRoute`, and the request-ID and API-key middleware. |
-| `serve/predict.py` | The request path of `/predict` and `/predict/graph`. |
-| `serve/result_cache.py` | The result cache. |
-| `serve/backends.py` | `OnnxRuntimeBackend` and `TorchBackend`. |
-| `serve/describe.py`, `serve/schemas.py`, `serve/codec.py`, `serve/graphs.py` | `/schema`, the pydantic models, the base64 and safetensors codecs, and graph batching. |
+The `serve/` modules are in the [module map](README.md#module-map).
 
 ## `ServeOptions`
 
@@ -22,7 +13,7 @@ class ServeOptions:
     force_onnx: bool = False
     device: str = "auto"
     warmup: int = 3
-    k: int = 8
+    samples: int = 8
     adapter: str | None = None
     dynamic: dict[str, list[int]] | None = None
     axis_max: dict[str, int] | None = None
@@ -118,6 +109,7 @@ def build_app(
     middleware: Sequence[str] = (),
     api_key: str | None = settings.API_KEY,
     access_log: bool = True,
+    request_id_headers: bool = False,
 ) -> FastAPI
 ```
 
@@ -126,28 +118,28 @@ Give exactly one of `state` and `loader`:
 - `state=` serves at once. `app_for` and the tests use it.
 - `loader=` is for `downshift serve`. The app binds with no state. The lifespan of the app runs `loader` on a background thread. Until it returns, `/health` gives `200`, and `/ready`, `/metadata`, `/schema` and the predict routes give `503`. If `loader` raises an error, `serve_cmd` stops the server.
 
-The middleware stack, from the outside in: `RequestIdMiddleware` (the `X-Request-Id` header, the request ID on each log line, and the access log line), `ApiKeyMiddleware`, then your `--middleware`. Your middleware therefore sees only authenticated requests.
+The middleware stack, from the outside in: `RequestIdMiddleware` (the `X-Request-Id` header and the request ID on each log line; only with `request_id_headers=True`), `RequestObserverMiddleware` (the access log line and the metrics; with `access_log=True` (the default) or `metrics=True`), `ApiKeyMiddleware`, then your `--middleware`. Your middleware therefore sees only authenticated requests.
 
-## Request path (`serve/predict.py`)
+## Request path (`serve/predict.py` and its parts)
 
-Per-request speed has priority over boot time. The boot does the export, the verification and the warmup, so each request pays only for its own work. One predict makes two thread hops:
+`serve/predict.py` has `run_predict`, the entry point. It calls `serve/parse.py` (`parse_request`), `serve/feeds.py` (`prepare_feeds`, `input_violation`), `serve/stages.py` (`run_inference`, `run_in_pool`, `check_timeout`), `serve/encode.py` (`encode_response`) and `serve/cached.py` (`run_cached`). Per-request speed has priority over boot time. The boot does the export, the verification and the warmup, so each request pays only for its own work. One predict makes two thread hops:
 
 ```
 event loop      PredictRoute: admit or 503, Content-Type (415), --max-body-bytes (413), read the body
-prep pool       _parse: orjson and the pydantic model of the route (422), route checks (400)
-                _prepare_feeds: arrays, tokenizing, graph batching, then the input checks (400)
-inference pool  _infer: the backend call
-                _encode_response: JSON, base64 or safetensors, split for each graph
+prep pool       parse_request: orjson and the pydantic model of the route (422), route checks (400)
+                prepare_feeds: arrays, tokenizing, graph batching, then the input checks (400)
+inference pool  run_inference: the backend call
+                encode_response: JSON, base64 or safetensors, split for each graph
 ```
 
 - `PredictRoute` serves the raw body itself, so FastAPI does not parse it. The functions `predict` and `predict_graph` exist only to document the bodies in OpenAPI. `_validate_json` makes the same `422` bodies as FastAPI.
 - The slot is admitted before the server reads the body, and released in `finally`.
-- `--request-timeout` is checked after the prep and again when the inference starts. Downshift never stops an inference that runs.
-- The input checks (`_violation`) run before the inference: the vocabulary, the edge index, the rank and fixed axes, and the axis bounds. A shape error of the model therefore never reaches the client as a `500`.
+- `PredictRoute` wraps the whole request in `asyncio.timeout(--request-timeout)`, from the admission. At the limit, the client gets a `503` `request_timeout` and the slot is free. The thread of an inference that already runs is not stopped. Downshift also checks the limit after the prep and when the inference starts.
+- The input checks (`input_violation`) run before the inference: the vocabulary, the edge index, the rank and fixed axes, and the axis bounds. A shape error of the model therefore never reaches the client as a `500`.
 - `--execution inline` runs both hops on the event loop for a JSON body of up to 64 KiB with a `Content-Length` and no `text`.
-- `_run_in` carries the context variables (the request ID) into the pool thread and records `prep_wait` and `infer_wait` for `Server-Timing`.
+- `run_in_pool` carries the context variables (the request ID) into the pool thread and records `prep_wait` and `infer_wait` for `Server-Timing`.
 
-With the result cache on, `/predict` takes `_run_cached`. The prep hop makes one key for each row (`text_keys` before the tokenizer, `tensor_keys` from the arrays) and calls `ResultCache.lookup`. The lookup sorts the rows into hits, rows that another request computes, and rows that this request claims. Only the claimed rows go to the tokenizer and the model. After the inference, `ResultCache.complete` gives each row to its waiters. If the owner of a row fails or leaves, a waiter computes the row itself. The prep pool joins the rows and encodes the response, so a request in which each row hits makes no inference hop. `/predict/graph` does not use the cache.
+With the result cache on, `/predict` takes `run_cached`. The prep hop makes one key for each row (`text_keys` before the tokenizer, `tensor_keys` from the arrays) and calls `ResultCache.lookup`. The lookup sorts the rows into hits, rows that another request computes, and rows that this request claims. Only the claimed rows go to the tokenizer and the model. After the inference, `ResultCache.complete` gives each row to its waiters. If the owner of a row fails or leaves, a waiter computes the row itself. The prep pool joins the rows and encodes the response, so a request in which each row hits makes no inference hop. `/predict/graph` does not use the cache.
 
 ## Backends (`serve/backends.py`)
 

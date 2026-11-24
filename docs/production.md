@@ -6,12 +6,12 @@ Each flag on this page is in [`cli.md`](cli.md#serve), with its environment vari
 
 ## Authentication
 
-Set `DOWNSHIFT_SERVER_API_KEY`. Each route except `/health` and `/ready` then needs `Authorization: Bearer <key>`. The comparison takes constant time. Any other request gets a `401` with `WWW-Authenticate: Bearer`. The probes stay open, so Kubernetes never needs the key.
+Set `DOWNSHIFT_API_KEY`. Each route except `/health` and `/ready` then needs `Authorization: Bearer <key>`. The comparison takes constant time. Any other request gets a `401` with `WWW-Authenticate: Bearer`. The probes stay open, so Kubernetes never needs the key.
 
 ```bash
-export DOWNSHIFT_SERVER_API_KEY="$(openssl rand -hex 32)"
+export DOWNSHIFT_API_KEY="$(openssl rand -hex 32)"
 downshift serve my_pkg.models:build
-curl -s localhost:8000/predict -H "Authorization: Bearer $DOWNSHIFT_SERVER_API_KEY" \
+curl -s localhost:8000/predict -H "Authorization: Bearer $DOWNSHIFT_API_KEY" \
   -H 'content-type: application/json' -d '{"inputs": {"x": [[0.0, 0.1]]}}'
 ```
 
@@ -45,10 +45,31 @@ Downshift uses the TLS settings of `ssl.create_default_context`: TLS 1.2 or late
 
 Downshift does not renew certificates, does not do ACME requests or client certificates, and does not redirect HTTP to HTTPS. It reads the files one time, so restart it after a renewal. If a proxy terminates TLS, do not give `--ssl-certfile`. Keep downshift on plain HTTP on `127.0.0.1` or a private network.
 
+## Behind a proxy
+
+If a reverse proxy sends requests to downshift, tell downshift what the proxy does:
+
+- **Root path.** If the proxy removes a path prefix (it sends `/models/bert/predict` to downshift as `/predict`), give `--root-path /models/bert`. The links of `GET /` and the example URL and `curl` of `GET /schema` then include the prefix.
+- **Forwarded IPs.** Downshift trusts `X-Forwarded-For` and `X-Forwarded-Proto` only from `127.0.0.1`. If the proxy has another address, give `--forwarded-allow-ips 10.0.0.5` (comma-separated IPs, or `*` if only the proxy can reach the port). The example URL of `GET /schema` then uses `https` when the proxy gets the request on HTTPS, and the access log has the IP of the client.
+- **HTTPS at the proxy.** Let the proxy end TLS. Do not give `--ssl-certfile`. Keep downshift on plain HTTP on a private network.
+
+## Shut down
+
+On `SIGTERM` (or `SIGINT`), the server does these steps:
+
+1. `/ready` gives `503` with `{"ready": false, "phase": "stopping"}` at once. The load balancer sends no new requests.
+2. The server stops new connections. A request on an open connection still runs, `/predict` too.
+3. The server waits up to `--timeout-graceful-shutdown SECONDS` (default `30`) for the running requests. `0` means wait without a limit.
+4. The server stops.
+
+With `--workers N`, each worker does the same steps for itself.
+
+In Kubernetes, set `terminationGracePeriodSeconds` above `--timeout-graceful-shutdown`. Also set it above `--request-timeout`, so a slow request can finish. If the grace period is shorter, the kubelet sends `SIGKILL` and the running requests fail.
+
 ## `/health` and `/ready`
 
 - **`/health`** is the liveness probe. It gives `200` when the process is up, also while the model loads. It runs on the event loop and never waits for predicts. Use it to decide "restart this container".
-- **`/ready`** gives `503` with `{"ready": false, "phase": "export"}` until the model is loaded, exported, verified and warmed up. It then gives `200` and does not change back. `phase` is `load`, `export`, `verify`, `session` or `warmup`. Use it to decide "send traffic to this pod".
+- **`/ready`** gives `503` with `{"ready": false, "phase": "export"}` until the model is loaded, exported, verified and warmed up. It then gives `200`. It gives `503` again with `"phase": "stopping"` when the server shuts down (refer to "Shut down"). `phase` is `load`, `export`, `verify`, `session` or `warmup`. Use it to decide "send traffic to this pod".
 
 With one worker, `serve` binds the port before it loads anything. `/ready`, `/metadata`, `/schema` and the predict routes give `503` while a background thread runs the gate. If the load fails, the process exits with the code that `check` gives for the same error. A supervisor sees a failed start, not a server that gives `503` forever.
 
@@ -64,7 +85,7 @@ If you leave `--intra-op-threads` at `0`, `--workers N` sets it to `max(1, CPUs 
 Threads     4 intra-op per worker  (16 logical / 4 workers)
 ```
 
-`--workers` gives more requests at the same time. It does not make one request faster. In the 0.4.0 benchmark on 16 logical cores (`bench/REPORT_v0.4.0.md`), 4 workers against 1 worker:
+`--workers` gives more requests at the same time. It does not make one request faster. In the 0.4.0 benchmark on 16 logical cores (`bench/results/v0.4.0/REPORT.md`), 4 workers against 1 worker:
 
 | model | workers | rps c=1 | rps c=32 |
 |---|---|---|---|
@@ -105,7 +126,7 @@ Below about 1 ms of inference, the HTTP stack is most of the latency. Only `--wo
 
 - **`--max-concurrency N`** (default 4) is the number of inferences at the same time in each worker. One inference does not usually fill all cores: all-MiniLM-L6-v2 (batch 8, 8 clients) gave 52 req/s at 1 and 134 req/s at 4. Each inference holds its own activation memory.
 - **`--max-queue N`** (default 64) is the number of predicts that can wait beyond `--max-concurrency`. The next one gets an immediate `503` with `Retry-After: 1`. It counts requests, not rows.
-- **`--request-timeout SECONDS`** (default 30) is how long an admitted predict can wait before its inference starts, also for a row that another request computes. After that, it gets a `503`. A running inference is never stopped.
+- **`--request-timeout SECONDS`** (default 30) is the time limit for the whole request, from its admission. The limit includes the body read, the queue, the inference and the encoding. If the request is not complete at the limit, the client gets a `503` with the code `request_timeout`, and the slot is free. The thread of an inference that already runs is not stopped. It ends by itself. `0` means no limit.
 
 ```
 Capacity    4 inferences at a time, 4 prep threads, 64 queued, 30 s timeout  (--max-concurrency, --prep-threads, --max-queue, --request-timeout)
@@ -138,7 +159,7 @@ The boot is the slow part on purpose. If the boot time is important (frequent re
 - Downshift saves each CLEAN or DEGRADED export in `DIR/<key>/`: the `.onnx` file, its manifest, the verdict and the example inputs. A later boot of the same model with the same options skips the export and the verification. The `Boot` row of the banner then says `reused from --export-cache-dir`.
 - The key covers the weights, the source code of the model classes, the options of the gate, and the versions of downshift, torch, onnx, onnxscript, onnxruntime, transformers and torch_geometric. A change to any of them misses.
 - For a Hugging Face repo directory, the key comes from the content of the files, so pods that share a volume share the cache. A hit that ONNX Runtime serves does not load the weights.
-- A read checks the hashes of the graph against the manifest. A bad entry gives one warning and counts as a miss. A write goes to a temporary directory first, so a reader never sees half an entry.
+- A read checks the hashes of the graph against the manifest. A bad entry, or an entry with another `format_version`, gives one warning and counts as a miss. A write goes to a temporary directory first, so a reader never sees half an entry.
 - Downshift never removes entries. To clear the cache, delete the directory.
 
 Without the flag, nothing goes to disk.
@@ -155,12 +176,88 @@ Boot        6.4 s: load 0.3, export 2.8, verify 0.2, session 0.1, warmup 0.1
 
 `load` reads or imports the model. `export` is `torch.export` plus the ONNX translation. `verify` runs the samples through both backends. `session` builds the backend. `warmup` runs `--warmup N` inferences. The `boot` field of `/metadata` has the same numbers. With `--workers N`, the parent pays `export` and `verify` one time, and each worker pays its own `load`, `session` and `warmup`.
 
+## Model name
+
+`--served-model-name NAME` (or `DOWNSHIFT_SERVED_MODEL_NAME`) sets the name that `GET /v1/models` lists and that `POST /v1/embeddings` accepts. Set it if a client must use a fixed name that does not depend on the path. Refer to [Model name](openai.md#model-name).
+
+## Matryoshka cuts
+
+`--matryoshka` (or `DOWNSHIFT_MATRYOSHKA=1`) lets `POST /v1/embeddings` accept `dimensions`. Use it only for a model that was trained for Matryoshka cuts. Refer to [Dimensions and --matryoshka](openai.md#dimensions-and---matryoshka).
+
+## Metrics
+
+To count the requests, start the server with `--metrics` (or `DOWNSHIFT_METRICS=1`). The server then serves the counts on `GET /metrics` as Prometheus text (format 0.0.4). If you do not set the option, the route does not exist (`404`), and the request path counts nothing. `/metrics` follows the API key rule of the other routes: send `Authorization: Bearer <key>`. The probes `/health` and `/ready` are the only routes without a key.
+
+In the 1.0.0 benchmark, `--metrics` cost 6 to 97 microseconds for each request (0.4% to 8% of the requests per second at concurrency 1) on three small models. The cost was inside the noise on a larger model. Refer to the [benchmark report](https://github.com/uNRealCoder/downshift-server/blob/main/bench/results/v1.0.0/REPORT.md).
+
+Each series has the label `worker`. Its value is `0`, because `--metrics` needs one worker.
+
+| Name | Type | Labels | Meaning |
+|---|---|---|---|
+| `downshift_requests_total` | counter | `route`, `code` | Requests. `route` is the route template (`/predict`), or `other` for a path that has no route. `code` is the HTTP status. |
+| `downshift_request_seconds` | histogram | `route` | Seconds from the start of a request to the end of its response. |
+| `downshift_stage_seconds` | histogram | `stage` | Seconds of one stage of a predict: `queue`, `prep`, `infer` or `encode`. |
+| `downshift_inflight` | gauge | none | Admitted predicts that have not finished. |
+| `downshift_queue_depth` | gauge | none | Admitted predicts that wait for an inference slot. |
+| `downshift_queue_limit` | gauge | none | The value of `--max-queue`. |
+| `downshift_rejected_total` | counter | `reason` | Requests that got a `503`: `capacity`, `timeout` or `not_ready`. |
+| `downshift_cache_rows_total` | counter | `result` | Rows that the result cache found (`hit`) or did not find (`miss`). Only with the cache on. |
+| `downshift_cache_requests_total` | counter | `result` | Predicts by the `X-Downshift-Cache` value: `hit`, `partial` or `miss`. |
+| `downshift_model_info` | gauge | `downshift_version`, `verdict`, `backend`, `family` | The value is always `1`. |
+| `downshift_ready` | gauge | none | `1` when the model is ready. `0` while the model loads. |
+| `downshift_boot_seconds` | gauge | `phase` | Seconds of each boot phase. |
+
+The histogram buckets are fixed, in seconds: 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5 and 10. The `queue` stage is `prep_wait`, `infer_wait` and `encode_wait` of the access log added together. The `prep` stage is `parse` and `prep` added together.
+
+A scrape reaches one worker only, so `--metrics` with `--workers N` (N above 1) is a usage error (exit code `4`). Use one worker for each container. Scale with replicas.
+
+Scrape config:
+
+```yaml
+scrape_configs:
+  - job_name: downshift
+    metrics_path: /metrics
+    authorization:
+      credentials_file: /etc/prometheus/downshift-key
+    static_configs:
+      - targets: ["downshift:8000"]
+```
+
+Alert rules:
+
+```yaml
+groups:
+  - name: downshift
+    rules:
+      - alert: DownshiftQueueFull
+        expr: downshift_queue_limit > 0 and downshift_queue_depth >= downshift_queue_limit
+        for: 1m
+        annotations:
+          summary: The queue of {{ $labels.instance }} is full. New predicts get 503.
+      - alert: DownshiftErrorRate
+        expr: |
+          sum(rate(downshift_requests_total{code=~"5..", route!~"/health|/ready"}[5m]))
+            / sum(rate(downshift_requests_total{route!~"/health|/ready"}[5m])) > 0.01
+        for: 5m
+        annotations:
+          summary: More than 1% of the requests get a 5xx status.
+      - alert: DownshiftSlowPredict
+        expr: |
+          histogram_quantile(0.99,
+            sum by (le) (rate(downshift_request_seconds_bucket{route="/predict"}[5m]))) > 0.5
+        for: 10m
+        annotations:
+          summary: The p99 latency of /predict is more than 500 ms.
+```
+
+`examples/grafana-dashboard.json` is a Grafana dashboard for these series: the request rate, the error rate, the p50 and p99 latency, the latency of each stage, the queue depth and the cache hit rate. Import it in Grafana, and select your Prometheus data source.
+
 ## Logs and request IDs
 
 All output goes through Python `logging` to stdout, as plain text in the form `time LEVEL logger: message`. Point your log shipper at stdout. [`cli.md`](cli.md#logging) gives what each `--log-level` prints.
 
 - The request line goes to `downshift.access`, for example `POST /predict 200 12.3 ms request_id=3f9c1a7b2e4d5c60`. A `4xx` or `5xx` line prints at the default level. The probes log only at `debug`. Give `--no-access-log` if your proxy already logs each request.
-- Each response has `X-Request-Id`. If your proxy or tracing uses another name, set `DOWNSHIFT_REQUEST_ID_HEADER`, for example `X-Correlation-Id`. If the client sent one, downshift returns it. The ID is on each log line that the request writes. A `500` body has the same `request_id`, so "see the server log" has a search key.
+- To get a request ID, give `--enable-request-id-headers`. Each response then has `X-Request-Id`. Without the option, the server has no request ID middleware, and no response, log line or `500` body has an ID. If your proxy or tracing uses another name, set `DOWNSHIFT_REQUEST_ID_HEADER`, for example `X-Correlation-Id`. If the client sent one, downshift returns it. The ID is on each log line that the request writes. A `500` body has the same `request_id`, so "see the server log" has a search key.
 
 ## No egress at start
 
@@ -179,7 +276,38 @@ A person tested `--device cuda` one time, by hand: an RTX 4050, torch 2.14 (CUDA
 - Install `onnxruntime-gpu` in place of `onnxruntime`.
 - Install a torch build with the same CUDA major version as the `onnxruntime-gpu` wheel (1.30 needs CUDA 13). If the versions differ, ONNX Runtime cannot load its CUDA libraries, and `serve --device cuda` stops with exit code `4`.
 
-The gate runs only on the CPU. The CUDA provider of ONNX Runtime uses TF32 matrix multiplies by default. In the test, this moved the output of a small MLP by 4e-4 against the CPU, which is more than the float32 tolerance. The gate does not see this. With `--backend torch` on CUDA, the output matched the CPU to 5e-8. The `Verified on` row of the banner says when the numerics did not cover the serving device.
+The verdict is made on the CPU. When the server serves on a GPU, it runs a serving check at boot. It is not on the request path.
+
+1. The server builds the backend that serves (ONNX Runtime with the CUDA provider, or torch on `cuda`).
+2. It runs the inputs of the verification samples (the 8 samples, with the edge shapes) one time each through that backend and through the CPU. Downshift keeps the sample inputs in memory, in the export cache (`feeds.npz`) and in the hand-off to `--workers`. If the samples are larger than 64 MiB together, it keeps the smallest and the largest first, then as many others as fit. An old cache entry or a torch model with no verdict has only the example input. For ONNX Runtime, the CPU run is the same graph on the CPU provider. For torch, it is the same model on the CPU.
+3. It compares the two results with the tolerance of the verdict. For an embedding model, each row must also reach `DOWNSHIFT_TOL_COSINE`.
+
+The `GPU check` row of the banner shows the result, for example `CUDAExecutionProvider cuda  max abs err 3.1e-06 over 8 samples  OK` (`over 3 of 8 samples` if the size limit cut the set). `GET /metadata` has the same data in `serving_numerics`. On the CPU, the check does not run and `serving_numerics` is `null`. If the model has no example input (a `.onnx` file with no reference), the check does not run.
+
+The CUDA provider of ONNX Runtime uses TF32 matrix multiplies by default on Ampere and newer GPUs. TF32 moves the result by about 1e-3 relative, which is more than the float32 tolerance. For this reason, downshift turns TF32 off for ONNX Runtime (`use_tf32` is `0`) and for torch (`torch.backends.cuda.matmul.allow_tf32` and `torch.backends.cudnn.allow_tf32` are `False`). To allow TF32, pass `--tf32` (or set `DOWNSHIFT_TF32=1`). The serving check then uses the larger of the TF32 tolerance (`DOWNSHIFT_TOL_TF32_ATOL` and `DOWNSHIFT_TOL_TF32_RTOL`, default `1e-3` and `1e-2`) and the tolerance of the verdict.
+
+If the serving check fails, the server logs one `WARNING` that names the provider, the error and the next step.
+
+- With `--backend auto` and no `--force-onnx`, the server serves torch instead (as for a DEGRADED verdict). The torch backend then gets the same check.
+- With `--backend onnxruntime` or `--force-onnx`, the server serves ONNX Runtime as you asked. `serving_numerics.ok` is `false`.
+- If torch fails the check, the server keeps serving, because there is no other backend. `serving_numerics.ok` is `false`.
+
+To remove the failure, do one of these steps: remove `--tf32`, pass `--device cpu`, or pass `--force-onnx` to keep ONNX Runtime.
+
+### Half precision
+
+To serve in half precision on a GPU, export with `downshift export --fp16`, then serve the file with the PyTorch model as the reference:
+
+```bash
+downshift export ./model -o ./out --fp16
+downshift serve ./out/model.onnx --reference ./model --device cuda
+```
+
+`--fp16` exports the fp32 graph and then changes the weights to fp16. The inputs and outputs of the graph stay fp32, so clients do not change. Downshift verifies the graph against the fp32 torch model with the `float16` tolerances. The serving check on the GPU uses the same tolerances for a graph with fp16 weights. A person measured an RTX 4050 with all-MiniLM-L6-v2: the maximum absolute error was 3.7e-4, the minimum cosine was 0.999998, and a request took 3.7 ms in place of 4.0 ms with the fp32 graph. On a small model, the gain is small. Measure your model before you rely on it.
+
+If ONNX Runtime has no CPU kernel for an fp16 operation, the check of the export gives `FAILED`. Use a newer ONNX Runtime, or export the model without `--fp16`.
+
+The check adds a few inferences to the boot time. The `session` value of `boot` includes them.
 
 ## Kubernetes
 

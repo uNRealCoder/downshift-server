@@ -6,12 +6,13 @@ never calls `from_pretrained`. Other sources are keyed from the loaded module. A
 source exports nothing and is never cached.
 """
 
-from downshift.adapters.base import Family
 from downshift.core import memo
 from downshift.core.axes import axis_bounds_to_json
 from downshift.core.export_cache import ExportCache, lookup, store
-from downshift.serve.engine import Loader, ServingState, prepare_serving, state_from_entry
-from downshift.serve.options import ServeOptions
+from downshift.entities.adapters import Family
+from downshift.entities.options import ServeOptions
+from downshift.entities.serving import ServingState
+from downshift.serve.engine import Loader, prepare_serving, state_from_entry
 from downshift.sources import HF_REPO_DIR
 
 

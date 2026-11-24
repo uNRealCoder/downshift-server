@@ -1,79 +1,28 @@
 """Numerical verification. An export is not a success until this passes.
 
-K samples run through torch and through the ONNX graph. The dynamic axes vary, so some samples
+The samples run through torch and through the ONNX graph. The dynamic axes vary, so some samples
 have shapes that the exporter did not see. This finds a graph that froze a shape or a branch.
 """
 
 import logging
-from dataclasses import asdict, dataclass, field, fields
+import math
 from pathlib import Path
 
 import numpy as np
 import onnxruntime as ort
 import torch
 
-from downshift.adapters.base import VaryFn
 from downshift.core.shapes import alternative_sizes, dim_bounds, pick_size, resize_axis
+from downshift.entities.adapters import VaryFn
+from downshift.entities.verdict import NumericsReport, WorstMismatch
 from downshift.logs import REPORT_LOGGER
-from downshift.settings import DEFAULT_SAMPLES, TOLERANCES
+from downshift.settings import DEFAULT_SAMPLES, TOLERANCE_COSINE, TOLERANCES
 
 report_logger = logging.getLogger(REPORT_LOGGER)
 
 
 class OnnxRuntimeError(RuntimeError):
     """ONNX Runtime could not load the graph or run a sample. A numeric mismatch is not this."""
-
-
-@dataclass
-class WorstMismatch:
-    """The element with the largest absolute error, across all samples."""
-
-    sample: int
-    output: int
-    index: tuple[int, ...]
-    expected: float
-    got: float
-    input_shapes: list[tuple[int, ...]]
-
-
-@dataclass
-class NumericsReport:
-    samples_tested: int
-    max_abs_err: float
-    max_rel_err: float
-    failures: int
-    # None if the baseline sample failed, False if only a varied shape failed.
-    shape_generalization: bool | None
-    tolerance_abs: float
-    tolerance_rel: float
-    tolerance_dtype: str = "float32"  # the dtype whose default tolerances applied
-    tolerance_overridden: bool = False  # --atol or --rtol set the values
-    baseline_failed: bool = False
-    worst: WorstMismatch | None = None
-    sample_shapes: list[list[tuple[int, ...]]] = field(default_factory=list)
-    output_shapes: list[list[tuple[int, ...]]] = field(default_factory=list)  # [sample][output]
-    seed: int = 0
-    notes: list[str] = field(default_factory=list)
-
-    @property
-    def passed(self) -> bool:
-        return self.failures == 0
-
-    def to_dict(self) -> dict:
-        return asdict(self) | {"passed": self.passed}
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "NumericsReport":
-        """The inverse of to_dict()."""
-        values = {f.name: data[f.name] for f in fields(cls) if f.name in data}
-        if values.get("worst") is not None:
-            worst = dict(values["worst"])
-            worst["index"] = tuple(worst["index"])
-            worst["input_shapes"] = [tuple(s) for s in worst["input_shapes"]]
-            values["worst"] = WorstMismatch(**worst)
-        for name in ("sample_shapes", "output_shapes"):
-            values[name] = [[tuple(s) for s in sample] for sample in values.get(name, [])]
-        return cls(**values)
 
 
 def default_tolerances(model: torch.nn.Module) -> tuple[str, float, float]:
@@ -89,6 +38,14 @@ def default_tolerances(model: torch.nn.Module) -> tuple[str, float, float]:
     else:
         name = "float32"
     return (name, *TOLERANCES[name])
+
+
+def resolve_tolerances(
+    dtype_name: str, atol: float | None, rtol: float | None
+) -> tuple[float, float]:
+    """(atol, rtol) of a dtype name. --atol and --rtol replace the default values."""
+    default_atol, default_rtol = TOLERANCES[dtype_name]
+    return (default_atol if atol is None else atol, default_rtol if rtol is None else rtol)
 
 
 def make_shared_axis0_vary_fn(base_inputs: tuple, dynamic_shapes: tuple) -> VaryFn:
@@ -114,9 +71,13 @@ def make_shared_axis0_vary_fn(base_inputs: tuple, dynamic_shapes: tuple) -> Vary
     return vary
 
 
+# A provider name, or (name, provider options) such as ("CUDAExecutionProvider", {"device_id": "1"}).
+OrtProvider = str | tuple[str, dict[str, str]]
+
+
 def new_session(
     model: bytes | str | Path,
-    providers: list[str] | None = None,
+    providers: list[OrtProvider] | None = None,
     options: ort.SessionOptions | None = None,
 ) -> ort.InferenceSession:
     """Build an InferenceSession (CPU by default). The C++ logger of ORT would print each
@@ -155,7 +116,7 @@ def first_line(exc: Exception) -> str:
 
 def tensor_to_numpy(tensor: torch.Tensor) -> np.ndarray:
     """bf16 and fp16 have no faithful numpy dtype: widen floats to float32 first."""
-    tensor = tensor.detach()
+    tensor = tensor.detach().cpu()
     return (tensor.float() if tensor.is_floating_point() else tensor).numpy()
 
 
@@ -173,7 +134,7 @@ def _bounds_text(dynamic_shapes: tuple | None) -> str | None:
 WorstCandidate = tuple[int, tuple[int, ...], float, float, float]
 
 
-def _compare_sample(
+def compare_sample(
     torch_outs: list[torch.Tensor],
     ort_outs: list,
     atol: float,
@@ -196,7 +157,7 @@ def _compare_sample(
     sample_abs = sample_rel = 0.0
     failed = False
     worst: WorstCandidate | None = None
-    worst_abs = -1.0  # a NaN error never compares greater, so it is never the worst
+    worst_abs = -1.0
     for idx, (expected, got) in enumerate(zip(torch_outs, ort_outs, strict=True)):
         expected_np = tensor_to_numpy(expected)
         got_np = np.asarray(got)
@@ -210,19 +171,68 @@ def _compare_sample(
 
         expected64 = expected_np.astype(np.float64)
         got64 = got_np.astype(np.float64)
+        close = np.isclose(got64, expected64, rtol=rtol, atol=atol, equal_nan=False)
+        # A NaN or inf error stays out of the error numbers. It has its own note and `worst`.
         abs_err = np.abs(expected64 - got64)
+        rel_err = abs_err / (np.abs(expected64) + 1e-8)
+        finite = np.isfinite(abs_err)
+        abs_err = np.where(finite, abs_err, 0.0)
         output_abs = float(abs_err.max(initial=0.0))
         sample_abs = max(sample_abs, output_abs)
-        rel_err = abs_err / (np.abs(expected64) + 1e-8)
-        sample_rel = max(sample_rel, float(rel_err.max(initial=0.0)))
-        if abs_err.size and output_abs > worst_abs:
+        sample_rel = max(sample_rel, float(np.where(finite, rel_err, 0.0).max(initial=0.0)))
+        nonfinite = ~finite & ~close
+        if nonfinite.any():
+            flat = int(np.argmax(nonfinite))
+            index = tuple(int(x) for x in np.unravel_index(flat, nonfinite.shape))
+            got_nan, torch_nan = int(np.isnan(got64).sum()), int(np.isnan(expected64).sum())
+            note = (
+                f"sample {sample_index}: output_{idx} has {int(nonfinite.sum())} non-finite "
+                f"mismatches ({got_nan} NaN from onnxruntime, {torch_nan} NaN from torch)"
+            )
+            if worst_abs < math.inf:
+                worst_abs = math.inf  # the first non-finite mismatch is the worst element
+                worst = (
+                    idx,
+                    index,
+                    float(expected64.flat[flat]),
+                    float(got64.flat[flat]),
+                    worst_abs,
+                )
+        elif abs_err.size and output_abs > worst_abs:
             flat = int(np.argmax(abs_err))
             index = tuple(int(x) for x in np.unravel_index(flat, abs_err.shape))
-            worst_abs = float(abs_err.flat[flat])
+            worst_abs = output_abs
             worst = (idx, index, float(expected64.flat[flat]), float(got64.flat[flat]), worst_abs)
-        if not np.isclose(got64, expected64, rtol=rtol, atol=atol, equal_nan=False).all():
+        if not close.all():
             failed = True
     return sample_abs, sample_rel, failed, note, worst
+
+
+def min_row_cosine(expected: np.ndarray, got: np.ndarray) -> float:
+    """The smallest cosine similarity between a row of `expected` and the same row of `got`.
+    A row is the last axis. A zero row on both sides counts as 1. A zero row on one side only
+    counts as 0. A NaN counts as 0. Two arrays of different shapes are not compared."""
+    if expected.ndim == 0:
+        return 1.0
+    a = expected.reshape(-1, expected.shape[-1]).astype(np.float64)
+    b = got.reshape(-1, got.shape[-1]).astype(np.float64)
+    norm_a, norm_b = np.linalg.norm(a, axis=1), np.linalg.norm(b, axis=1)
+    denominator = norm_a * norm_b
+    with np.errstate(invalid="ignore", divide="ignore"):
+        cosine = np.where(denominator > 0, (a * b).sum(axis=1) / denominator, 0.0)
+    cosine = np.where((norm_a == 0) & (norm_b == 0), 1.0, cosine)
+    return float(np.nan_to_num(cosine, nan=0.0).min(initial=1.0))
+
+
+def fold_cosine(
+    expected: np.ndarray, got: np.ndarray, lowest: float | None
+) -> tuple[float | None, bool]:
+    """(the lowest row cosine so far including this pair, True if this pair is under the
+    cosine tolerance). Two arrays of different shapes are not compared."""
+    if expected.shape != got.shape:
+        return lowest, False
+    cosine = min_row_cosine(expected, got)
+    return (cosine if lowest is None else min(cosine, lowest)), cosine < TOLERANCE_COSINE
 
 
 def _shapes(sample: tuple) -> list[tuple[int, ...]]:
@@ -235,28 +245,39 @@ def verify(
     base_inputs: tuple,
     dynamic_shapes: tuple | None = None,
     vary_fn: VaryFn | None = None,
-    k: int = DEFAULT_SAMPLES,
+    samples: int = DEFAULT_SAMPLES,
     atol: float | None = None,
     rtol: float | None = None,
     seed: int = 0,
+    embedding: bool = False,
+    keep_feeds: list[dict[str, np.ndarray]] | None = None,
+    fp16: bool = False,
 ) -> NumericsReport:
+    """Compare torch and ONNX Runtime on `samples` inputs. If `embedding` is True, the first
+    output is a pooled embedding. Then each of its rows must also reach the cosine tolerance.
+    The input feeds of each sample are appended to `keep_feeds`, if you give it. With `fp16`,
+    the graph is an fp16 copy of the fp32 `model`: the float16 tolerances apply."""
     if vary_fn is None:
         if dynamic_shapes is None:
             raise ValueError("verify() needs either dynamic_shapes or an explicit vary_fn")
         vary_fn = make_shared_axis0_vary_fn(base_inputs, dynamic_shapes)
 
-    tolerance_dtype, default_atol, default_rtol = default_tolerances(model)
+    tolerance_dtype = default_tolerances(model)[0]
+    if fp16 and tolerance_dtype in ("float32", "float64"):
+        tolerance_dtype = "float16"
+    tolerance_abs, tolerance_rel = resolve_tolerances(tolerance_dtype, atol, rtol)
     report = NumericsReport(
-        samples_tested=k,
+        samples_tested=samples,
         max_abs_err=0.0,
         max_rel_err=0.0,
         failures=0,
         shape_generalization=None,
-        tolerance_abs=default_atol if atol is None else atol,
-        tolerance_rel=default_rtol if rtol is None else rtol,
+        tolerance_abs=tolerance_abs,
+        tolerance_rel=tolerance_rel,
         tolerance_dtype=tolerance_dtype,
         tolerance_overridden=atol is not None or rtol is not None,
         seed=seed,
+        tolerance_cosine=TOLERANCE_COSINE if embedding else None,
     )
     session = load_session(onnx_model)
     input_names = [inp.name for inp in session.get_inputs()]
@@ -266,14 +287,14 @@ def verify(
     # A forked RNG leaves the random state of the caller unchanged.
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(seed)
-        for i in range(k):
+        for i in range(samples):
             sample = vary_fn(i)
             shapes = _shapes(sample)
             report.sample_shapes.append(shapes)
             report_logger.info(
                 "verify: sample %d/%d, %s",
                 i + 1,
-                k,
+                samples,
                 ", ".join(
                     f"{name} {list(shape)}"
                     for name, shape in zip(input_names, shapes, strict=False)
@@ -287,6 +308,9 @@ def verify(
                     tuple(t.shape) if isinstance(t, torch.Tensor) else type(t).__name__
                     for t in sample
                 ]
+                # Sample 0 is the example input. If torch fails on it, the model or the inputs
+                # are wrong. A later sample comes from the sampler of downshift, so its message
+                # names the sampler and the bounds.
                 if i == 0:
                     raise ValueError(
                         f"model raised on sample {i} (input shapes {described}): "
@@ -305,7 +329,12 @@ def verify(
 
             try:
                 # A bf16 input has no numpy dtype either. ORT would reject that graph anyway.
-                feeds = {name: t.numpy() for name, t in zip(input_names, sample, strict=True)}
+                feeds = {
+                    name: t.detach().cpu().numpy()
+                    for name, t in zip(input_names, sample, strict=True)
+                }
+                if keep_feeds is not None:
+                    keep_feeds.append(feeds)
                 ort_outs = session.run(None, feeds)
             except Exception as exc:  # noqa: BLE001 - a verdict, not a crash
                 tensor_shapes = [tuple(t.shape) for t in sample if isinstance(t, torch.Tensor)]
@@ -314,7 +343,7 @@ def verify(
                     f"{first_line(exc)}"
                 ) from exc
 
-            sample_abs, sample_rel, failed, note, candidate = _compare_sample(
+            sample_abs, sample_rel, failed, note, candidate = compare_sample(
                 torch_outs, ort_outs, report.tolerance_abs, report.tolerance_rel, i
             )
             if note is not None:
@@ -324,9 +353,20 @@ def verify(
                 report.worst = WorstMismatch(i, output_idx, index, expected, got, shapes)
             report.max_abs_err = max(report.max_abs_err, sample_abs)
             report.max_rel_err = max(report.max_rel_err, sample_rel)
+            if embedding and ort_outs and torch_outs:
+                report.min_cosine, low = fold_cosine(
+                    tensor_to_numpy(torch_outs[0]), np.asarray(ort_outs[0]), report.min_cosine
+                )
+                failed = failed or low
             if failed:
                 report.failures += 1
                 report.baseline_failed = report.baseline_failed or i == 0
 
+    if report.min_cosine is not None and report.min_cosine < TOLERANCE_COSINE:
+        report.notes.append(
+            f"embedding rows: minimum cosine {report.min_cosine:.5f} "
+            f"(tolerance {TOLERANCE_COSINE:g})"
+        )
+    # If sample 0 failed, the fault is not about shapes, so the answer is "not known" (None).
     report.shape_generalization = None if report.baseline_failed else report.failures == 0
     return report

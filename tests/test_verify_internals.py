@@ -9,13 +9,14 @@ from downshift.core import verify as verify_mod
 from downshift.core.shapes import resize_axis
 from downshift.core.verify import (
     OnnxRuntimeError,
-    _compare_sample,
     as_tensor_list,
+    compare_sample,
     default_tolerances,
     load_session,
     make_shared_axis0_vary_fn,
     verify,
 )
+from downshift.entities.verdict import NumericsReport
 from tests.models import bf16_weights, clean_mlp
 
 
@@ -67,7 +68,7 @@ def test_compare_sample_uses_per_element_allclose_not_the_maxima():
     expected = torch.tensor([1000.0, 1e-6])
     got = np.array([1000.5, 1e-6 + 5e-5])
 
-    sample_abs, sample_rel, failed, note, _ = _compare_sample([expected], [got], atol, rtol, 0)
+    sample_abs, sample_rel, failed, note, _ = compare_sample([expected], [got], atol, rtol, 0)
 
     assert failed is False
     assert note is None
@@ -81,7 +82,7 @@ def test_compare_sample_fails_when_any_single_element_exceeds_allclose():
     expected = torch.tensor([1.0])
     got = np.array([2.0])  # abs_err 1.0 >> atol + rtol * |expected| == 1.1e-3
 
-    _, _, failed, note, _ = _compare_sample([expected], [got], atol, rtol, 0)
+    _, _, failed, note, _ = compare_sample([expected], [got], atol, rtol, 0)
 
     assert failed is True
     assert note is None
@@ -91,7 +92,7 @@ def test_compare_sample_notes_a_shape_mismatch_instead_of_raising():
     expected = torch.zeros(2, 4)
     got = np.zeros((2, 3))
 
-    _, _, failed, note, _ = _compare_sample([expected], [got], 1e-4, 1e-3, 3)
+    _, _, failed, note, _ = compare_sample([expected], [got], 1e-4, 1e-3, 3)
 
     assert failed is True
     assert note == "sample 3: output_0 shape (2, 4) from torch vs (2, 3) from onnxruntime"
@@ -101,7 +102,7 @@ def test_compare_sample_notes_an_output_count_mismatch_instead_of_raising():
     expected = [torch.zeros(2), torch.zeros(2)]
     got = [np.zeros(2)]
 
-    _, _, failed, note, _ = _compare_sample(expected, got, 1e-4, 1e-3, 1)
+    _, _, failed, note, _ = compare_sample(expected, got, 1e-4, 1e-3, 1)
 
     assert failed is True
     assert note == "sample 1: 2 torch outputs vs 1 onnxruntime outputs"
@@ -111,7 +112,7 @@ def test_compare_sample_worst_is_the_argmax_error_element():
     expected = torch.tensor([[1.0, 2.0], [3.0, 100.0]])
     got = np.array([[1.0, 2.0], [3.0, 90.0]])  # only [1, 1] is off, by 10
 
-    _, _, _, _, worst = _compare_sample([expected], [got], 1e-4, 1e-3, 5)
+    _, _, _, _, worst = compare_sample([expected], [got], 1e-4, 1e-3, 5)
 
     assert worst is not None
     output_idx, index, expected_val, got_val, abs_err = worst
@@ -124,7 +125,7 @@ def test_compare_sample_worst_is_none_when_no_output_is_comparable():
     expected = torch.zeros(2, 4)
     got = np.zeros((2, 3))
 
-    _, _, _, _, worst = _compare_sample([expected], [got], 1e-4, 1e-3, 0)
+    _, _, _, _, worst = compare_sample([expected], [got], 1e-4, 1e-3, 0)
 
     assert worst is None
 
@@ -142,7 +143,7 @@ def test_verify_records_a_note_and_fails_when_output_shapes_differ(monkeypatch):
 
     monkeypatch.setattr(verify_mod, "load_session", lambda onnx_model: MismatchedSession())
 
-    report = verify(model, "unused.onnx", inputs, vary_fn=lambda i: inputs, k=1)
+    report = verify(model, "unused.onnx", inputs, vary_fn=lambda i: inputs, samples=1)
 
     assert report.failures == 1
     assert report.notes == ["sample 0: output_0 shape (1, 4) from torch vs (1, 3) from onnxruntime"]
@@ -157,7 +158,7 @@ def test_bf16_output_is_cast_to_float32_before_numpy_conversion():
     assert expected.dtype is torch.bfloat16
 
     got = expected.float().numpy()
-    sample_abs, sample_rel, failed, note, _ = _compare_sample([expected], [got], 1.0, 1.0, 0)
+    sample_abs, sample_rel, failed, note, _ = compare_sample([expected], [got], 1.0, 1.0, 0)
 
     assert note is None
     assert failed is False
@@ -176,7 +177,7 @@ def test_verify_wraps_a_session_creation_failure_as_onnx_runtime_error(monkeypat
             "unused.onnx",
             clean_mlp.make_inputs(),
             vary_fn=lambda i: clean_mlp.make_inputs(),
-            k=1,
+            samples=1,
         )
 
 
@@ -198,7 +199,7 @@ def test_verify_wraps_a_session_run_failure_as_onnx_runtime_error(monkeypatch):
             "unused.onnx",
             clean_mlp.make_inputs(),
             vary_fn=lambda i: clean_mlp.make_inputs(),
-            k=1,
+            samples=1,
         )
 
 
@@ -231,7 +232,7 @@ def test_verify_wraps_a_torch_model_exception_as_value_error(monkeypatch):
         return (torch.randn(2, 3),) if i == 1 else base_inputs
 
     with pytest.raises(ValueError, match=r"sample 1.*shape"):
-        verify(BatchPicky(), "unused.onnx", base_inputs, vary_fn=vary, k=2)
+        verify(BatchPicky(), "unused.onnx", base_inputs, vary_fn=vary, samples=2)
 
 
 def test_verify_names_the_sampler_and_bounds_when_a_generated_sample_fails(monkeypatch):
@@ -249,7 +250,7 @@ def test_verify_names_the_sampler_and_bounds_when_a_generated_sample_fails(monke
         return (torch.randn(2, 3),) if i == 1 else base_inputs
 
     with pytest.raises(ValueError, match="generated by the sampler of downshift") as excinfo:
-        verify(BatchPicky(), "unused.onnx", base_inputs, dynamic_shapes, vary_fn=vary, k=2)
+        verify(BatchPicky(), "unused.onnx", base_inputs, dynamic_shapes, vary_fn=vary, samples=2)
     message = str(excinfo.value)
     assert "--vary" in message
     assert "axis 0 in (1, 8)" in message
@@ -264,7 +265,7 @@ def test_verify_keeps_the_original_wording_when_sample_0_fails(monkeypatch):
     inputs = (torch.randn(1, 3),)
 
     with pytest.raises(ValueError, match="Try --dynamic or --inputs") as excinfo:
-        verify(AlwaysBroken(), "unused.onnx", inputs, vary_fn=lambda i: inputs, k=1)
+        verify(AlwaysBroken(), "unused.onnx", inputs, vary_fn=lambda i: inputs, samples=1)
     assert "downshift's sampler" not in str(excinfo.value)
 
 
@@ -300,7 +301,7 @@ def test_verify_records_tolerance_dtype_and_seed_on_the_report(monkeypatch):
         t.double() if isinstance(t, torch.Tensor) else t for t in clean_mlp.make_inputs()
     )
 
-    report = verify(model, "unused.onnx", inputs, vary_fn=lambda i: inputs, k=1, seed=3)
+    report = verify(model, "unused.onnx", inputs, vary_fn=lambda i: inputs, samples=1, seed=3)
 
     assert report.tolerance_dtype == "float64"
     assert (report.tolerance_abs, report.tolerance_rel) == (1e-6, 1e-5)
@@ -308,12 +309,31 @@ def test_verify_records_tolerance_dtype_and_seed_on_the_report(monkeypatch):
     assert report.tolerance_overridden is False
 
 
+def test_fp16_graph_uses_the_float16_tolerances_for_an_fp32_model(monkeypatch):
+    monkeypatch.setattr(verify_mod, "load_session", lambda onnx_model: _EchoSession())
+    inputs = clean_mlp.make_inputs()
+
+    report = verify(
+        clean_mlp.make_model(),
+        "unused.onnx",
+        inputs,
+        vary_fn=lambda i: inputs,
+        samples=1,
+        fp16=True,
+    )
+
+    assert report.tolerance_dtype == "float16"
+    assert (report.tolerance_abs, report.tolerance_rel) == (1e-2, 1e-2)
+
+
 def test_atol_rtol_override_the_dtype_default(monkeypatch):
     monkeypatch.setattr(verify_mod, "load_session", lambda onnx_model: _EchoSession())
     model = clean_mlp.make_model()
     inputs = clean_mlp.make_inputs()
 
-    report = verify(model, "unused.onnx", inputs, vary_fn=lambda i: inputs, k=1, atol=1.0, rtol=2.0)
+    report = verify(
+        model, "unused.onnx", inputs, vary_fn=lambda i: inputs, samples=1, atol=1.0, rtol=2.0
+    )
 
     assert (report.tolerance_abs, report.tolerance_rel) == (1.0, 2.0)
     # It still records what the dtype would have selected.
@@ -327,8 +347,8 @@ def test_seed_makes_samples_reproducible(monkeypatch):
     inputs = clean_mlp.make_inputs()
     dynamic_shapes = ({0: torch.export.Dim("n", min=1, max=64)},)
 
-    r1 = verify(model, "unused.onnx", inputs, dynamic_shapes, k=4, seed=7)
-    r2 = verify(model, "unused.onnx", inputs, dynamic_shapes, k=4, seed=7)
+    r1 = verify(model, "unused.onnx", inputs, dynamic_shapes, samples=4, seed=7)
+    r2 = verify(model, "unused.onnx", inputs, dynamic_shapes, samples=4, seed=7)
 
     assert r1.to_dict() == r2.to_dict()
     assert r1.seed == 7
@@ -349,7 +369,7 @@ def test_verify_records_sample_shapes_and_worst_mismatch(monkeypatch):
     monkeypatch.setattr(verify_mod, "load_session", lambda onnx_model: OffOnSecondElement())
     inputs = (torch.tensor([[1.0, 100.0]]),)
 
-    report = verify(Double(), "unused.onnx", inputs, k=1, vary_fn=lambda i: inputs)
+    report = verify(Double(), "unused.onnx", inputs, samples=1, vary_fn=lambda i: inputs)
 
     assert report.sample_shapes == [[(1, 2)]]
     assert report.worst is not None
@@ -373,7 +393,7 @@ def test_verify_shape_generalization_is_none_when_the_baseline_sample_fails(monk
     inputs = clean_mlp.make_inputs()
     dynamic_shapes = ({0: torch.export.Dim("n", min=1, max=64)},)
 
-    report = verify(model, "unused.onnx", inputs, dynamic_shapes, k=3)
+    report = verify(model, "unused.onnx", inputs, dynamic_shapes, samples=3)
 
     assert report.baseline_failed is True
     assert report.shape_generalization is None
@@ -405,12 +425,118 @@ def test_resize_dim0_stays_near_the_example_rather_than_pure_noise():
     assert torch.all((resized - tiled).abs() < 5.0)
 
 
-def test_compare_sample_never_picks_a_nan_error_as_the_worst():
+def test_a_nan_mismatch_is_the_worst_element_and_stays_out_of_the_error_numbers():
     expected = [torch.tensor([float("nan")]), torch.tensor([1.0])]
     got = [np.array([0.0]), np.array([3.0])]
 
-    _, _, failed, _, worst = _compare_sample(expected, got, 1e-4, 1e-3, 0)
+    sample_abs, sample_rel, failed, note, worst = compare_sample(expected, got, 1e-4, 1e-3, 0)
 
     assert failed is True
+    assert sample_abs == 2.0
+    assert np.isfinite(sample_rel)
     assert worst is not None
-    assert worst[0] == 1  # output 1, the real error, and not the NaN of output 0
+    assert worst[:4] == (0, (0,), pytest.approx(float("nan"), nan_ok=True), 0.0)
+    assert note is not None and "output_0 has 1 non-finite mismatches" in note
+    assert "0 NaN from onnxruntime, 1 NaN from torch" in note
+
+
+def test_an_all_nan_output_reports_the_nan_and_no_error_of_zero():
+    expected = [torch.tensor([1.0, 2.0, 3.0])]
+    got = [np.array([float("nan")] * 3)]
+
+    sample_abs, _, failed, note, worst = compare_sample(expected, got, 1e-4, 1e-3, 4)
+
+    assert failed is True
+    assert sample_abs == 0.0
+    assert worst is not None and worst[1] == (0,)
+    assert note == (
+        "sample 4: output_0 has 3 non-finite mismatches (3 NaN from onnxruntime, 0 NaN from torch)"
+    )
+
+
+def test_a_nan_in_both_outputs_still_fails_the_sample():
+    expected = [torch.tensor([float("nan"), 1.0])]
+    got = [np.array([float("nan"), 1.0])]
+
+    _, _, failed, note, worst = compare_sample(expected, got, 1e-4, 1e-3, 0)
+
+    assert failed is True  # the pass or fail rule did not change: NaN is never close
+    assert note is not None and worst is not None
+
+
+class _Scaled(torch.nn.Module):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x * 2
+
+
+class _Rotated:
+    """An ORT stand-in that returns `x * 2` plus a fixed offset, as a drifted graph would."""
+
+    def __init__(self, offset: np.ndarray):
+        self.offset = offset
+
+    def get_inputs(self):
+        return [_FakeInput()]
+
+    def run(self, output_names, feeds):
+        return [feeds["x"] * 2 + self.offset]
+
+
+def test_min_row_cosine_is_one_for_equal_rows_and_small_for_other_directions():
+    rows = np.array([[1.0, 2.0, 3.0], [0.0, 1.0, 0.0]])
+    assert verify_mod.min_row_cosine(rows, rows * 3) == pytest.approx(1.0)
+    other = np.array([[1.0, 2.0, 3.0], [1.0, 0.0, 0.0]])
+    assert verify_mod.min_row_cosine(rows, other) == pytest.approx(0.0)
+
+
+def test_min_row_cosine_zero_norm_rules():
+    zero, unit = np.zeros((1, 3)), np.array([[1.0, 0.0, 0.0]])
+    assert verify_mod.min_row_cosine(zero, zero) == 1.0
+    assert verify_mod.min_row_cosine(zero, unit) == 0.0
+    assert verify_mod.min_row_cosine(unit, zero) == 0.0
+    assert verify_mod.min_row_cosine(np.array([[np.nan, 1.0]]), np.ones((1, 2))) == 0.0
+
+
+def test_min_row_cosine_handles_scalars_and_empty_batches():
+    assert verify_mod.min_row_cosine(np.float64(1.0), np.float64(2.0)) == 1.0
+    assert verify_mod.min_row_cosine(np.zeros((0, 4)), np.zeros((0, 4))) == 1.0
+
+
+def _embedding_inputs() -> tuple:
+    return (torch.full((2, 4), 1e-6),)
+
+
+def test_tiny_vectors_pass_isclose_and_fail_the_cosine_gate(monkeypatch):
+    offset = np.array([[0.0, 0.0, 0.0, 4e-6]] * 2, dtype=np.float32)
+    monkeypatch.setattr(verify_mod, "load_session", lambda onnx_model: _Rotated(offset))
+    inputs = _embedding_inputs()
+
+    plain = verify(_Scaled(), "unused.onnx", inputs, vary_fn=lambda i: inputs, samples=1)
+    gated = verify(
+        _Scaled(), "unused.onnx", inputs, vary_fn=lambda i: inputs, samples=1, embedding=True
+    )
+
+    assert plain.passed
+    assert plain.min_cosine is None
+    assert plain.tolerance_cosine is None
+    assert not gated.passed
+    assert gated.min_cosine is not None and gated.min_cosine < 0.9999
+    assert gated.tolerance_cosine == 0.9999
+    assert gated.notes == [
+        f"embedding rows: minimum cosine {gated.min_cosine:.5f} (tolerance 0.9999)"
+    ]
+    assert gated.to_dict()["min_cosine"] == gated.min_cosine
+    assert NumericsReport.from_dict(gated.to_dict()).min_cosine == gated.min_cosine
+
+
+def test_a_matching_embedding_passes_both_checks(monkeypatch):
+    monkeypatch.setattr(verify_mod, "load_session", lambda onnx_model: _EchoSession())
+    inputs = (torch.randn(3, 5),)
+
+    report = verify(
+        _Scaled(), "unused.onnx", inputs, vary_fn=lambda i: inputs, samples=2, embedding=True
+    )
+
+    assert report.passed
+    assert report.min_cosine == pytest.approx(1.0)
+    assert report.notes == []

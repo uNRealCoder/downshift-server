@@ -1,28 +1,10 @@
 """The boot phases, and how the loader thread reports them to /ready. No heavy imports."""
 
 from contextvars import ContextVar
-from dataclasses import dataclass
-from enum import StrEnum
+
+from downshift.entities.phase import LoadProgress, Phase
 
 __all__ = ["CURRENT_PROGRESS", "LoadProgress", "Phase", "report"]
-
-
-class Phase(StrEnum):
-    """A boot phase: a key of ServingState.timings, a part of the Boot row (in this order), and
-    the `phase` of /ready."""
-
-    load = "load"
-    export = "export"
-    verify = "verify"
-    session = "session"
-    warmup = "warmup"
-
-
-@dataclass
-class LoadProgress:
-    """The phase that /ready reports while the loader thread runs."""
-
-    phase: Phase = Phase.load
 
 
 # Set in the loader thread's own Context (serve/app.py), so report() calls deep in core reach

@@ -26,10 +26,10 @@ warnings.filterwarnings("ignore")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from bench._path import ROOT  # noqa: E402
+from downshift.entities.options import ServeOptions  # noqa: E402
 from downshift.loading import LoadSpec, load_model  # noqa: E402
 from downshift.serve.app import build_app  # noqa: E402
 from downshift.serve.engine import prepare_serving  # noqa: E402
-from downshift.serve.options import ServeOptions  # noqa: E402
 
 MODEL = ROOT / "bench" / "models" / "all-MiniLM-L6-v2"
 WORDS = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho".split()

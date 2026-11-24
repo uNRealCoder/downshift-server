@@ -9,6 +9,7 @@ from onnx import TensorProto, helper
 
 import downshift
 from downshift.core.manifest import manifest_path_for, observed_dtype
+from downshift.core.memo import FORMAT_VERSION
 from tests.models import clean_mlp, data_dependent_branch
 
 
@@ -104,3 +105,7 @@ def test_manifest_lists_external_data_files(tmp_path, monkeypatch):
     assert manifest["external_data"] == [
         {"file": "big.onnx.data", "sha256": hashlib.sha256(data.read_bytes()).hexdigest()}
     ]
+
+
+def test_manifest_has_the_format_version(manifest):
+    assert manifest["format_version"] == FORMAT_VERSION == 1

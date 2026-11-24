@@ -8,87 +8,50 @@ correctness verdict, so the harness measures what that costs and what it buys: t
 latency, boot time and `/health` responsiveness under load, with every response checked against
 eager PyTorch. A fast row with a wrong answer shows up as one.
 
+## Where to look
+
+| You want | Open |
+|---|---|
+| The newest numbers | [`results/v1.0.0/REPORT.md`](results/v1.0.0/REPORT.md) |
+| Every published run, its files, and a summary of 1.0.0 and 0.5.0 | [`results/README.md`](results/README.md) |
+| One page: each downshift capability and the result that shows it | [`CAPABILITIES.md`](CAPABILITIES.md) |
+| Charts and tables as web pages | [`showcase/index.html`](showcase/index.html) (made by `showcase/build_showcase.py`; see [`showcase/README.md`](showcase/README.md)) |
+| How to run the benchmark | "Setup" and "Run" below |
+
 ## Layout
 
 ```
 bench/
-  README.md
-  run.py, hf_models.py, report.py   entry points (python -m bench.<name>)
-  *.py, large/                      the harness modules they use (see "What runs")
-  results/v0.5.0/                   a published run: REPORT.md, results*.json, chart_*.csv
-  REPORT_v0.4.0.md, BLOG_APPENDIX_v0.4.0.md, results*_v0.4.0.json
-                                    the 0.4.0 run, left at the root because the post links here
-  models/                           downloaded Hugging Face checkpoints (gitignored)
-  scratch/                          default output of an ad-hoc run, local trials (gitignored)
+  run.py, hf_models.py, report.py   entry points: python -m bench.<name>
+  torch_vs_ort.py, cache_accept.py  in-process checks (no HTTP)
+  _path.py, cases.py, factories.py, large/, loadgen.py, servers.py, naive_hf_server.py, inproc.py
+                                    the modules that the entry points use (see "What runs")
+  results/vX.Y.Z/                   published runs: raw JSON, REPORT.md, chart CSVs
+  showcase/                         static web pages for an outside reader
+  CAPABILITIES.md                   capability -> result map
+  archive/                          old trials with their data (not part of a run)
+  models/                           downloaded checkpoints (gitignored, large)
+  scratch/                          default output of an ad-hoc run (gitignored, empty in git)
 ```
 
-A new published run goes in `results/vX.Y.Z/` with the same file names as 0.5.0.
-
-## Published runs
-
-| run | report | raw data |
-|---|---|---|
-| **0.5.0**: naive vs 0.4.0 vs 0.5.0, one session | [`results/v0.5.0/REPORT.md`](results/v0.5.0/REPORT.md) | `results/v0.5.0/`: `results.json`, `results_hf.json`; chart data `chart_runs.csv`, `chart_stages.csv` |
-| 0.4.0: naive vs 0.4.0, behind the launch post *Stop hand-rolling model servers* | [`REPORT_v0.4.0.md`](REPORT_v0.4.0.md), [`BLOG_APPENDIX_v0.4.0.md`](BLOG_APPENDIX_v0.4.0.md) | `results_v0.4.0.json`, `results_hf*_v0.4.0.json` |
-
-The 0.4.0 files were produced by the harness as of commit `02419cf` and are kept unchanged
-because the post links to them. Their numbers are not comparable row-for-row with the 0.5.0 run,
-which re-measured 0.4.0 alongside 0.5.0 in the same session.
-
-## 0.5.0 at a glance
-
-From [`results/v0.5.0/REPORT.md`](results/v0.5.0/REPORT.md) (run 2026-10-04/05); 16-CPU
-Windows machine, CPU only, peak requests/s at batch 1 unless stated. Chart data:
-`results/v0.5.0/chart_runs.csv`, `results/v0.5.0/chart_stages.csv`.
-
-- **0.5.0 is faster than 0.4.0 on every model.** Peak batch-1 throughput, JSON bodies:
-  `clean_mlp` 1030 vs 866 (+19%), `dynamic_batch_cnn` 1031 vs 862, `gnn_gcn` 891 vs 810,
-  `tiny_bert` 906 vs 820, `scatter_include_self_false` 1076 vs 940, `mlp_large` 815 vs 696
-  (+17%), `cnn_large` 736 vs 657, `bert_small` 106 vs 102. Each request takes two thread hops
-  (prep pool, then inference thread) and skips FastAPI's own body handling.
-- **Where the time goes** (`clean_mlp`, concurrency 1): 1.00 ms in all, of which 0.63 ms is the
-  HTTP stack, 0.19 ms inference, and 0.18 ms parse, prep, waits and encode together; 0.4.0
-  takes 1.27 ms. On `bert_small` inference is 7.3 of 10.6 ms, and safetensors cuts the total to
-  8.8 ms by shrinking `encode` from 1.8 ms to 0.1 ms.
-- **`--execution inline` is the extra gear for tiny models**: `clean_mlp` 1498,
-  `scatter_include_self_false` 1545, `dynamic_batch_cnn` 1211, `gnn_gcn` 1160 (all above the
-  0.5.0 default). `tiny_bert` is the exception (844 vs 906 default), and on MiniLM it changes
-  nothing (281 vs 282), so it is only worth it for models that infer in well under 1 ms.
-- **Binary bodies** move the most rows on wide inputs: at batch 32, concurrency 8, `mlp_large`
-  does 14.4k rows/s with safetensors against 6.6k as JSON on 0.5.0 (11.2k with 0.4.0 base64);
-  `cnn_large` 4.1k vs 1.5k. safetensors matches or beats base64 with bodies about 25% smaller
-  (`cnn_large` b32: 393 KB vs 524 KB, 2.0 MB as JSON); on `dynamic_batch_cnn` b32 it is 967 vs
-  770 requests/s.
-- **Real HF models.** all-MiniLM-L6-v2, one sentence, c=8: 282 vs 239 by default and 483 vs 434
-  with `--max-concurrency 4`, against 139 for the hand-rolled transformers server. Prompt Guard
-  50 vs 48, and 103 vs 101 with `--max-concurrency 4`, against 16 hand-rolled.
-  `--max-concurrency` is still the biggest single lever for small encoders.
-- **`--workers` scales both versions**; at 4 workers and concurrency 8, `clean_mlp` 3857 vs 3406,
-  `bert_small` 239 vs 227.
-- **Correctness is unchanged.** Every downshift row in both versions matches eager PyTorch to
-  ≤ 2.7e-6; both HF models agree with eager torch (MiniLM cosine 1.0, Prompt Guard 8/8 labels).
-  The hand-rolled ONNX server still returns wrong answers on `scatter_include_self_false`
-  (max error 1.2), where both versions route to torch. Failed requests across every window: 0.
-- **`/health` stays responsive** under load on every downshift row (worst p99 27 ms). The
-  hand-rolled `async def` server reaches 5.2 s on Prompt Guard.
-- **One startup hang, in 0.4.0**: `--workers 4` on `bert_small` never answered `/ready` within
-  600 s once (it boots in about 24 s otherwise) and was re-run. Together with a low-memory stop
-  during `bert_small`, the run was split into passes; the report says which rows came from where.
+`archive/` holds the Qwen3-Embedding trial of 0.5.0 (`qwen3-embedding-trial/`), the scripts that
+built the GPU tables of `.docs/REPORT_ONNX_VS_TORCH.md` (`gpu-report/`) and the 0.6.0 throughput
+check (`qbench/`). Their paths are not kept up to date. They are a record, not a tool.
 
 ## Setup
 
 From a checkout, in a venv that also has the previous release pip-installed (non-editable):
 
 ```bash
-pip install "downshift-server[all]==0.4.0" aiohttp safetensors   # the "installed" target
+pip install "downshift-server[all]==0.5.1" aiohttp safetensors   # the "installed" target
 ```
 
 The checkout is never installed: every process the harness starts finds it through `PYTHONPATH`
 (`bench/_path.py`). The two Hugging Face checkpoints are downloaded to gitignored paths:
 
 ```bash
-huggingface-cli download sentence-transformers/all-MiniLM-L6-v2 --local-dir bench/models/all-MiniLM-L6-v2
-huggingface-cli download meta-llama/Prompt-Guard-86M --local-dir bench/models/Prompt-Guard-86M   # gated: accept the licence first
+hf download sentence-transformers/all-MiniLM-L6-v2 --local-dir bench/models/all-MiniLM-L6-v2
+hf download meta-llama/Prompt-Guard-86M --local-dir bench/models/Prompt-Guard-86M   # gated: accept the licence first
 ```
 
 ## Run
@@ -106,13 +69,26 @@ python -m bench.report --results bench/results/v0.5.0/results.json \
 ```
 
 Without `--out`, each command writes to `bench/scratch/`, so a trial run never overwrites a
-published one. Both runners take `--targets checkout installed` (the default is both). Drop one to measure a
+published one. Write a published run to `bench/results/vX.Y.Z/`, with the file names of the folder `v1.0.0/`. Both runners take `--targets checkout installed` (the default is both). Drop one to measure a
 single version. Other useful flags: `--cases`, `--http-cases`, `--variants`, `--duration`,
 `--skip-inproc`, `--skip-calibration`, `--skip-workers` (`bench.run`), `--models` (`bench.hf_models`).
 
 Run nothing else on the machine while it measures; a concurrent test suite more than doubles
 latencies. On a 16 GB machine, close memory-heavy apps too: `bert_small` has been stopped by low
 memory before.
+
+### GPU
+
+Run from a venv with the CUDA build of torch and `onnxruntime-gpu`. The hand-rolled ONNX server
+is CPU only, so leave it out:
+
+```bash
+BENCH_DEVICE=cuda python -m bench.run --variants naive_torch downshift     --skip-inproc --skip-workers --out bench/results/vX.Y.Z/results_gpu.json
+python -m bench.torch_vs_ort --device cuda --out bench/results/vX.Y.Z/torch_vs_ort_cuda.json   # in process, no HTTP
+```
+
+Other checks: `python -m bench.cache_accept` (the result cache, in process, MiniLM) and
+`python scripts/check_real_models.py` (verdicts of 8 real models; CI runs it).
 
 ## Chart data
 

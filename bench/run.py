@@ -23,6 +23,7 @@ import socket
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -45,6 +46,9 @@ from bench.cases import (  # noqa: E402
 )
 
 PYTHON = sys.executable
+# BENCH_DEVICE=cuda serves on the GPU: `downshift serve --device cuda` and the hand-rolled torch
+# server on cuda. Run it from a CUDA venv, with --variants naive_torch downshift (naive_onnx is CPU).
+DEVICE = os.environ.get("BENCH_DEVICE", "cpu")
 MAX_LOADGEN_PROCS = 6
 
 NAIVE_VARIANTS = ("naive_torch", "naive_onnx", "naive_torch_async")
@@ -55,8 +59,18 @@ DOWNSHIFT_VARIANTS = {
     "downshift_base64": ("base64", []),
     "downshift_safetensors": ("safetensors", []),
     "downshift_inline": ("json", ["--execution", "inline"]),
+    "downshift_cache": ("json", []),
+    "downshift_metrics": ("json", ["--metrics"]),
 }
-NEW_IN = {"downshift_safetensors": (0, 5), "downshift_inline": (0, 5)}
+NEW_IN = {
+    "downshift_safetensors": (0, 5),
+    "downshift_inline": (0, 5),
+    "downshift_cache": (0, 6),
+    "downshift_metrics": (1, 0),
+}
+# The harness sends the same body again and again, so a result cache would answer from memory.
+# Every variant but `downshift_cache` turns it off (from 0.6.0, where the option starts).
+CACHE_OFF = ["--result-cache-rows", "0"]
 # Inline execution runs the model on the event loop, which only pays off when compute is short;
 # it is measured on the small fixture tier only.
 INLINE_CASES = FIXTURE_CASES
@@ -73,6 +87,28 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
+def spawn_server(cmd: list[str], **kwargs) -> subprocess.Popen:
+    """Start a server whose output goes to a temp file, not to a pipe.
+
+    Nobody reads the output while the server runs. A pipe holds about 4 KB on Windows. Once it is
+    full, the next log write blocks. At start-up this froze a `--workers` server in `warmup`, and
+    under load it stalled a request. A file never fills in that way. `proc.log` holds the output.
+    """
+    log = tempfile.TemporaryFile()
+    proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=str(ROOT), **kwargs)
+    proc.log = log  # type: ignore[attr-defined]
+    return proc
+
+
+def server_output(proc: subprocess.Popen) -> str:
+    """The last 3000 characters that the server wrote."""
+    log = getattr(proc, "log", None)
+    if log is None:
+        return ""
+    log.seek(0)
+    return log.read().decode("utf-8", "replace")[-3000:]
+
+
 def wait_ready(
     port: int, proc: subprocess.Popen, timeout: float = 600.0, path: str = "/health"
 ) -> float:
@@ -85,10 +121,7 @@ def wait_ready(
     url = f"http://127.0.0.1:{port}{path}"
     while time.perf_counter() - start < timeout:
         if proc.poll() is not None:
-            out = (proc.stdout.read() if proc.stdout else b"") or b""
-            raise RuntimeError(
-                f"server exited early ({proc.returncode}):\n{out.decode('utf-8', 'replace')[-3000:]}"
-            )
+            raise RuntimeError(f"server exited early ({proc.returncode}):\n{server_output(proc)}")
         try:
             with urllib.request.urlopen(url, timeout=2) as resp:
                 if resp.status == 200:
@@ -205,7 +238,7 @@ def stage_split(port: int, body: bytes, headers: dict, n: int = 300) -> dict:
         for part in (resp.getheader("server-timing") or "").split(","):
             stage, _, dur = part.strip().partition(";dur=")
             if dur:
-                timing[stage] = float(dur)
+                timing[stage] = float(dur.partition(";")[0])
         if i >= 30:
             rows.append((ms, timing))
     conn.close()
@@ -234,12 +267,7 @@ def max_abs_err(outputs: dict[str, np.ndarray], reference: list[np.ndarray]) -> 
 
 def start_naive(variant: str, case_name: str) -> tuple[subprocess.Popen, int, float]:
     port = free_port()
-    proc = subprocess.Popen(
-        [PYTHON, "-m", "bench.servers", variant, case_name, str(port)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        cwd=str(ROOT),
-    )
+    proc = spawn_server([PYTHON, "-m", "bench.servers", variant, case_name, str(port)])
     return proc, port, wait_ready(port, proc)
 
 
@@ -252,7 +280,7 @@ def start_downshift(
     readiness signal; the returned seconds are the full boot: export, verify and warm-up.
     """
     port = free_port()
-    proc = subprocess.Popen(
+    proc = spawn_server(
         [
             PYTHON,
             "-m",
@@ -272,11 +300,9 @@ def start_downshift(
             "--log-level",
             "warning",
             "--no-access-log",
+            *(["--device", DEVICE] if DEVICE != "cpu" else []),
             *extra,
         ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        cwd=str(ROOT),
         env=cli_env(target),
     )
     return proc, port, wait_ready(port, proc, path="/ready")
@@ -345,6 +371,8 @@ def environment(versions: dict[str, str]) -> dict:
         "torch": torch.__version__,
         "onnxruntime": ort.__version__,
         "torch_num_threads": torch.get_num_threads(),
+        "device": DEVICE,
+        "gpu": torch.cuda.get_device_name(0) if DEVICE != "cpu" else None,
         "ort_providers": ort.get_available_providers(),
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
@@ -499,6 +527,8 @@ def main() -> None:
             try:
                 if target:
                     encoding, extra = DOWNSHIFT_VARIANTS[variant]
+                    if variant != "downshift_cache" and version_tuple(version) >= (0, 6):
+                        extra = [*extra, *CACHE_OFF]
                     proc, port, ready_s = start_downshift(case_name, target, extra)
                 else:
                     encoding = "json"
@@ -550,8 +580,11 @@ def main() -> None:
                 version = versions[target]
                 for n in args.workers_sweep:
                     label = f"downshift@{version} w{n} {case_name}"
+                    # The sweep sends one body again and again: leave the result cache on and
+                    # the numbers come from memory. 0.5.1 has no cache.
+                    extra = CACHE_OFF if version_tuple(version) >= (0, 6) else []
                     try:
-                        proc, port, boot_s = start_downshift(case_name, target, [], workers=n)
+                        proc, port, boot_s = start_downshift(case_name, target, extra, workers=n)
                     except Exception as exc:
                         print(f"  !! {label} failed to start: {exc}", flush=True)
                         continue

@@ -1,6 +1,7 @@
 """core/verdict.py: prepare_model, and intake() of a .onnx file with and without a reference."""
 
 import pytest
+import torch
 
 import downshift
 from downshift.core import verify as verify_mod
@@ -38,6 +39,33 @@ def test_intake_with_matching_reference_is_clean(exported_mlp):
     assert verdict.numerics is not None and verdict.numerics.passed
 
 
+def test_intake_of_an_fp16_graph_uses_the_float16_tolerances(tmp_path):
+    model = clean_mlp.make_model()
+    out = tmp_path / "half.onnx"
+    downshift.export(model, out, clean_mlp.make_inputs(), fp16=True)
+
+    verdict = intake(out, reference=model, example_inputs=clean_mlp.make_inputs())
+
+    assert verdict.status == "CLEAN", verdict.reason
+    assert verdict.numerics is not None
+    assert verdict.numerics.tolerance_dtype == "float16"
+
+
+def test_serving_check_of_an_fp16_file_without_a_reference_uses_float16_tolerances(
+    tmp_path, exported_mlp
+):
+    from downshift.serve.engine import ServeOptions, _serving_tolerances
+
+    out = tmp_path / "half.onnx"
+    downshift.export(clean_mlp.make_model(), out, clean_mlp.make_inputs(), fp16=True)
+
+    half = intake(out)
+    full = intake(exported_mlp[0])
+
+    assert _serving_tolerances(half, ServeOptions()) == (1e-2, 1e-2)
+    assert _serving_tolerances(full, ServeOptions()) == (1e-4, 1e-3)
+
+
 def test_intake_with_reference_fails_via_onnx_runtime_not_a_crash(exported_mlp, monkeypatch):
     path, model, _ = exported_mlp
 
@@ -71,9 +99,9 @@ def test_intake_with_different_reference_is_degraded(exported_mlp):
 
 def test_intake_serves_an_onnx_with_an_external_data_file(tmp_path, monkeypatch):
     from downshift.core import capture as capture_mod
-    from downshift.core.memo import ExportEntry
+    from downshift.entities.cache import ExportEntry
+    from downshift.entities.options import ServeOptions
     from downshift.serve.engine import state_from_entry
-    from downshift.serve.options import ServeOptions
 
     monkeypatch.setattr(capture_mod, "EXTERNAL_DATA_THRESHOLD", 0)
     path = tmp_path / "ext.onnx"
@@ -87,7 +115,7 @@ def test_intake_serves_an_onnx_with_an_external_data_file(tmp_path, monkeypatch)
     assert verdict.onnx_path == path
     assert verdict.op_types["Gemm"] == 2
     entry = ExportEntry(verdict.to_dict(), list(verdict.input_names), {}, onnx_path=path)
-    opts = ServeOptions(k=1, device="cpu", warmup=1)
+    opts = ServeOptions(samples=1, device="cpu", warmup=1)
     state = state_from_entry(entry, None, opts, None, source=str(path), kind=ONNX_FILE)
     assert state.backend.name == "onnxruntime"
 
@@ -96,3 +124,12 @@ def test_prepare_model_raises_when_nothing_can_guess_inputs():
     model = scatter_include_self_false.make_model()
     with pytest.raises(ValueError, match="Cannot find example inputs"):
         prepare_model(model, None, "generic")
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA GPU")
+def test_a_model_on_a_cuda_device_is_verified():
+    model = torch.nn.Linear(8, 4).to("cuda").eval()
+
+    verdict = downshift.check(model, (torch.randn(2, 8, device="cuda"),), samples=2, cache=False)
+
+    assert verdict.status == "CLEAN", verdict.reason

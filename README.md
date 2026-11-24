@@ -1,5 +1,7 @@
 # downshift
 
+Downshift is verified export for a model you already have: CPU-first, one process for each model, and eager PyTorch when the export is not correct.
+
 Serve a downloaded model over HTTP with one command. Before the first request, downshift exports the model to ONNX and compares the ONNX graph with PyTorch on inputs that the exporter did not see. If the graph gives wrong numbers, downshift serves eager PyTorch instead.
 
 Everything that downshift serves is already on the machine: a PyTorch checkpoint, an ONNX file, a downloaded Hugging Face repo directory, or an `nn.Module` that Python can import. Downshift fetches nothing.
@@ -7,13 +9,13 @@ Everything that downshift serves is already on the machine: a PyTorch checkpoint
 ```
 $ downshift serve examples.scatter_include_self_false:make_model
 
-2026-10-20 16:20:33 WARNING downshift.serve: DOWNSHIFT_SERVER_API_KEY is not set, so the endpoints (including /metadata) are unauthenticated. Set it to require a fixed API key, or add your own authentication middleware.
+2026-10-20 16:20:33 WARNING downshift.serve: DOWNSHIFT_API_KEY is not set, so the endpoints (including /metadata) are unauthenticated. Set it to require a fixed API key, or add your own authentication middleware.
 2026-10-20 16:20:33 INFO downshift.report: loading examples.scatter_include_self_false:make_model
 2026-10-20 16:20:33 INFO downshift.report: will listen on http://127.0.0.1:8000 (not ready yet)
 2026-10-20 16:20:36 INFO downshift.report: verify: sample 1/8, x [6, 8], segment_ids [6]
 ...
 2026-10-20 16:20:36 INFO downshift.report: verify: sample 8/8, x [7, 8], segment_ids [7]
-2026-10-20 16:20:36 INFO downshift.report: downshift v0.6.0
+2026-10-20 16:20:36 INFO downshift.report: downshift v1.0.0rc1
   Model          examples.scatter_include_self_false:make_model
   Family         generic
   Verdict        DEGRADED  (strict=False, opset 20)
@@ -43,17 +45,65 @@ This graph exported without an error, but it gives wrong numbers on 6 of 8 input
 
 ## Install
 
+If the machine has no GPU, install the CPU build of torch first. The default wheel is much larger.
+
 ```bash
+pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install downshift-server            # core: any nn.Module, any .onnx
-pip install "downshift-server[gnn]"     # + PyTorch Geometric adapter
 pip install "downshift-server[hf]"      # + Hugging Face repos, text input
+pip install "downshift-server[gnn]"     # + PyTorch Geometric adapter
 pip install "downshift-server[fast]"    # + pybase64, about 12x faster base64 tensors
-pip install "downshift-server[all]"
+pip install "downshift-server[all]"     # hf, gnn and fast
 ```
+
+For a GPU, install a CUDA build of torch, and install `onnxruntime-gpu` in place of `onnxruntime`. Refer to [`docs/production.md`](docs/production.md#gpu).
 
 Downshift needs Python 3.12 to 3.14. If the `downshift` command is not on `PATH`, use `python -m downshift`.
 
 ## Quick start
+
+To try downshift with no clone, write a file `model.py`:
+
+```python
+import torch
+
+
+def make_model():
+    return torch.nn.Linear(4, 2).eval()
+
+
+def make_inputs():
+    return (torch.randn(1, 4),)
+```
+
+Check the model, then serve it:
+
+```bash
+downshift check model:make_model
+downshift serve model:make_model --port 8000
+```
+
+The check prints the verdict. This is the output for `model.py`:
+
+```
+  Export          CLEAN  (strict=False, opset 20)
+  Numerics        max abs err 1.19e-07 over 8 samples  OK
+  Rows            independent
+  Backend         onnxruntime
+```
+
+When `GET /ready` gives `200`, send a request in a second terminal:
+
+```bash
+curl -s localhost:8000/predict -H 'content-type: application/json' \
+  -d '{"inputs": {"input": [[1.0, 2.0, 3.0, 4.0]]}}'
+```
+
+```json
+{"outputs":{"output_0":[[-2.7712083,0.8470939]]},"shapes":{"output_0":[1,2]},"dtypes":{"output_0":"float32"}}
+```
+
+The numbers depend on the random weights of the layer. The steps below are for your own model.
 
 1. Start the server. The port opens at once. The gate runs in the background.
 
@@ -83,6 +133,15 @@ Downshift needs Python 3.12 to 3.14. If the `downshift` command is not on `PATH`
 
 Integer lists become `int64`, and all other lists become `float32`. For large tensors, send base64 or a safetensors body. A Hugging Face repo with a tokenizer also takes `{"text": [...]}`. A graph model takes `x` and `edge_index` on `POST /predict/graph`. Refer to [`docs/http-api.md`](docs/http-api.md).
 
+A text embedding model also has the OpenAI embeddings route. Change only `base_url` and `api_key` in the `openai` package. Refer to [`docs/openai.md`](docs/openai.md).
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-used")
+vectors = client.embeddings.create(model="bge-small", input=["hello"]).data[0].embedding
+```
+
 | Route | Purpose |
 |---|---|
 | `GET /` | The version, the model, `ready`, and all routes. Start here if you know only the base URL. |
@@ -92,12 +151,13 @@ Integer lists become `int64`, and all other lists become `float32`. For large te
 | `GET /metadata` | The verdict, the backend, the limits and the boot timings. |
 | `POST /predict` | Named tensors, or `text`. JSON or safetensors. |
 | `POST /predict/graph` | One graph, or a batch of graphs. |
+| `POST /v1/embeddings` | The OpenAI embeddings route, for a text embedding model. Also `GET /v1/models`. |
 
 To mount the same app in your own FastAPI service, use `downshift.serve.app_for(model, example_inputs)`. Refer to [`docs/python-api.md`](docs/python-api.md#app_for). To deploy, read [`docs/production.md`](docs/production.md).
 
 ## The gate
 
-A successful `torch.onnx.export` does not prove that the graph computes the same function as the model. Before downshift serves anything, it exports the model in memory. It then runs `k` samples (default 8) through PyTorch and through ONNX Runtime, and it varies the dynamic axes, so some samples have shapes that the exporter did not see. The result is one of four verdicts, and the verdict selects the backend:
+A successful `torch.onnx.export` does not prove that the graph computes the same function as the model. Before downshift serves anything, it exports the model in memory. It then runs 8 samples by default through PyTorch and through ONNX Runtime, and it varies the dynamic axes, so some samples have shapes that the exporter did not see. The result is one of four verdicts, and the verdict selects the backend:
 
 | Verdict | Meaning | Served by |
 |---|---|---|
@@ -114,6 +174,10 @@ downshift export my_pkg.models:build -o artifacts/            # writes the .onnx
 ```
 
 `check` can gate CI. Exit code `4` is a usage error, and `5` is a crash. [`docs/cli.md`](docs/cli.md) describes each flag, the tolerances and the report.
+
+### Result cache
+
+The result cache is on when the row check finds the rows independent. The row check uses two rows, so it cannot prove that a small effect is absent. On a server with more than one tenant, a hit is faster than a miss, and a client can see the difference. To turn the cache off, set `--result-cache-rows 0`. Refer to [Result cache](docs/production.md#result-cache).
 
 ## Accepted model forms
 
@@ -141,7 +205,7 @@ downshift serve ./bert-base-uncased
 
 ## Compatibility matrix
 
-`scripts/gen_matrix.py` generates this table from the fixtures in `tests/models/`. Each fixture isolates one export hazard. CI makes the table again each week against the current torch and onnxruntime. The full file, with versions, is [docs/compatibility.md](docs/compatibility.md).
+`scripts/gen_matrix.py` generates this table from the fixtures in `tests/models/`. Each fixture isolates one export hazard. To make the table again, run `python scripts/gen_matrix.py`. The full file, with versions, is [docs/compatibility.md](docs/compatibility.md). The same page lists [Tested real models](docs/compatibility.md#tested-real-models): public Hugging Face, torchvision and PyG models that `scripts/check_real_models.py` checks.
 
 <!-- matrix:start -->
 | Model | Hazard | Family | Export | Capture | Numerics | Shape-general | Backend |
@@ -172,19 +236,29 @@ Read these rows carefully:
 
 Downshift serves models that give their answer in one forward pass: tensors in, tensors out. The gate compares one pass between the ONNX graph and PyTorch. GNNs, encoders, classifiers, embedders and your own `nn.Module` classes fit. A model that needs a loop around it does not fit.
 
-- **No text generation.** There is no KV cache, sampling loop or OpenAI-compatible endpoint. Use vLLM, TGI or llama.cpp. Downshift refuses a decoder-only repo (`...ForCausalLM`), unless it has an embedding recipe, as Qwen3-Embedding has.
+- **No text generation.** There is no KV cache or sampling loop. There are no chat or completions routes. (`/v1/embeddings` exists.) Use vLLM, TGI or llama.cpp. Downshift refuses a decoder-only repo (`...ForCausalLM`), unless it has an embedding recipe, as Qwen3-Embedding has.
 - **No remote code.** Downshift never sets `trust_remote_code`. A repo with an `auto_map` does not load. Export it to ONNX yourself and serve it with `--tokenizer-from`.
 - **No multimodal Hugging Face models.** Text in, one tensor out.
-- **No quantization or graph optimization.** Use Olive or `onnxruntime.quantization`, then serve the result with `downshift serve model.onnx --reference model.pt`, so downshift verifies it against the original weights. `--fp16` is a cast before the trace.
+- **No quantization or graph optimization.** Use Olive or `onnxruntime.quantization`, then serve the result with `downshift serve model.onnx --reference model.pt`, so downshift verifies it against the original weights. `--fp16` changes the fp32 graph to fp16 weights, with fp32 inputs and outputs.
 - **No dynamic request batching.** One request makes one inference. `/predict/graph` joins a batch of graphs only when the outputs are for each node or each edge.
-- **No Docker image and no DGL adapter.** Use pip and version pins. PyG is the supported GNN family.
+- **No container image in 1.0.** Container images come in 1.1. Use pip and version pins until then.
+- **No DGL adapter.** PyG is the supported GNN family.
 
 To add a model family, write an adapter. Refer to [`docs/adapters.md`](docs/adapters.md).
+
+## When not to use downshift
+
+| Your need | Use |
+|---|---|
+| High-QPS embeddings at large batch sizes | TEI or Infinity (dynamic batching) |
+| Many models on a GPU fleet | Triton Inference Server |
+| Text generation | vLLM |
 
 ## Documentation
 
 - [`docs/cli.md`](docs/cli.md): every command, flag, environment variable and exit code.
 - [`docs/http-api.md`](docs/http-api.md): every route, body, status code and wire format.
+- [`docs/openai.md`](docs/openai.md): the `/v1/embeddings` route for OpenAI clients.
 - [`docs/production.md`](docs/production.md): authentication, HTTPS, probes, workers, caches, sizing, GPUs and Kubernetes.
 - [`docs/python-api.md`](docs/python-api.md): `check`, `export`, `intake`, `app_for` and the verdict.
 - [`docs/serving.md`](docs/serving.md) and [`docs/adapters.md`](docs/adapters.md): the internals, for contributors.

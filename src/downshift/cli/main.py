@@ -2,6 +2,17 @@
 
 Heavy modules (torch, onnxruntime, uvicorn, downshift.core and downshift.serve) are imported
 inside the command bodies, so `--help` and `--version` stay fast.
+
+To read this file, go in this order:
+
+1. `_exit_on_error`: how an error becomes an exit code (`ValueError` is 4, any other error is 5).
+2. `check_cmd`: load, `downshift.check`, print the verdict. The exit code is the status.
+3. `export_cmd`: the same, then write NAME.onnx and NAME.manifest.json (nothing for FAILED).
+4. `serve_cmd`: the long one. It reads the options, builds `ServeOptions` and `ServeArgs`, and
+   then starts one server, or N workers. The model loads after the port is bound.
+
+The option types are in cli/options.py. The boot code is in cli/runtime.py. The text of the
+reports is in cli/render.py.
 """
 
 from __future__ import annotations
@@ -12,7 +23,7 @@ import sys
 import traceback
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
@@ -27,18 +38,22 @@ from downshift.cli.options import (
     AtolOpt,
     AxisMaxOpt,
     DynamicOpt,
+    EnableRequestIdHeadersOpt,
     ExecutionOpt,
     ExportCacheDirOpt,
+    ForwardedAllowIpsOpt,
     InputsOpt,
     InterOpThreadsOpt,
     IntraOpThreadsOpt,
     JsonOpt,
     LogLevel,
     LogLevelOpt,
+    MatryoshkaOpt,
     MaxBodyBytesOpt,
     MaxConcurrencyOpt,
     MaxInputBytesOpt,
     MaxQueueOpt,
+    MetricsOpt,
     ModelArg,
     ModelClassOpt,
     NormalizeOpt,
@@ -48,34 +63,46 @@ from downshift.cli.options import (
     ReferenceOpt,
     RequestTimeoutOpt,
     ResultCacheRowsOpt,
+    RootPathOpt,
     RtolOpt,
     SamplesOpt,
     SeedOpt,
+    ServedModelNameOpt,
     ServerTimingOpt,
     SslCertfileOpt,
     SslKeyfileOpt,
+    Tf32Opt,
+    TimeoutGracefulShutdownOpt,
     TokenizerFromOpt,
     UnsafeLoadOpt,
     VaryOpt,
     WorkersOpt,
 )
 from downshift.cli.runtime import (
-    ServeArgs,
     _build_serving_state,
     _load,
     _run_workers,
     _setup_logging,
     _tls_config,
+    release_graph,
 )
-from downshift.serve.options import BackendChoice, ExecutionChoice, ServeOptions
-from downshift.serve.schemas import OutputEncoding
+from downshift.entities.cli import ServeArgs
+from downshift.entities.options import BackendChoice, ExecutionChoice, OutputEncoding, ServeOptions
 
 if TYPE_CHECKING:
-    from downshift.core.verdict import ExportVerdict
-    from downshift.serve.engine import ServingState
+    from downshift.entities.serving import ServingState
+    from downshift.entities.verdict import ExportVerdict
 
 EXIT_USAGE = 4  # a bad model spec, a bad option, a file that cannot load
 EXIT_CRASH = 5
+
+# A click usage error (an unknown flag, a missing argument, a bad value) exits 2 by default.
+# That is the DEGRADED exit code, so a usage error uses 4 on all commands.
+try:
+    from typer._click.exceptions import UsageError  # typer 0.27 and later bundle their own click
+except ImportError:  # pragma: no cover
+    from click.exceptions import UsageError  # type: ignore[assignment]
+UsageError.exit_code = EXIT_USAGE
 
 _EXIT_CODES = "Exit codes: 0 CLEAN, 1 FAILED, 2 DEGRADED, 3 UNVERIFIED, 4 usage error, 5 crash."
 
@@ -185,7 +212,7 @@ def check_cmd(
     model_class: ModelClassOpt = None,
     unsafe_load: UnsafeLoadOpt = False,
     adapter: AdapterOpt = None,
-    k: SamplesOpt = settings.SAMPLES,
+    samples: SamplesOpt = settings.SAMPLES,
     dynamic: DynamicOpt = None,
     axis_max: AxisMaxOpt = None,
     atol: AtolOpt = None,
@@ -198,7 +225,7 @@ def check_cmd(
 ) -> None:
     """Export in memory and verify the numbers. The exit code is the verdict."""
     from downshift.core.shapes import parse_dynamic_spec
-    from downshift.loading import LoadSpec
+    from downshift.entities.loading import LoadSpec
 
     _setup_logging(log_level, stderr=json_out)
     with _exit_on_error(log_level is LogLevel.debug):
@@ -214,7 +241,7 @@ def check_cmd(
                 ref.model if ref else None,
                 ref.example_inputs if ref else None,
                 adapter or (ref.adapter_hint if ref else None),
-                k=k,
+                samples=samples,
                 dynamic=dynamic_spec,
                 atol=atol,
                 rtol=rtol,
@@ -227,7 +254,7 @@ def check_cmd(
             verdict = downshift.check(
                 loaded.model,
                 loaded.example_inputs,
-                k=k,
+                samples=samples,
                 adapter=adapter or loaded.adapter_hint,
                 dynamic=dynamic_spec,
                 atol=atol,
@@ -250,7 +277,11 @@ def export_cmd(
         str | None, typer.Option("--name", help="The artifact name. Default: the model slug")
     ] = None,
     fp16: Annotated[
-        bool, typer.Option("--fp16", help="Cast the model to fp16 before the export")
+        bool,
+        typer.Option(
+            "--fp16",
+            help="After the export, change the fp32 graph to fp16 weights. Inputs and outputs stay fp32",
+        ),
     ] = False,
     no_verify: Annotated[
         bool, typer.Option("--no-verify", help="Skip the numerics check. The verdict is UNVERIFIED")
@@ -260,7 +291,7 @@ def export_cmd(
     model_class: ModelClassOpt = None,
     unsafe_load: UnsafeLoadOpt = False,
     adapter: AdapterOpt = None,
-    k: SamplesOpt = settings.SAMPLES,
+    samples: SamplesOpt = settings.SAMPLES,
     dynamic: DynamicOpt = None,
     axis_max: AxisMaxOpt = None,
     atol: AtolOpt = None,
@@ -275,7 +306,8 @@ def export_cmd(
     """Export to DIR/NAME.onnx with a NAME.manifest.json file. If the verdict is FAILED, nothing is written."""
     from downshift.core.manifest import manifest_path_for
     from downshift.core.shapes import parse_dynamic_spec
-    from downshift.loading import LoadError, LoadSpec
+    from downshift.entities.loading import LoadSpec
+    from downshift.loading import LoadError
 
     _setup_logging(log_level, stderr=json_out)
     with _exit_on_error(log_level is LogLevel.debug):
@@ -298,7 +330,7 @@ def export_cmd(
             loaded.model,
             onnx_path,
             loaded.example_inputs,
-            k=k,
+            samples=samples,
             adapter=adapter or loaded.adapter_hint,
             dynamic=parse_dynamic_spec(dynamic) if dynamic else None,
             fp16=fp16,
@@ -338,7 +370,9 @@ def serve_cmd(
     force_onnx: Annotated[
         bool, typer.Option("--force-onnx", help="Serve a DEGRADED graph through ONNX Runtime")
     ] = False,
-    device: Annotated[str, typer.Option("--device", help="auto | cpu | cuda")] = settings.DEVICE,
+    device: Annotated[
+        str, typer.Option("--device", help="auto | cpu | cuda | cuda:N")
+    ] = settings.DEVICE,
     warmup: Annotated[
         int, typer.Option("--warmup", min=0, help="Warm-up inferences before /ready changes")
     ] = settings.WARMUP,
@@ -356,7 +390,7 @@ def serve_cmd(
     model_class: ModelClassOpt = None,
     unsafe_load: UnsafeLoadOpt = False,
     adapter: AdapterOpt = None,
-    k: SamplesOpt = settings.SAMPLES,
+    samples: SamplesOpt = settings.SAMPLES,
     dynamic: DynamicOpt = None,
     axis_max: AxisMaxOpt = None,
     intra_op_threads: IntraOpThreadsOpt = settings.INTRA_OP_THREADS,
@@ -371,10 +405,18 @@ def serve_cmd(
     request_timeout: RequestTimeoutOpt = settings.REQUEST_TIMEOUT,
     result_cache_rows: ResultCacheRowsOpt = settings.RESULT_CACHE_ROWS,
     server_timing: ServerTimingOpt = settings.SERVER_TIMING,
+    metrics: MetricsOpt = settings.METRICS,
+    enable_request_id_headers: EnableRequestIdHeadersOpt = settings.ENABLE_REQUEST_ID_HEADERS,
+    served_model_name: ServedModelNameOpt = settings.SERVED_MODEL_NAME,
+    matryoshka: MatryoshkaOpt = settings.MATRYOSHKA,
+    tf32: Tf32Opt = settings.TF32,
     workers: WorkersOpt = settings.WORKERS,
     export_cache_dir: ExportCacheDirOpt = settings.EXPORT_CACHE_DIR,
     ssl_certfile: SslCertfileOpt = settings.SSL_CERTFILE,
     ssl_keyfile: SslKeyfileOpt = settings.SSL_KEYFILE,
+    root_path: RootPathOpt = settings.ROOT_PATH,
+    forwarded_allow_ips: ForwardedAllowIpsOpt = settings.FORWARDED_ALLOW_IPS,
+    timeout_graceful_shutdown: TimeoutGracefulShutdownOpt = settings.TIMEOUT_GRACEFUL_SHUTDOWN,
     atol: AtolOpt = None,
     rtol: RtolOpt = None,
     seed: SeedOpt = 0,
@@ -388,10 +430,18 @@ def serve_cmd(
 
     GET /schema on the running server says what to POST: the name, dtype and shape of each input, plus an example body.
     """  # noqa: E501 - typer wraps the help text itself. A line break in the source would show in it
+    flags = dict(locals())  # the options as given, before any other local name exists
     import uvicorn
 
     _setup_logging(log_level)
     with _exit_on_error(log_level is LogLevel.debug):
+        # Step 1: check the options that can fail, before a slow load. Each error is exit code 4.
+        if metrics and workers > 1:
+            raise ValueError(
+                "--metrics needs one worker. A scrape reaches one worker only. "
+                "Run one worker for each container and scale with replicas"
+            )
+        settings.check_device(device)
         tls = _tls_config(ssl_certfile, ssl_keyfile, settings.SSL_KEYFILE_PASSWORD)
         https = bool(tls)
         # log_config=None keeps our logging sink. The app writes its own access log.
@@ -401,8 +451,12 @@ def serve_cmd(
             log_level=log_level.value,
             log_config=None,
             access_log=False,
+            root_path=root_path,
+            timeout_graceful_shutdown=timeout_graceful_shutdown or None,
             **tls,
         )
+        if forwarded_allow_ips is not None:
+            uvicorn_kwargs["forwarded_allow_ips"] = forwarded_allow_ips
         if export_cache_dir:
             from downshift.core.export_cache import check_dir
 
@@ -416,8 +470,10 @@ def serve_cmd(
             # The backend default would oversubscribe the cores N times: split them.
             intra_op_threads = max(1, settings.usable_cpus() // workers)
         from downshift.core.shapes import parse_dynamic_spec
-        from downshift.loading import LoadSpec
+        from downshift.entities.loading import LoadSpec
 
+        # Step 2: put the options in three objects. LoadSpec says how to load the model,
+        # ServeOptions how to serve it, and ServeArgs both, in a form that a worker can get as JSON.
         load = LoadSpec(
             model=model,
             inputs=inputs,
@@ -426,35 +482,13 @@ def serve_cmd(
             pooling=pooling,
             normalize=normalize,
         )
-        options = ServeOptions(
-            backend=backend,
-            force_onnx=force_onnx,
-            device=device,
-            warmup=warmup,
-            k=k,
-            adapter=adapter,
-            dynamic=parse_dynamic_spec(dynamic) if dynamic else None,
-            intra_op_threads=intra_op_threads,
-            inter_op_threads=inter_op_threads,
-            output_encoding=output_encoding,
-            max_input_bytes=max_input_bytes,
-            max_body_bytes=max_body_bytes,
-            max_concurrency=max_concurrency,
-            execution=execution,
-            prep_threads=prep_threads,
-            max_queue=max_queue,
-            request_timeout=request_timeout,
-            result_cache_rows=result_cache_rows,
-            server_timing=server_timing,
-            atol=atol,
-            rtol=rtol,
-            seed=seed,
-            vary=vary,
-            axis_max=_axis_max(axis_max),
-            export_cache_dir=export_cache_dir,
-            pooling=pooling,
-            normalize=normalize,
-        )
+        # Each field of ServeOptions takes the value of the serve_cmd parameter with the same
+        # name. A new option therefore needs a field and a parameter, and no line here.
+        # tests/test_cli.py checks that both exist.
+        values = {**flags, "intra_op_threads": intra_op_threads}
+        values["dynamic"] = parse_dynamic_spec(dynamic) if dynamic else None
+        values["axis_max"] = _axis_max(axis_max)
+        options = ServeOptions(**{f.name: values[f.name] for f in fields(ServeOptions)})
         args = ServeArgs(
             load=load,
             options=options,
@@ -479,6 +513,7 @@ def serve_cmd(
                 api_key_set=bool(settings.API_KEY),
             )
 
+        # Step 3: start. N workers share one export from the parent. One worker boots here.
         if workers > 1:
             _run_workers(args, workers, uvicorn_kwargs, announce)
             return
@@ -496,12 +531,17 @@ def serve_cmd(
                 failure.append(exc)
                 server.should_exit = True
                 raise
+            release_graph(state)
             announce(state)
             render.print_ready(state)
             return state
 
         api = build_app(
-            loader=loader, middleware=tuple(args.middleware or ()), access_log=access_log
+            loader=loader,
+            middleware=tuple(args.middleware or ()),
+            access_log=access_log,
+            metrics=metrics,
+            request_id_headers=enable_request_id_headers,
         )
         render.print_booting(model, host, port, https=https)
         server = uvicorn.Server(uvicorn.Config(api, **uvicorn_kwargs))

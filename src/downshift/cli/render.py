@@ -1,6 +1,17 @@
 """Everything the CLI reports, as plain text through `logging`. Each report (verdict, banner,
 artifacts) is one multi-line INFO record on `downshift.report`, so a log collector keeps it
 together.
+
+To read this file, go in this order:
+
+1. `_Rows`: the helper that puts the values of a report in one column.
+2. `print_verdict`: the report of `check` and `export`. The `_*_text` functions above it each
+   make one row.
+3. `print_banner`: the report of `serve` after the boot. It adds the rows of the backend, the
+   capacity and the cache. `print_config` adds the options that the banner does not show.
+4. `print_booting`, `print_ready`, `warn`, `error`: the short lines.
+
+The text of a row is a public output that people read, so check the docs before you change it.
 """
 
 from __future__ import annotations
@@ -12,10 +23,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from downshift import __version__, settings
-from downshift.core.phase import Phase
+from downshift.entities.options import ExecutionChoice
+from downshift.entities.phase import Phase
 from downshift.logs import REPORT_LOGGER
 from downshift.serve.codec import BASE64_CODEC
-from downshift.serve.options import ExecutionChoice
 from downshift.sources import (
     HF_REPO_DIR,
     IN_PROCESS_MODULE,
@@ -26,8 +37,8 @@ from downshift.sources import (
 )
 
 if TYPE_CHECKING:
-    from downshift.core.verdict import ExportVerdict
-    from downshift.serve.engine import ServingState
+    from downshift.entities.serving import ServingState
+    from downshift.entities.verdict import ExportVerdict
 
 report_logger = logging.getLogger(REPORT_LOGGER)
 logger = logging.getLogger("downshift.cli")
@@ -80,9 +91,10 @@ def _numerics_text(verdict: ExportVerdict) -> str:
     if n is None:
         return "not checked"
     text = f"max abs err {n.max_abs_err:.2e} over {n.samples_tested} samples  "
-    if n.passed:
-        return text + "OK"
-    return text + f"{n.failures}/{n.samples_tested} failed"
+    text += "OK" if n.passed else f"{n.failures}/{n.samples_tested} failed"
+    if n.min_cosine is not None:
+        text += f", min cosine {n.min_cosine:.6f}"
+    return text
 
 
 def _tolerance_text(verdict: ExportVerdict) -> str | None:
@@ -388,6 +400,14 @@ def print_banner(
     verified_on = _verified_on_text(state)
     if verified_on is not None:
         rows.add("Verified on", verified_on)
+    gpu_check = state.serving_numerics
+    if gpu_check is not None:
+        verdict_word = "OK" if gpu_check.ok else "FAILED"
+        rows.add(
+            "GPU check",
+            f"{gpu_check.provider} {gpu_check.device}  {gpu_check.summary()}  {verdict_word}"
+            f"{'  (TF32 on)' if gpu_check.tf32 else ''}",
+        )
     for note in state.notes:  # notes about the backend selection, from the engine
         rows.note(f"{_WARN} {note}")
     if state.embedding is not None:
@@ -406,6 +426,8 @@ def print_banner(
     )
     rows.add("Capacity", _capacity_text(state))
     rows.add("Execution", _execution_text(state))
+    if state.options.metrics:
+        rows.add("Metrics", "GET /metrics  (--metrics)")
     if state.options.execution == ExecutionChoice.inline:
         rows.note(
             f"{_WARN} --execution inline only helps very fast models (under ~1 ms per "
