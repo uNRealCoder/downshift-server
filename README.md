@@ -1,4 +1,4 @@
-# downshift
+# downshift-server
 
 Downshift is verified export for a model you already have: CPU-first, one process for each model, and eager PyTorch when the export is not correct.
 
