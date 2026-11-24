@@ -82,7 +82,7 @@ All options of the gate also apply.
 ```
 $ downshift check examples.scatter_include_self_false:make_model
 ...
-2026-10-20 16:20:24 INFO downshift.report: downshift v1.0.0rc1
+2026-10-20 16:20:24 INFO downshift.report: downshift v1.0.0
   Model           examples.scatter_include_self_false:make_model
   Family          generic
   Export          DEGRADED  (strict=False, opset 20)
