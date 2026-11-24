@@ -17,6 +17,8 @@ curl -s localhost:8000/predict -H "Authorization: Bearer $DOWNSHIFT_API_KEY" \
 
 If the variable is unset or empty, the server logs one `WARNING` at start and checks nothing. An empty string does not make `Bearer ` a valid credential. `app_for()` and `build_app()` read the same variable. To override it for one app, pass `api_key=`. To turn it off, pass `api_key=None`.
 
+The old name `DOWNSHIFT_SERVER_API_KEY` still works, and the server logs a warning. It stops working in 1.1 at the earliest. If both names are set, `DOWNSHIFT_API_KEY` wins. Rename the variable now.
+
 One key is a shared secret in a header. Use it only with TLS: the `--ssl-certfile` of downshift, or a proxy. Put a reverse proxy (nginx, Envoy, the load balancer of your cloud, a service mesh) in front of downshift for:
 
 - TLS termination with automatic renewal of the certificate.
@@ -188,7 +190,7 @@ Boot        6.4 s: load 0.3, export 2.8, verify 0.2, session 0.1, warmup 0.1
 
 To count the requests, start the server with `--metrics` (or `DOWNSHIFT_METRICS=1`). The server then serves the counts on `GET /metrics` as Prometheus text (format 0.0.4). If you do not set the option, the route does not exist (`404`), and the request path counts nothing. `/metrics` follows the API key rule of the other routes: send `Authorization: Bearer <key>`. The probes `/health` and `/ready` are the only routes without a key.
 
-In the 1.0.0 benchmark, `--metrics` cost 6 to 97 microseconds for each request (0.4% to 8% of the requests per second at concurrency 1) on three small models. The cost was inside the noise on a larger model. Refer to the [benchmark report](https://github.com/uNRealCoder/downshift-server/blob/main/bench/results/v1.0.0/REPORT.md).
+In the 1.0.0 benchmark at concurrency 1, `--metrics` cost 5 to 98 microseconds for each request (0.3% to 8% of the requests per second) on five of the eight models: `clean_mlp` 98, `mlp_large` 21, `cnn_large` 12, `gnn_gcn` 5 and `tiny_bert` 5. On the other three models, the `--metrics` row was faster than the default row. The report reads a difference smaller than about 15% as noise. Refer to the [benchmark report](https://github.com/uNRealCoder/downshift-server/blob/main/bench/results/v1.0.0/REPORT.md).
 
 Each series has the label `worker`. Its value is `0`, because `--metrics` needs one worker.
 

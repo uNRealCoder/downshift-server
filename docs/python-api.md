@@ -135,6 +135,7 @@ def build_verdict(
     rtol: float | None = None,
     seed: int = 0,
     timings: dict[str, float] | None = None,
+    fp16: bool = False,
 ) -> ExportVerdict
 ```
 
@@ -165,7 +166,7 @@ def prepare_model(
 2. If you gave no example inputs, it asks the adapter for them (`adapter.example_inputs(model)`).
 3. It asks the adapter to flatten the model into the form that is ready for export.
 
-If you give `axis_max`, downshift passes it to `adapter.prepare()`. If you give `dynamic`, it replaces the `dynamic_shapes` of the adapter through `downshift.core.shapes.apply_dynamic_override`. If you give `vary`, it replaces the `vary_fn` of the adapter. Downshift imports a string in the same way as the `pkg.module:fn` form of `--vary`.
+If you give `axis_max` and no `dynamic`, downshift passes `axis_max` to `adapter.prepare()`. If you give `dynamic`, it replaces the `dynamic_shapes` of the adapter through `downshift.core.shapes.apply_dynamic_override`. If you give `vary`, it replaces the `vary_fn` of the adapter. Downshift imports a string in the same way as the `pkg.module:fn` form of `--vary`.
 
 It raises `ValueError` if `example_inputs` is `None` and `example_inputs()` of the adapter also returns `None`. It raises `RuntimeError` if `matches()` of no registered adapter returns `True`.
 
@@ -206,7 +207,7 @@ app.mount("/model", app_for(my_model, example_inputs))
 - `tokenizer_from`: a downloaded Hugging Face repo directory. It supplies the tokenizer, the pooling recipe and the label metadata for a `.onnx` `model`. It has the same role as `--tokenizer-from` on the CLI.
 - `cache`: if `True` (the default), `app_for` reuses an earlier export of the same model and options from the memo of the process, and from `export_cache_dir` if you give that `ServeOptions` field. `False` skips both.
 - `api_key`: if you set it, every route except `/health` and `/ready` needs `Authorization: Bearer <api_key>`. Without it, the route answers `401`. If you do not pass it, downshift uses the `DOWNSHIFT_API_KEY` environment variable. Pass a value to override it for this app. If the key is unset or empty, downshift logs one `WARNING` that the endpoints are unauthenticated.
-- `options`: downshift forwards these as `ServeOptions` fields (`backend=`, `warmup=`, `max_concurrency=`, and others). [`serving.md`](serving.md) has the full list of fields. Every default comes from `downshift.settings`. The `DOWNSHIFT_*` environment variables therefore also apply here, not only to the CLI. Downshift reads them once, when `downshift` is imported. A keyword argument has priority. `check()`, `export()` and `intake()` are an exception for `k`. They use the constant `8` as the default and not `DOWNSHIFT_SAMPLES`.
+- `options`: downshift forwards these as `ServeOptions` fields (`backend=`, `warmup=`, `max_concurrency=`, and others). [`serving.md`](serving.md) has the full list of fields. Every default comes from `downshift.settings`. The `DOWNSHIFT_*` environment variables therefore also apply here, not only to the CLI. Downshift reads them once, when `downshift` is imported. A keyword argument has priority. `check()`, `export()` and `intake()` are an exception for `samples`. They use the constant `8` as the default and not `DOWNSHIFT_SAMPLES`.
 
 ### HTTPS with `app_for`
 
@@ -236,7 +237,6 @@ def build_app(
     access_log: bool = True,
     metrics: bool = False,
     request_id_headers: bool = False,
-    worker: str = "0",
 ) -> FastAPI
 ```
 
@@ -251,12 +251,12 @@ def build_app(
 class ExportVerdict:
     status: Status  # "CLEAN" | "DEGRADED" | "FAILED" | "UNVERIFIED"
     model_family: str
-    capture_strategy: str | None
-    opset: int | None
-    op_types: dict[str, int]
-    numerics: NumericsReport | None
     recommended_backend: BackendName  # "onnxruntime" | "torch"
-    reason: str
+    reason: str = ""
+    capture_strategy: str | None = None
+    opset: int | None = None
+    op_types: dict[str, int] = {}
+    numerics: NumericsReport | None = None
     input_names: tuple[str, ...] = ()
     dynamic_dims: dict[str, list[int]] = {}
     axes: list[AxisFact] = []
@@ -304,6 +304,7 @@ Some properties are not dataclass fields. They are derived:
 
 - `shape_generalization` is the same as `numerics.shape_generalization`. It is `None` if there is no numerics report.
 - `shape_generalization_reason` is a string if the baseline sample failed. Otherwise it is `None`.
+- `rows_note` is `None` if `row_independent` is `True`. Otherwise it is `row_reason`, or "not checked: the verdict is `<status>`" if there is no reason. `to_dict()` gives it as `row_reason`.
 - `exit_code` is `EXIT_CODES[status]`: `CLEAN` 0, `FAILED` 1, `DEGRADED` 2, `UNVERIFIED` 3. `check` and `export` exit with this code.
 
 `to_dict()` gives these keys:
@@ -334,9 +335,9 @@ class NumericsReport:
     tolerance_rel: float
     tolerance_dtype: str = "float32"
     tolerance_overridden: bool = False
+    baseline_failed: bool = False
     min_cosine: float | None = None
     tolerance_cosine: float | None = None
-    baseline_failed: bool = False
     worst: WorstMismatch | None = None
     sample_shapes: list[list[tuple[int, ...]]] = []
     output_shapes: list[list[tuple[int, ...]]] = []
@@ -404,6 +405,7 @@ class Prepared:
     dynamic_shapes: tuple
     vary_fn: VaryFn | None
     family: str
+    embedding: bool = False
 ```
 
 `Prepared` is the result of `prepare()` of an adapter. It holds:
@@ -413,6 +415,7 @@ class Prepared:
 - The dynamic-shape spec for each input: `{axis: torch.export.Dim}` or `None`, one entry for each input.
 - An optional `vary_fn(i) -> inputs` that generates verification samples. `None` means "use the shared-axis-0 default", `make_shared_axis0_vary_fn`.
 - The name of the adapter. It becomes `ExportVerdict.model_family`.
+- `embedding`: `True` if output 0 is a pooled text embedding. The verification then also checks the cosine similarity of each row.
 
 `dynamic_dims` is a derived property: `{input_name: sorted(axes)}` for the inputs that have a non-empty `dynamic_shapes` entry.
 

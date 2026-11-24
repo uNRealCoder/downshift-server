@@ -13,8 +13,12 @@ This page describes every route that `build_app` registers: the request and resp
 | `GET` | `/schema` | What to POST: input names, dtypes, shapes and an example body. |
 | `POST` | `/predict` | Named tensor inputs or `text`, for any model. JSON or safetensors body. |
 | `POST` | `/predict/graph` | One graph (`x`, `edge_index` and optional `edge_attr`) or a batch of graphs. JSON or safetensors body. |
+| `GET` | `/version` | `{"version": "<downshift version>"}`. |
+| `GET` | `/v1/models`, `/v1/models/{id}` | The model list and the model card, for OpenAI clients. |
+| `POST` | `/v1/embeddings` | The vectors of one or more texts, for OpenAI clients. |
+| `GET` | `/metrics` | Prometheus text. The route exists only if `serve` starts with `--metrics`. Refer to [production.md](production.md#metrics). |
 
-A server for a text embedding model also has `GET /v1/models`, `GET /v1/models/{id}`, `POST /v1/embeddings` and `GET /version`. They are for OpenAI clients. Their errors have the OpenAI shape. Refer to [`openai.md`](openai.md).
+Every server has the `/v1` routes. If the model is not a text embedding model, `POST /v1/embeddings` gives the error `not_embedding_model`. The errors of the `/v1` routes have the OpenAI shape. Refer to [`openai.md`](openai.md).
 
 Each served model comes from this machine. The `source` block of `/schema` says which form it is. Downshift fetches nothing to answer a request. The OpenAPI document of a running server is at `GET /openapi.json`.
 
@@ -32,7 +36,7 @@ Downshift matches the scheme without regard to case. It compares the key in cons
 {"detail": "Authorization header is not set or incorrect", "code": "unauthorized"}
 ```
 
-The check runs before the route. It therefore applies to unknown paths, `/docs` and `/openapi.json`.
+The check runs before the route. It therefore applies to unknown paths, `/docs` and `/openapi.json`. On a `/v1` path, the `401` body has the OpenAI shape instead (refer to [`openai.md`](openai.md#errors)).
 
 If the key is unset or an empty string, downshift checks nothing. It logs one `WARNING` at startup that the endpoints are unauthenticated. To fix this, set the key or add your own authentication middleware.
 
@@ -50,7 +54,10 @@ This route always returns `200`, also while the model loads. It tells a client w
 {"service": "downshift", "version": "1.0.0", "ready": true, "model": "clean_mlp",
  "routes": {"index": "GET /", "health": "GET /health", "ready": "GET /ready",
             "metadata": "GET /metadata", "schema": "GET /schema",
+            "version": "GET /version", "list_models": "GET /v1/models",
+            "get_model": "GET /v1/models/{model_id:path}",
             "predict": "POST /predict", "predict_graph": "POST /predict/graph",
+            "embeddings": "POST /v1/embeddings",
             "openapi": "GET /openapi.json", "docs": "GET /docs"},
  "next_step": "Send GET /schema. The response gives the inputs and an example_request body. POST that body to /predict without a change"}
 ```
@@ -352,6 +359,8 @@ Status codes:
 | `400` | `{"detail": "missing inputs: [...]", "code": "missing_input"}` | A declared input name is not in `inputs`. |
 | `400` | `{"detail": "input 'name': ...", "code": "invalid_input"}` | One input has a bad shape, dtype or base64 (from `to_numpy`). |
 | `400` | `{"detail": "this model takes tensors only. ...", "code": "text_not_supported"}` | A `text` request to a model with no tokenizer. |
+| `400` | `{"detail": "...", "code": "text_too_long"}` | A text row has more tokens than the model reads. |
+| `400` | `{"detail": "unknown prompt_name ...", "code": "unknown_prompt"}` | The `prompt_name` is not one of the prompts of the model. |
 | `400` | `{"detail": "input_ids axis 1 is 65; this model accepts 1 to 64", "code": "invalid_input"}` | An axis is outside the `bounds` that `GET /schema` reports for that input. |
 | `400` | `{"detail": "input_ids contains -1, outside the vocabulary [0, 30522)", "code": "invalid_input"}` | A model served from a Hugging Face repo directory has an `input_ids` value outside `[0, vocab_size)`. Downshift checks this before the inference, because ONNX Runtime wraps a negative index and does not refuse it. |
 | `400` | `{"detail": "x axis 1 is 5; this model takes 16", "code": "invalid_input"}` | The rank or a fixed axis is different from the declared inputs of the model. Downshift checks this before the inference on both backends. |
@@ -386,7 +395,7 @@ class GraphPredictRequest(BaseModel):
     output_encoding: RequestOutputEncoding | None = None
 ```
 
-If the `input_names` of the serving model do not include `x` and `edge_index`, the route returns `400` with `"model is not graph-shaped: inputs are [...], expected at least 'x' and 'edge_index'"`.
+If the `input_names` of the serving model do not include `x` and `edge_index`, the route returns `400` with the code `not_graph_model` and the text `"model is not graph-shaped: inputs are [...], expected at least 'x' and 'edge_index'"`.
 
 **One graph** gets a `PredictResponse`, with the same shape as `/predict`:
 
@@ -507,12 +516,12 @@ To get a safetensors response, send `Accept: application/vnd.safetensors`, or se
 
 | Header | Direction | Meaning |
 |---|---|---|
-| `X-Request-Id` | Request (optional), response (only with `--enable-request-id-headers`) | Off by default: without the option, downshift ignores this header and does not set it. To use a different name, set `DOWNSHIFT_REQUEST_ID_HEADER` (for example `X-Correlation-Id`). Downshift returns it if the client sent it. Otherwise it makes an ID of 16 hexadecimal characters (`RequestIdMiddleware`). The `request_id` field of a `500` body has the same value. Each server log line that is written while the request is served (including the request line of `downshift.access`) has it too. |
+| `X-Request-Id` | Request (optional), response (only with `--enable-request-id-headers`) | Off by default: without the option, downshift ignores this header and does not set it. To use a different name, set `DOWNSHIFT_REQUEST_ID_HEADER` (for example `X-Correlation-Id`). Downshift returns it if the client sent it and it has only the characters `A-Za-z0-9._:-` (1 to 128). Otherwise it makes an ID of 16 hexadecimal characters (`RequestIdMiddleware`). The `request_id` field of a `500` body has the same value. Each server log line that is written while the request is served (including the request line of `downshift.access`) has it too. |
 | `Authorization` | Request | `Bearer <key>`. It is required on every route except `/health` and `/ready` when `DOWNSHIFT_API_KEY` is set. |
 | `WWW-Authenticate` | Response (`401` only) | `Bearer`. |
 | `Server-Timing` | Response (`/predict`, `/predict/graph` and `/v1/embeddings`, `200` only, only with `--server-timing`) | Off by default. The stages are listed below. Each one has `;dur=<ms>`. The access log line has the same split as `timings_ms`. |
-| `X-Downshift-Cache` | Response (`/predict`, only if the result cache is on) | To use a different name, set `DOWNSHIFT_CACHE_HEADER`. `hit`: the server computed no row for this request. `partial`: it computed some rows. `miss`: it computed all rows. |
-| `Cache-Control` | Request (`/predict`) | `no-cache`: the server does not read the result cache for this request. The server still stores the rows that it computes. The response says `miss`. |
+| `X-Downshift-Cache` | Response (`/predict` and `/v1/embeddings`, only if the result cache is on) | To use a different name, set `DOWNSHIFT_CACHE_HEADER`. `hit`: the server computed no row for this request. `partial`: it computed some rows. `miss`: it computed all rows. |
+| `Cache-Control` | Request (`/predict` and `/v1/embeddings`) | `no-cache`: the server does not read the result cache for this request. The server still stores the rows that it computes. The response says `miss`. |
 | `Retry-After` | Response (`503` only) | `2` for "not ready yet" (`/metadata` and the predict routes). `1` for "at capacity". The `503` for "past `--request-timeout`" does not have it. |
 | `Content-Length` | Request (optional) | If it is present, downshift checks it against `--max-body-bytes` before it reads the body. Downshift reads a chunked body without it and checks it while it arrives. |
 
@@ -532,7 +541,9 @@ A hit is bit for bit the answer of the request that stored the row. The same row
 
 ## Error body shape
 
-Each response that is not `200` has the body `{"detail": <string>, "code": "<code>"}`. `detail` is text for a person. `code` is stable: a client can branch on it. There are two exceptions:
+Each response that is not `200` has the body `{"detail": <string>, "code": "<code>"}`. `detail` is text for a person. `code` is stable: a client can branch on it. There are three exceptions:
+
+- A `/v1` path has the OpenAI shape `{"error": {"message", "type", "param", "code"}}`. Refer to [`openai.md`](openai.md#errors).
 
 - The handler for an unhandled exception (`500`). With `--enable-request-id-headers`, it adds `"request_id"`: `{"detail": "inference failed on the server; see the server log", "code": "internal_error", "request_id": "..."}`.
 - `422` validation errors. `detail` is the list of FastAPI and Pydantic: `{"detail": [{"type": ..., "loc": [...], "msg": ..., ...}], "code": "invalid_request"}`.

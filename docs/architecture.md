@@ -34,7 +34,7 @@ core/verify.py        Run N samples through torch and through ONNX Runtime. Vary
 core/rows.py          Check: does a row give the same output alone and in a batch?
    |
    v
-core/verdict.py       ExportVerdict: status, reason, numerics, axes, recommended backend.
+core/verdict.py       Build ExportVerdict (entities/verdict.py): status, reason, numerics, axes, recommended backend.
    |
    +--> downshift check    Print the verdict. Exit with its code.
    +--> downshift export   Write NAME.onnx and NAME.manifest.json (not for FAILED).
@@ -89,7 +89,7 @@ The function `capture` tries `torch.export` with `strict=False`. If that fails, 
 
 ### 5. Verdict (`core/verdict.py`)
 
-`ExportVerdict` is a dataclass. `prepare_model` loads the model with its adapter. `build_verdict` runs capture and verify. `check` is the public function. `intake` is the gate for a `.onnx` file that someone else made. A FAILED or DEGRADED export is a verdict and not an exception.
+`ExportVerdict` (`entities/verdict.py`) is a dataclass. `prepare_model` loads the model with its adapter. `build_verdict` runs capture and verify. `check` is the public function. `intake` is the gate for a `.onnx` file that someone else made. A FAILED or DEGRADED export is a verdict and not an exception.
 
 ### 6. Caches (`core/memo.py`, `core/export_cache.py`)
 

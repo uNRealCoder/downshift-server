@@ -29,6 +29,12 @@ class ServeOptions:
     max_queue: int = 64
     request_timeout: float = 30.0
     result_cache_rows: int | None = None  # None: 100 for independent rows, else off
+    server_timing: bool = False
+    metrics: bool = False
+    enable_request_id_headers: bool = False
+    served_model_name: str | None = None
+    matryoshka: bool = False
+    tf32: bool = False
     atol: float | None = None
     rtol: float | None = None
     seed: int = 0
@@ -109,6 +115,7 @@ def build_app(
     middleware: Sequence[str] = (),
     api_key: str | None = settings.API_KEY,
     access_log: bool = True,
+    metrics: bool = False,
     request_id_headers: bool = False,
 ) -> FastAPI
 ```
@@ -155,5 +162,5 @@ class Backend(Protocol):
 
 Both backends take and return dicts of numpy arrays. The output keys are positional (`output_0`, `output_1`, ...), so the responses look the same for both backends. bfloat16 and float16 tensors go on the wire as float32.
 
-- `OnnxRuntimeBackend(model=None, device="auto", intra_op_threads=0, inter_op_threads=0, *, session=None)` wraps an `InferenceSession` with all graph optimizations on. `device="cuda"` needs `CUDAExecutionProvider`. If ONNX Runtime cannot start it, the class raises `ValueError` and does not run on the CPU. An `InvalidArgument` error from ONNX Runtime becomes `InferenceInputError`, which the route gives as a `400`. Other errors are a `500`.
-- `TorchBackend(module, input_names, device="auto", example_inputs=None, intra_op_threads=0, dynamic_shapes=None)` runs the module eagerly under `torch.inference_mode()`. `device="cuda"` without CUDA raises `ValueError`. With `example_inputs`, it runs one pass at construction to learn the dtypes and shapes for `/metadata`. The shape of a dynamic axis is the name of its `torch.export.Dim`, or `"batch"` for axis 0 when there are no dynamic shapes. A missing input gives `InferenceInputError`. Any other error from the model is a `500`, because the input checks of the request path ran before the call.
+- `OnnxRuntimeBackend(model=None, device="auto", intra_op_threads=0, inter_op_threads=0, *, session=None, tf32=False)` wraps an `InferenceSession` with all graph optimizations on. `device="cuda"` needs `CUDAExecutionProvider`. If ONNX Runtime cannot start it, the class raises `ValueError` and does not run on the CPU. An `InvalidArgument` error from ONNX Runtime becomes `InferenceInputError`, which the route gives as a `400`. Other errors are a `500`.
+- `TorchBackend(module, input_names, device="auto", example_inputs=None, intra_op_threads=0, dynamic_shapes=None, tf32=False)` runs the module eagerly under `torch.inference_mode()`. `device="cuda"` without CUDA raises `ValueError`. With `example_inputs`, it runs one pass at construction to learn the dtypes and shapes for `/metadata`. The shape of a dynamic axis is the name of its `torch.export.Dim`, or `"batch"` for axis 0 when there are no dynamic shapes. A missing input gives `InferenceInputError`. Any other error from the model is a `500`, because the input checks of the request path ran before the call.

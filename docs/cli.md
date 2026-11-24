@@ -166,7 +166,7 @@ downshift export my_pkg.models:build -o artifacts/ --name classifier
 | `--workers INT` | `DOWNSHIFT_WORKERS` | `1` | The uvicorn worker processes. The parent exports and verifies one time. Each worker loads that result and warms up. If a worker cannot load, the whole server stops. |
 | `--export-cache-dir DIR` | `DOWNSHIFT_EXPORT_CACHE_DIR` | none | As for `export`. A repeat boot of the same model skips the export and the verification. |
 | `--ssl-certfile PATH` | `DOWNSHIFT_SSL_CERTFILE` | none | A PEM certificate or chain. If you give it, the server uses HTTPS. |
-| `--ssl-keyfile PATH` | `DOWNSHIFT_SSL_KEYFILE` | none | The PEM private key. Not necessary if the certificate file contains the key. For an encrypted key, set `DOWNSHIFT_SSL_KEYFILE_PASSWORD`. |
+| `--ssl-keyfile PATH` | `DOWNSHIFT_SSL_KEYFILE` | none | The PEM private key. Not necessary if the certificate file contains the key. Without `--ssl-certfile`, this flag is a usage error. For an encrypted key, set `DOWNSHIFT_SSL_KEYFILE_PASSWORD`. |
 | `--root-path PATH` | `DOWNSHIFT_ROOT_PATH` | `""` | The path prefix that your proxy strips, for example `/models/bert`. The links of `GET /` and the example URL of `GET /schema` then include it. Refer to "Behind a proxy" in `docs/production.md`. |
 | `--forwarded-allow-ips IPS` | `DOWNSHIFT_FORWARDED_ALLOW_IPS` | `127.0.0.1` | The proxies (comma-separated IPs, or `*`) whose `X-Forwarded-For` and `X-Forwarded-Proto` headers downshift trusts. |
 | `--timeout-graceful-shutdown SECONDS` | `DOWNSHIFT_TIMEOUT_GRACEFUL_SHUTDOWN` | `30` | On `SIGTERM`, the server stops new connections, waits up to `SECONDS` for the running requests, then stops. `/ready` gives `503` at once. `0` means wait without a limit. Refer to "Shut down" in `docs/production.md`. |
@@ -223,7 +223,7 @@ Downshift reads these variables one time, when `downshift` is imported. To chang
 | `DOWNSHIFT_SSL_CERTFILE`, `DOWNSHIFT_SSL_KEYFILE` | unset | `--ssl-certfile`, `--ssl-keyfile` (CLI only) |
 | `DOWNSHIFT_ROOT_PATH`, `DOWNSHIFT_FORWARDED_ALLOW_IPS`, `DOWNSHIFT_TIMEOUT_GRACEFUL_SHUTDOWN` | `""`, unset (`127.0.0.1`), `30` | `--root-path`, `--forwarded-allow-ips`, `--timeout-graceful-shutdown` (CLI only) |
 | `DOWNSHIFT_SSL_KEYFILE_PASSWORD` | unset | The password of an encrypted key. There is no flag, because a flag shows in the process list. |
-| `DOWNSHIFT_API_KEY` | unset | Requires `Authorization: Bearer <key>` on each route except `/health` and `/ready`. There is no flag, because the key is a secret. |
+| `DOWNSHIFT_API_KEY` | unset | Requires `Authorization: Bearer <key>` on each route except `/health` and `/ready`. There is no flag, because the key is a secret. The old name `DOWNSHIFT_SERVER_API_KEY` still works, with a warning. It stops working in 1.1 at the earliest. If both names are set, `DOWNSHIFT_API_KEY` wins. |
 | `DOWNSHIFT_REQUEST_ID_HEADER` | `X-Request-Id` | The name of the request-ID header. It has an effect only with `--enable-request-id-headers`. The server reads the ID from this request header and sets it on each response. Use letters, digits and `-` only. An empty value means the default. There is no flag. |
 | `DOWNSHIFT_CACHE_HEADER` | `X-Downshift-Cache` | The name of the result-cache header of `/predict` (`hit`, `partial` or `miss`). Use letters, digits and `-` only. An empty value means the default. There is no flag. |
 | `DOWNSHIFT_TOL_{FLOAT32,FLOAT64,FLOAT16,BFLOAT16}_{ATOL,RTOL}` | refer to "Tolerances" | The default tolerances. |

@@ -13,7 +13,7 @@ The routes use the same queue, pools, timeout, body limit, result cache and API 
 
 ## Which models qualify
 
-The model must be a text embedding model: a Hugging Face repo with a tokenizer and a pooling that gives one vector for each text. Pooling `none` (one vector for each token) does not qualify. For any other model, use `POST /predict`. `POST /v1/embeddings` then gives the error `not_embedding_model`.
+Every server has these routes, but only a text embedding model can answer `POST /v1/embeddings`. The model must be a text embedding model: a Hugging Face repo with a tokenizer and a pooling that gives one vector for each text. Pooling `none` (one vector for each token) does not qualify. For any other model, use `POST /predict`. `POST /v1/embeddings` then gives the error `not_embedding_model`.
 
 ## Quick start
 

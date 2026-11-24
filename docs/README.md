@@ -32,10 +32,10 @@ All modules are in `src/downshift/`. The modules that the CLI imports at start d
 | `loading.py` | Turns a `MODEL` argument into a `LoadedModel`. |
 | `hf_repo.py` | Reads a downloaded Hugging Face repo: the model with its task head, the pooling recipe, the tokenizer and the labels. Needs `transformers`. |
 | `cli/main.py` | The commands `check`, `export` and `serve`. |
-| `cli/options.py` | The typer option types. |
-| `cli/runtime.py` | `ServeArgs`, the `--workers` handoff (`ArtifactHandoff`, `_run_workers` and the worker app factory), the TLS settings and the logging setup. |
+| `cli/options.py` | The typer option types and `LogLevel`. |
+| `cli/runtime.py` | the `--workers` handoff (`_run_workers` and the worker app factory), the TLS settings and the logging setup. |
 | `cli/render.py` | The banner and the reports, as plain text. |
-| `core/verdict.py` | `ExportVerdict`, `prepare_model`, `build_verdict`, `check`, and `intake()` for a `.onnx` file that someone else made. |
+| `core/verdict.py` | `prepare_model`, `build_verdict`, `check`, and `intake()` for a `.onnx` file that someone else made. |
 | `core/capture.py`, `core/verify.py` | `torch.export` plus the ONNX translation, and the numerics check. |
 | `core/rows.py` | The row check: do the rows of a batch change each other? |
 | `core/shapes.py`, `core/axes.py` | Dynamic shapes, `--dynamic`, `--axis-max`, and the axis facts of the verdict. |
@@ -43,7 +43,7 @@ All modules are in `src/downshift/`. The modules that the CLI imports at start d
 | `core/manifest.py`, `core/feeds.py`, `core/phase.py` | The manifest of `export`, example feeds, and the boot phases. |
 | `adapters/` | The `Adapter` protocol (`base.py`), the registry, and the `generic`, `pyg` and `hf` adapters. `embedding.py`, `pooling.py` and `text.py` are the Hugging Face parts. |
 | `serve/__init__.py` | `app_for`. |
-| `entities/` | The data types: every dataclass, and the enums and aliases that they need. `entities/options.py` has `ServeOptions`, `BackendChoice` and `ExecutionChoice`. No module in it has logic of its own. |
+| `entities/` | The data types: every dataclass, and the enums and aliases that they need. `entities/verdict.py` has `ExportVerdict`. `entities/options.py` has `ServeOptions`, `BackendChoice` and `ExecutionChoice`. `entities/cli.py` has `ServeArgs` and `ArtifactHandoff`. No module in it has logic of its own. |
 | `serve/engine.py`, `serve/reuse.py` | `ServingState`, the two boot builders, the backend selection and the warmup. `reuse.py` looks up the export cache. |
 | `serve/app.py`, `serve/middleware.py` | `build_app` and the routes. The request-ID and API-key middleware, and the loading of `--middleware`, are in `middleware.py`. |
 | `serve/predict.py`, `serve/parse.py`, `serve/feeds.py`, `serve/stages.py`, `serve/encode.py`, `serve/cached.py`, `serve/result_cache.py` | The request path of `/predict` and `/predict/graph`: `run_predict` and its parts (parse, input feeds and checks, pool hops, response encoding, the cached path), and the result cache. |

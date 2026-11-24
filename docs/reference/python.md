@@ -9,6 +9,7 @@ This page comes from the docstrings in `src/downshift/`. For the usage notes, re
 ::: downshift.core.verdict.intake
 ::: downshift.core.verdict.prepare_model
 ::: downshift.export
+::: downshift.serve.app_for
 ::: downshift.serve.app.build_app
 
 ## Types

@@ -93,7 +93,7 @@ The entry point names the adapter class. The registry creates an instance with n
 
 **Keep the import of the module cheap.** `available()` imports the module of each registered entry point to build the adapter list. It does this in each process that calls `check`, `export` or `serve`. It does this also for a model that the adapter will never handle.
 
-An `ImportError` while loading an entry point means "the optional dependency of this adapter is not installed". Downshift skips the adapter without a message. A different kind of import failure is also skipped without a message. Examples are a typo and a broken dependency chain.
+An `ImportError` while loading an entry point means "the optional dependency of this adapter is not installed". Downshift skips the adapter without a message. A typo in the module name, or a broken dependency chain, also gives an `ImportError`. Downshift skips these adapters without a message too. Any other error in the module is not caught. It stops the search.
 
 Put the import of your model library, and all other heavy imports, inside `prepare()`. `prepare()` runs only after `matches()` has returned `True`. Do not put them in the module scope that defines `MyAdapter`.
 
