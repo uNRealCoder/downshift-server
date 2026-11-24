@@ -64,6 +64,7 @@ all = [
 [project.urls]
 Homepage = "https://github.com/uNRealCoder/downshift-server"
 Repository = "https://github.com/uNRealCoder/downshift-server"
+Documentation = "https://downshift-server.readthedocs.io"
 Changelog = "https://github.com/uNRealCoder/downshift-server/blob/main/CHANGELOG.md"
 Issues = "https://github.com/uNRealCoder/downshift-server/issues"
 

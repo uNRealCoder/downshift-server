@@ -84,5 +84,9 @@ def app_for(
 
     state = prepare_serving_reusing(load, opts, resolved_tokenizer_from, repo=repo, cache=cache)
     return build_app(
-        state=state, middleware=tuple(middleware), api_key=api_key, metrics=opts.metrics
+        state=state,
+        middleware=tuple(middleware),
+        api_key=api_key,
+        metrics=opts.metrics,
+        request_id_headers=opts.enable_request_id_headers,
     )

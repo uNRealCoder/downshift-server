@@ -100,6 +100,8 @@ Write an adapter. Refer to [`docs/adapters.md`](docs/adapters.md). An adapter ha
 ### Change the docs
 
 - Do not edit `docs/compatibility.md` by hand. `scripts/gen_matrix.py` generates it.
+- Do not edit `docs/openapi.json` by hand. If you change a route or a schema, run `python scripts/gen_openapi.py`. A test fails when the file is out of date.
+- To preview the site, run `pip install -r docs/requirements.txt` and then `mkdocs serve`. Run `mkdocs build --strict` before you push. A broken link fails it.
 - If you change an option, a route or a default, change the page that describes it in the same pull request.
 - Run each command that you put in a doc. Write only output that you saw.
 

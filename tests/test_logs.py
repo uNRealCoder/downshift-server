@@ -154,7 +154,7 @@ def mlp_state():
 
 @pytest.fixture(scope="module")
 def client(mlp_state) -> TestClient:
-    return TestClient(build_app(mlp_state, api_key=None))
+    return TestClient(build_app(mlp_state, api_key=None, access_log=True, request_id_headers=True))
 
 
 def test_predict_writes_one_request_line_with_timings(client, caplog):
@@ -181,7 +181,7 @@ def test_a_server_with_the_cache_on_logs_the_cache_timings(caplog):
     state = prepare_serving(
         load_model(LoadSpec("tests.models.clean_mlp:make_model")), ServeOptions(warmup=1)
     )
-    client = TestClient(build_app(state, api_key=None))
+    client = TestClient(build_app(state, api_key=None, access_log=True))
 
     with caplog.at_level(logging.INFO, logger="downshift.access"):
         assert client.post("/predict", json=MLP_INPUT).status_code == 200
@@ -218,8 +218,10 @@ def test_a_client_error_is_logged_at_warning(client, caplog):
     assert set(record.timings_ms) == {"prep_wait"}
 
 
-def test_access_log_off_logs_nothing_but_still_echoes_the_request_id(mlp_state, caplog):
-    quiet = TestClient(build_app(mlp_state, api_key=None, access_log=False))
+def test_access_log_off_logs_nothing_but_the_request_id_header_still_works(mlp_state, caplog):
+    quiet = TestClient(
+        build_app(mlp_state, api_key=None, access_log=False, request_id_headers=True)
+    )
 
     with caplog.at_level(logging.DEBUG, logger="downshift.access"):
         generated = quiet.post("/predict", json=MLP_INPUT)
@@ -241,7 +243,7 @@ def test_a_client_supplied_request_id_is_echoed_on_a_logged_request(client, capl
 
 def test_the_request_id_header_name_comes_from_the_settings(mlp_state, monkeypatch):
     monkeypatch.setattr(settings, "REQUEST_ID_HEADER", "X-Correlation-Id")
-    client = TestClient(build_app(mlp_state, api_key=None))
+    client = TestClient(build_app(mlp_state, api_key=None, request_id_headers=True))
 
     supplied = client.get("/health", headers={"X-Correlation-Id": "trace-me"})
     generated = client.get("/health", headers={"X-Request-Id": "ignored"})
@@ -249,3 +251,40 @@ def test_the_request_id_header_name_comes_from_the_settings(mlp_state, monkeypat
     assert supplied.headers["x-correlation-id"] == "trace-me"
     assert "x-request-id" not in supplied.headers
     assert generated.headers["x-correlation-id"] != "ignored"
+
+
+def test_with_all_three_off_there_is_no_request_middleware(mlp_state, caplog):
+    app = build_app(mlp_state, api_key=None, access_log=False)
+    client = TestClient(app)
+
+    with caplog.at_level(logging.DEBUG, logger="downshift.access"):
+        resp = client.get("/health", headers={"X-Request-Id": "trace-me"})
+
+    names = {m.cls.__name__ for m in app.user_middleware}
+    assert not names & {"RequestIdMiddleware", "RequestObserverMiddleware"}
+    assert "x-request-id" not in resp.headers
+    assert _access_records(caplog) == []
+
+
+def test_the_access_log_alone_logs_without_a_request_id_header(mlp_state, caplog):
+    client = TestClient(build_app(mlp_state, api_key=None, access_log=True))
+
+    with caplog.at_level(logging.INFO, logger="downshift.access"):
+        resp = client.post("/predict", json=MLP_INPUT, headers={"X-Request-Id": "trace-me"})
+
+    assert "x-request-id" not in resp.headers
+    (record,) = _access_records(caplog)
+    assert record.status == 200
+
+
+def test_the_access_log_and_the_request_id_header_work_together(mlp_state, restore_logging):
+    stream = io.StringIO()
+    setup_logging("info", stream=stream)
+    client = TestClient(
+        build_app(mlp_state, api_key=None, access_log=True, request_id_headers=True)
+    )
+
+    resp = client.post("/predict", json=MLP_INPUT, headers={"X-Request-Id": "trace-me"})
+
+    assert resp.headers["x-request-id"] == "trace-me"
+    assert any("request_id=trace-me" in line for line in _lines(stream))

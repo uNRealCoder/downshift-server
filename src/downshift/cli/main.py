@@ -38,6 +38,7 @@ from downshift.cli.options import (
     AtolOpt,
     AxisMaxOpt,
     DynamicOpt,
+    EnableRequestIdHeadersOpt,
     ExecutionOpt,
     ExportCacheDirOpt,
     ForwardedAllowIpsOpt,
@@ -405,6 +406,7 @@ def serve_cmd(
     result_cache_rows: ResultCacheRowsOpt = settings.RESULT_CACHE_ROWS,
     server_timing: ServerTimingOpt = settings.SERVER_TIMING,
     metrics: MetricsOpt = settings.METRICS,
+    enable_request_id_headers: EnableRequestIdHeadersOpt = settings.ENABLE_REQUEST_ID_HEADERS,
     served_model_name: ServedModelNameOpt = settings.SERVED_MODEL_NAME,
     matryoshka: MatryoshkaOpt = settings.MATRYOSHKA,
     tf32: Tf32Opt = settings.TF32,
@@ -539,6 +541,7 @@ def serve_cmd(
             middleware=tuple(args.middleware or ()),
             access_log=access_log,
             metrics=metrics,
+            request_id_headers=enable_request_id_headers,
         )
         render.print_booting(model, host, port, https=https)
         server = uvicorn.Server(uvicorn.Config(api, **uvicorn_kwargs))

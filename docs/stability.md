@@ -55,7 +55,7 @@ The JSON wire formats and the safetensors wire format are part of the contract. 
 
 | Header | Name can change | Notes |
 |---|---|---|
-| Request ID | Yes (experimental): `DOWNSHIFT_REQUEST_ID_HEADER` (default `X-Request-Id`) | Read from the request. Set on each response. The variable is experimental. The default name is frozen. |
+| Request ID | Yes (experimental): `DOWNSHIFT_REQUEST_ID_HEADER` (default `X-Request-Id`); `--enable-request-id-headers` (`DOWNSHIFT_ENABLE_REQUEST_ID_HEADERS`, off by default) | Read from the request. Set on each response. Only with `--enable-request-id-headers`. The variable is experimental. The default name is frozen. |
 | Result cache | Yes (experimental): `DOWNSHIFT_CACHE_HEADER` (default `X-Downshift-Cache`) | The values are `hit`, `partial` and `miss`. The variable is experimental. The default name is frozen. |
 | `Server-Timing` | No | Only with `--server-timing`. The header is frozen. The stage names are experimental. |
 | `Retry-After` | No | On a `503` for "not ready" and "at capacity". |
@@ -79,7 +79,7 @@ Refer to "Error codes" in [`http-api.md`](http-api.md) for the status and the me
 
 There are two error body shapes:
 
-- Other routes: `{"detail": ..., "code": "<code>"}`. A `500` also has `request_id`. A `422` has a list in `detail`.
+- Other routes: `{"detail": ..., "code": "<code>"}`. A `500` also has `request_id` (only with `--enable-request-id-headers`). A `422` has a list in `detail`.
 - Routes under `/v1/`: `{"error": {"message", "type", "param", "code"}}`.
 
 ## Metrics

@@ -30,7 +30,9 @@ def _text_state(state, **recipe):
 
 
 def _client(state, **kwargs):
-    return TestClient(build_app(state, api_key=kwargs.pop("api_key", None)), **kwargs)
+    return TestClient(
+        build_app(state, api_key=kwargs.pop("api_key", None), request_id_headers=True), **kwargs
+    )
 
 
 def _invalid_request(state, monkeypatch):
@@ -229,5 +231,6 @@ def test_an_http_error_from_a_user_middleware_keeps_its_status(mlp_state):
 
 def _client_with_middleware(state):
     return TestClient(
-        build_app(state, middleware=["tests.test_errors:RaiseHttp"]), raise_server_exceptions=False
+        build_app(state, middleware=["tests.test_errors:RaiseHttp"], request_id_headers=True),
+        raise_server_exceptions=False,
     )

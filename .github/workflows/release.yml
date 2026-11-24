@@ -45,7 +45,8 @@ jobs:
           name: dist
           path: dist/
 
-  # The test matrix, the floor job and the Windows job of ci.yml. They enforce the 95% coverage.
+  # The test matrix, the floor job, the Windows job and the docs job of ci.yml. They enforce the 95%
+  # coverage and the strict docs build.
   ci:
     uses: ./.github/workflows/ci.yml
 

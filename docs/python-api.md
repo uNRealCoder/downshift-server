@@ -235,6 +235,7 @@ def build_app(
     api_key: str | None = settings.API_KEY,
     access_log: bool = True,
     metrics: bool = False,
+    request_id_headers: bool = False,
     worker: str = "0",
 ) -> FastAPI
 ```

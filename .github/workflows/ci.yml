@@ -30,6 +30,22 @@ jobs:
       - run: mypy src
       - run: pytest -q --cov=src/downshift --cov-report=term-missing --cov-fail-under=95
 
+  docs:
+    # Read the Docs builds the site from the same files. The build needs no torch: mkdocstrings
+    # reads the source without an import, and docs/openapi.json is a committed file.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: docs/requirements.txt
+      - run: pip install -r docs/requirements.txt
+      - run: mkdocs build --strict
+        env:
+          NO_MKDOCS_2_WARNING: "1"
+
   floor:
     # This job pins the oldest torch that downshift supports (2.8), the oldest onnxruntime (1.20:
     # torch 2.8 writes IR version 10 graphs and ArgMax for last-token pooling needs a CPU kernel),

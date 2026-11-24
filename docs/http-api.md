@@ -360,12 +360,12 @@ Status codes:
 | `413` | `{"detail": "request body is N bytes; the server limit is M bytes (--max-body-bytes)", "code": "body_too_large"}` | The body is larger than `--max-body-bytes` (default 32 MiB). The server rejects it before it parses it. `N` is the declared `Content-Length`. For a chunked body, `N` is the running total when it passed the limit. |
 | `415` | `{"detail": "unsupported Content-Type; ...", "code": "unsupported_media_type"}` | The body is not JSON and not safetensors (`application/vnd.safetensors` or `application/octet-stream`). |
 | `422` | `{"detail": [...], "code": "invalid_request"}`. `detail` is the validation error list of FastAPI | The body is empty (`missing`), the JSON is malformed (`json_invalid`, with the byte offset in `loc`), or a field fails validation (`loc` starts with `"body"`). |
-| `500` | `{"detail": "inference failed on the server; see the server log", "code": "internal_error", "request_id": "..."}` | An unhandled exception on the server. The real error is only in the server log. |
+| `500` | `{"detail": "inference failed on the server; see the server log", "code": "internal_error", "request_id": "..."}` | An unhandled exception on the server. The real error is only in the server log. `request_id` is in the body only with `--enable-request-id-headers`. |
 | `503` | `{"detail": "model is not ready", "code": "not_ready"}`, header `Retry-After: 2` | No `ServingState` exists yet. |
 | `503` | `{"detail": "server is at capacity (N running, M queued)", "code": "at_capacity"}`, header `Retry-After: 1` | `--max-concurrency + --max-queue` predicts are already admitted. |
 | `503` | `{"detail": "request took more than the Y.Ys --request-timeout", "code": "request_timeout"}`, no `Retry-After` | The predict was admitted, but it was not complete at `--request-timeout` after its admission. The limit covers the whole request: the body read, the queue, the inference and the encoding. The slot is free at the limit. The thread of an inference that already runs is not stopped. A request that waits for a row of another request (the result cache) has the same limit. If the limit passes before the inference starts, the text can be `request waited X.Xs in queue, past the Y.Ys --request-timeout`. |
 
-If the server runs with `--server-timing`, a `200` response has this header: `Server-Timing: parse;dur=<ms>, prep_wait;dur=<ms>, prep;dur=<ms>, infer_wait;dur=<ms>, infer;dur=<ms>, encode;dur=<ms>` (see "Headers"). Every response, on every route and with every status code, has `X-Request-Id`. To use a different name, set `DOWNSHIFT_REQUEST_ID_HEADER`. If the client sent the header, downshift returns it. Otherwise, downshift makes an ID of 16 hexadecimal characters.
+If the server runs with `--server-timing`, a `200` response has this header: `Server-Timing: parse;dur=<ms>, prep_wait;dur=<ms>, prep;dur=<ms>, infer_wait;dur=<ms>, infer;dur=<ms>, encode;dur=<ms>` (see "Headers"). If the server runs with `--enable-request-id-headers`, every response, on every route and with every status code, has `X-Request-Id`. To use a different name, set `DOWNSHIFT_REQUEST_ID_HEADER`. If the client sent the header, downshift returns it. Otherwise, downshift makes an ID of 16 hexadecimal characters. Without the option, no response has this header.
 
 ### `POST /predict/graph`
 
@@ -507,7 +507,7 @@ To get a safetensors response, send `Accept: application/vnd.safetensors`, or se
 
 | Header | Direction | Meaning |
 |---|---|---|
-| `X-Request-Id` | Request (optional), response (always) | To use a different name, set `DOWNSHIFT_REQUEST_ID_HEADER` (for example `X-Correlation-Id`). Downshift returns it if the client sent it. Otherwise it makes an ID of 16 hexadecimal characters (`RequestIdMiddleware`). The `request_id` field of a `500` body has the same value. Each server log line that is written while the request is served (including the request line of `downshift.access`) has it too. |
+| `X-Request-Id` | Request (optional), response (only with `--enable-request-id-headers`) | Off by default: without the option, downshift ignores this header and does not set it. To use a different name, set `DOWNSHIFT_REQUEST_ID_HEADER` (for example `X-Correlation-Id`). Downshift returns it if the client sent it. Otherwise it makes an ID of 16 hexadecimal characters (`RequestIdMiddleware`). The `request_id` field of a `500` body has the same value. Each server log line that is written while the request is served (including the request line of `downshift.access`) has it too. |
 | `Authorization` | Request | `Bearer <key>`. It is required on every route except `/health` and `/ready` when `DOWNSHIFT_API_KEY` is set. |
 | `WWW-Authenticate` | Response (`401` only) | `Bearer`. |
 | `Server-Timing` | Response (`/predict`, `/predict/graph` and `/v1/embeddings`, `200` only, only with `--server-timing`) | Off by default. The stages are listed below. Each one has `;dur=<ms>`. The access log line has the same split as `timings_ms`. |
@@ -534,7 +534,7 @@ A hit is bit for bit the answer of the request that stored the row. The same row
 
 Each response that is not `200` has the body `{"detail": <string>, "code": "<code>"}`. `detail` is text for a person. `code` is stable: a client can branch on it. There are two exceptions:
 
-- The handler for an unhandled exception (`500`). It adds `"request_id"`: `{"detail": "inference failed on the server; see the server log", "code": "internal_error", "request_id": "..."}`.
+- The handler for an unhandled exception (`500`). With `--enable-request-id-headers`, it adds `"request_id"`: `{"detail": "inference failed on the server; see the server log", "code": "internal_error", "request_id": "..."}`.
 - `422` validation errors. `detail` is the list of FastAPI and Pydantic: `{"detail": [{"type": ..., "loc": [...], "msg": ..., ...}], "code": "invalid_request"}`.
 
 The `401` has the header `WWW-Authenticate`. A `503` can have `Retry-After`. The `404` and `405` of unknown paths also have a code.

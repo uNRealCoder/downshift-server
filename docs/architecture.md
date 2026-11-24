@@ -145,4 +145,4 @@ For a full description, read [`serving.md`](serving.md). In short:
 1. [`walkthrough.md`](walkthrough.md): run the three verdicts and call a server.
 2. [`serving.md`](serving.md): the serving layer, in detail.
 3. [`python-api.md`](python-api.md): use downshift as a library.
-4. [`../AGENTS.md`](../AGENTS.md): how to check a change before you commit it.
+4. [`AGENTS.md`](https://github.com/uNRealCoder/downshift-server/blob/main/AGENTS.md): how to check a change before you commit it.

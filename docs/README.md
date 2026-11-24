@@ -2,7 +2,7 @@
 
 Downshift serves a model that you already downloaded, over HTTP. Before it answers a request, it exports the model to ONNX and compares the ONNX graph with PyTorch on inputs that the exporter did not see. The check gives a verdict: CLEAN, DEGRADED, FAILED or UNVERIFIED. The verdict selects the backend behind `/predict`.
 
-For a first walkthrough, read the repo [`README.md`](../README.md). To learn the code, read [`architecture.md`](architecture.md) and then [`walkthrough.md`](walkthrough.md). The other pages are reference material. Each one describes the code as it is.
+For a first walkthrough, read the repo [`README.md`](https://github.com/uNRealCoder/downshift-server/blob/main/README.md). To learn the code, read [`architecture.md`](architecture.md) and then [`walkthrough.md`](walkthrough.md). The other pages are reference material. Each one describes the code as it is.
 
 | Page | Read it to |
 |---|---|
@@ -16,6 +16,7 @@ For a first walkthrough, read the repo [`README.md`](../README.md). To learn the
 | [`serving.md`](serving.md) | Change the serving layer: `ServeOptions`, `ServingState`, the boot builders, the request path and the backends. |
 | [`adapters.md`](adapters.md) | Add a model family with your own adapter. |
 | [`stability.md`](stability.md) | See which routes, codes, metrics, options, variables and names stay the same in 1.x. It also defines a breaking change and the deprecation rule. |
+| [`reference/http.md`](reference/http.md), [`reference/python.md`](reference/python.md) | Browse the generated API reference: the OpenAPI document and the docstrings. They are on the documentation site. |
 | [`compatibility.md`](compatibility.md) | See which export hazards downshift catches. A script generates this page. |
 
 ## Module map

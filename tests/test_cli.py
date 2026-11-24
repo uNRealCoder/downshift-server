@@ -420,21 +420,28 @@ def test_serve_passes_max_queue_and_request_timeout(monkeypatch):
     assert "Capacity" in result.output
 
 
-def _app_access_log(api) -> bool:
-    """uvicorn's own access log is always off; the app's RequestIdMiddleware writes the line."""
-    middleware = next(m for m in api.user_middleware if m.cls.__name__ == "RequestIdMiddleware")
-    return middleware.kwargs["access_log"]
+def _middleware_names(api) -> set[str]:
+    return {m.cls.__name__ for m in api.user_middleware}
 
 
-def test_serve_access_log_defaults_to_enabled(monkeypatch):
+def test_serve_defaults_to_the_access_log_without_a_request_id(monkeypatch):
+    """uvicorn's own access log is always off. The app writes the line, and it has no request
+    ID middleware unless the user asks for it."""
     _, captured = _serve_captured(monkeypatch)
     assert captured["access_log"] is False
-    assert _app_access_log(captured["app"]) is True
+    assert "RequestObserverMiddleware" in _middleware_names(captured["app"])
+    assert "RequestIdMiddleware" not in _middleware_names(captured["app"])
+
+
+def test_serve_enable_request_id_headers_installs_the_middleware(monkeypatch):
+    _, captured = _serve_captured(monkeypatch, "--enable-request-id-headers", "--no-access-log")
+    assert "RequestIdMiddleware" in _middleware_names(captured["app"])
+    assert "RequestObserverMiddleware" not in _middleware_names(captured["app"])
 
 
 def test_serve_no_access_log_disables_it(monkeypatch):
     _, captured = _serve_captured(monkeypatch, "--no-access-log")
-    assert _app_access_log(captured["app"]) is False
+    assert "RequestObserverMiddleware" not in _middleware_names(captured["app"])
 
 
 @pytest.mark.parametrize("value", ["hex", "safetensors"])

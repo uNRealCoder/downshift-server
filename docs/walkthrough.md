@@ -183,7 +183,7 @@ Read these files in this order:
 | `tests/test_serve.py` | The routes and their status codes. |
 | `tests/test_export_cache.py` | The memo and the disk cache. |
 
-Run the full suite one time, at the end of a change. CI also needs 95% line coverage. Refer to [`../AGENTS.md`](../AGENTS.md) for the exact commands.
+Run the full suite one time, at the end of a change. CI also needs 95% line coverage. Refer to [`AGENTS.md`](https://github.com/uNRealCoder/downshift-server/blob/main/AGENTS.md) for the exact commands.
 
 ## Step 9. Make a small change
 

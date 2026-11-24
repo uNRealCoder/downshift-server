@@ -1,6 +1,7 @@
 """GET /metrics: the Prometheus text, the counters, and the --metrics option."""
 
 import time
+from functools import partial
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,7 +19,7 @@ from downshift.serve.engine import prepare_serving
 from downshift.serve.errors import error_response
 from downshift.serve.metrics import CONTENT_TYPE
 from downshift.serve.metrics import render as render_text
-from downshift.serve.middleware import RequestIdMiddleware
+from downshift.serve.middleware import RequestObserverMiddleware, count_request
 from tests.conftest import with_options
 from tests.test_cli import _serve_captured
 from tests.test_render import _serving_state, _verdict
@@ -179,7 +180,7 @@ def test_a_503_that_a_middleware_builds_is_counted():
         await response(scope, receive, send)
 
     metrics = Metrics()
-    client = TestClient(RequestIdMiddleware(refuse, metrics=metrics))
+    client = TestClient(RequestObserverMiddleware(refuse, [partial(count_request, metrics)]))
     assert client.get("/x").status_code == 503
     assert metrics.rejected["capacity"] == 1
 

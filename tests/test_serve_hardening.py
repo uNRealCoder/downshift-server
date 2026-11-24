@@ -521,7 +521,10 @@ def test_a_client_shape_mistake_on_torch_is_a_400(torch_state):
 )
 def test_a_server_side_runtime_error_in_forward_is_a_500(torch_state, monkeypatch, message):
     monkeypatch.setattr(torch_state.backend, "module", _Failing(message))
-    client = TestClient(build_app(torch_state, api_key=None), raise_server_exceptions=False)
+    client = TestClient(
+        build_app(torch_state, api_key=None, request_id_headers=True),
+        raise_server_exceptions=False,
+    )
 
     resp = client.post("/predict", json=MLP_INPUT)
 
@@ -638,7 +641,10 @@ def test_server_timing_and_the_access_log_carry_the_wait_stages(mlp_state, monke
 def test_a_500_sets_the_configured_request_id_header(torch_state, monkeypatch):
     monkeypatch.setattr(settings, "REQUEST_ID_HEADER", "X-Correlation-Id")
     monkeypatch.setattr(torch_state.backend, "module", _Failing("boom"))
-    client = TestClient(build_app(torch_state, api_key=None), raise_server_exceptions=False)
+    client = TestClient(
+        build_app(torch_state, api_key=None, request_id_headers=True),
+        raise_server_exceptions=False,
+    )
 
     resp = client.post("/predict", json=MLP_INPUT, headers={"X-Correlation-Id": "trace-500"})
 
@@ -663,7 +669,7 @@ def test_a_timeout_error_inside_the_backend_is_not_a_request_timeout(mlp_state, 
 
 @pytest.mark.parametrize("supplied", ["bad id", "a" * 129, "x<script>", "caf\u00e9"])
 def test_a_request_id_with_unsafe_characters_is_replaced(mlp_state, supplied):
-    client = TestClient(build_app(mlp_state, api_key=None))
+    client = TestClient(build_app(mlp_state, api_key=None, request_id_headers=True))
 
     response = client.get("/health", headers={"X-Request-Id": supplied.encode("latin-1")})
 
@@ -672,7 +678,7 @@ def test_a_request_id_with_unsafe_characters_is_replaced(mlp_state, supplied):
 
 
 def test_a_safe_request_id_is_kept(mlp_state):
-    client = TestClient(build_app(mlp_state, api_key=None))
+    client = TestClient(build_app(mlp_state, api_key=None, request_id_headers=True))
 
     response = client.get("/health", headers={"X-Request-Id": "trace.1:a_b-C"})
 

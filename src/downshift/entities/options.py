@@ -86,6 +86,8 @@ class ServeOptions:
     result_cache_rows: int | None = settings.RESULT_CACHE_ROWS
     server_timing: bool = settings.SERVER_TIMING  # add the Server-Timing header to predicts
     metrics: bool = settings.METRICS  # count requests and serve GET /metrics
+    # read the request ID from each request and set it on each response
+    enable_request_id_headers: bool = settings.ENABLE_REQUEST_ID_HEADERS
     served_model_name: str | None = settings.SERVED_MODEL_NAME  # None = from the model source
     matryoshka: bool = settings.MATRYOSHKA  # /v1/embeddings takes `dimensions`
     tf32: bool = settings.TF32  # allow TF32 math on the GPU

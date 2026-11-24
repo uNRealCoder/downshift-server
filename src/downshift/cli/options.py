@@ -361,10 +361,20 @@ Tf32Opt = Annotated[
         "uses the TF32 tolerances. Default: off",
     ),
 ]
+EnableRequestIdHeadersOpt = Annotated[
+    bool,
+    typer.Option(
+        "--enable-request-id-headers/--no-enable-request-id-headers",
+        help="Read the request ID from the X-Request-Id request header (or make one) and set "
+        "it on each response, in the log lines and in the body of a 500. Default: off, and "
+        "the server then has no request ID middleware",
+    ),
+]
 AccessLogOpt = Annotated[
     bool,
     typer.Option(
         "--access-log/--no-access-log",
-        help="One log line for each request: method, path, status, duration and request ID",
+        help="One log line for each request: method, path, status and duration (and the "
+        "request ID, with --enable-request-id-headers). Default: on",
     ),
 ]

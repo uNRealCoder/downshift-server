@@ -7,8 +7,9 @@ To read this file, go in this order:
 2. `PredictRoute`: admits a slot (or 503), applies --request-timeout, and releases the slot.
 3. `_predict`: checks the content type and the body size, then calls `run_predict`
    (serve/predict.py). The request path continues there.
-4. `RequestIdMiddleware`, `ApiKeyMiddleware`, `load_middleware`: the middleware stack, from the
-   outside in.
+4. `RequestIdMiddleware`, `RequestObserverMiddleware`, `ApiKeyMiddleware`, `load_middleware`:
+   the middleware stack, from the outside in. The request ID is off by default. The observer
+   runs for the access log (on by default) and for --metrics.
 """
 
 import asyncio
@@ -46,7 +47,15 @@ from downshift.serve.errors import (
     validation_error_handler,
 )
 from downshift.serve.metrics import CONTENT_TYPE, render
-from downshift.serve.middleware import ApiKeyMiddleware, RequestIdMiddleware, load_middleware
+from downshift.serve.middleware import (
+    ApiKeyMiddleware,
+    Observer,
+    RequestIdMiddleware,
+    RequestObserverMiddleware,
+    count_request,
+    load_middleware,
+    log_request,
+)
 from downshift.serve.openai import (
     embeddings_response,
     model_card,
@@ -350,6 +359,7 @@ def build_app(
     api_key: str | None = API_KEY,
     access_log: bool = True,
     metrics: bool = False,
+    request_id_headers: bool = False,
 ) -> FastAPI:
     """The app over `state`, or over the result of `loader`. With a loader, the app binds at
     once: /health is 200, and /ready and the model routes are 503 until the loader finishes.
@@ -357,6 +367,9 @@ def build_app(
     `api_key` defaults to DOWNSHIFT_API_KEY. None or "" turns it off (with a warning).
     `access_log=False` drops the request lines of `downshift.access`.
     `metrics=True` counts the requests and adds GET /metrics.
+    `request_id_headers=True` reads the request ID from the request header and sets it on each
+    response. It is off by default, and so are the metrics. The access log is on by default. A
+    server with all three off has none of their middleware.
     """
     if (state is None) == (loader is None):
         raise ValueError("build_app needs exactly one of state or loader")
@@ -392,9 +405,17 @@ def build_app(
     request_id_header = settings.REQUEST_ID_HEADER
     counters = Metrics() if metrics else None
     app.state.metrics = counters
-    app.add_middleware(
-        RequestIdMiddleware, access_log=access_log, header=request_id_header, metrics=counters
-    )
+    # Each of these is not in the stack when off. The observers sit inside
+    # the request ID, so an access log line has the request ID.
+    observers: list[Observer] = []
+    if counters is not None:
+        observers.append(partial(count_request, counters))
+    if access_log:
+        observers.append(log_request)
+    if observers:
+        app.add_middleware(RequestObserverMiddleware, observers=observers)
+    if request_id_headers:
+        app.add_middleware(RequestIdMiddleware, header=request_id_header)
 
     app.add_exception_handler(StarletteHTTPException, http_error_handler)  # type: ignore[arg-type]
     app.add_exception_handler(RequestValidationError, validation_error_handler)  # type: ignore[arg-type]
@@ -413,10 +434,10 @@ def build_app(
         token = request_id_var.set(request_id)
         try:
             logger.exception(
-                "unhandled exception serving %s %s (request_id=%s)",
+                "unhandled exception serving %s %s%s",
                 request.method,
                 request.url.path,
-                request_id,
+                f" (request_id={request_id})" if request_id else "",
             )
         finally:
             request_id_var.reset(token)

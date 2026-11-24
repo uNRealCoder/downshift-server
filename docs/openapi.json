@@ -1,0 +1,1874 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "downshift",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/": {
+      "get": {
+        "summary": "Index",
+        "operationId": "index__get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IndexResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "summary": "Health",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "summary": "Ready",
+        "operationId": "ready_ready_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/metadata": {
+      "get": {
+        "summary": "Metadata",
+        "operationId": "metadata_metadata_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetadataResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/schema": {
+      "get": {
+        "summary": "Schema",
+        "description": "What to POST: the name, dtype and shape of each input, and an example body.",
+        "operationId": "schema_schema_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchemaResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/version": {
+      "get": {
+        "summary": "Version",
+        "operationId": "version_version_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Version Version Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "summary": "List Models",
+        "operationId": "list_models_v1_models_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List Models V1 Models Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/models/{model_id}": {
+      "get": {
+        "summary": "Get Model",
+        "operationId": "get_model_v1_models__model_id__get",
+        "parameters": [
+          {
+            "name": "model_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Model Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Model V1 Models  Model Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/predict": {
+      "post": {
+        "summary": "Predict",
+        "description": "Never called (PredictRoute serves the route): documents the JSON body for OpenAPI.",
+        "operationId": "predict_predict_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/PredictRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Req"
+              }
+            },
+            "application/vnd.safetensors": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PredictResponse"
+                }
+              },
+              "application/vnd.safetensors": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/predict/graph": {
+      "post": {
+        "summary": "Predict Graph",
+        "description": "Never called (PredictRoute serves the route): documents the JSON body for OpenAPI.",
+        "operationId": "predict_graph_predict_graph_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/GraphPredictRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Req"
+              }
+            },
+            "application/vnd.safetensors": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PredictResponse"
+                }
+              },
+              "application/vnd.safetensors": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/embeddings": {
+      "post": {
+        "summary": "Embeddings",
+        "description": "Never called (PredictRoute serves the route): documents the JSON body for OpenAPI.",
+        "operationId": "embeddings_v1_embeddings_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/EmbeddingsRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Req"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AxisBound": {
+        "properties": {
+          "min": {
+            "type": "integer",
+            "title": "Min"
+          },
+          "max": {
+            "type": "integer",
+            "title": "Max"
+          }
+        },
+        "type": "object",
+        "required": [
+          "min",
+          "max"
+        ],
+        "title": "AxisBound",
+        "description": "The (min, max) that the export traced a dynamic axis for. A bare .onnx has none."
+      },
+      "AxisInfo": {
+        "properties": {
+          "input": {
+            "type": "string",
+            "title": "Input"
+          },
+          "axis": {
+            "type": "integer",
+            "title": "Axis"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "served_min": {
+            "type": "integer",
+            "title": "Served Min"
+          },
+          "served_max": {
+            "type": "integer",
+            "title": "Served Max"
+          },
+          "sampled_min": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sampled Min"
+          },
+          "sampled_max": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sampled Max"
+          }
+        },
+        "type": "object",
+        "required": [
+          "input",
+          "axis",
+          "name",
+          "served_min",
+          "served_max"
+        ],
+        "title": "AxisInfo",
+        "description": "One dynamic axis: the bounds the server accepts next to the sizes verification ran.\n`name` is what `--axis-max` takes. See downshift.core.axes."
+      },
+      "BackendInfo": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "device": {
+            "type": "string",
+            "title": "Device"
+          },
+          "inputs": {
+            "items": {
+              "$ref": "#/components/schemas/IOSpecInfo"
+            },
+            "type": "array",
+            "title": "Inputs"
+          },
+          "outputs": {
+            "items": {
+              "$ref": "#/components/schemas/IOSpecInfo"
+            },
+            "type": "array",
+            "title": "Outputs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "device"
+        ],
+        "title": "BackendInfo",
+        "description": "BackendMeta.to_dict(); see downshift.serve.backends."
+      },
+      "CacheInfo": {
+        "properties": {
+          "max_rows": {
+            "type": "integer",
+            "title": "Max Rows"
+          },
+          "entries": {
+            "type": "integer",
+            "title": "Entries"
+          },
+          "hits": {
+            "type": "integer",
+            "title": "Hits"
+          },
+          "misses": {
+            "type": "integer",
+            "title": "Misses"
+          }
+        },
+        "type": "object",
+        "required": [
+          "max_rows",
+          "entries",
+          "hits",
+          "misses"
+        ],
+        "title": "CacheInfo",
+        "description": "The result cache of this worker process. `hits` and `misses` count rows."
+      },
+      "EmbeddingInfo": {
+        "properties": {
+          "pooling": {
+            "type": "string",
+            "title": "Pooling"
+          },
+          "normalized": {
+            "type": "boolean",
+            "title": "Normalized"
+          },
+          "dimension": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dimension"
+          },
+          "max_seq_length": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Seq Length"
+          },
+          "from": {
+            "type": "string",
+            "title": "From"
+          },
+          "prompts": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Prompts"
+          },
+          "default_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Prompt"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pooling",
+          "normalized",
+          "dimension",
+          "max_seq_length",
+          "from"
+        ],
+        "title": "EmbeddingInfo",
+        "description": "Present when the graph ends in a pooling step. See downshift/adapters/embedding.py."
+      },
+      "EmbeddingsRequest": {
+        "properties": {
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "input": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ],
+            "title": "Input"
+          },
+          "encoding_format": {
+            "type": "string",
+            "enum": [
+              "float",
+              "base64"
+            ],
+            "title": "Encoding Format",
+            "default": "float"
+          },
+          "dimensions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dimensions"
+          },
+          "user": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User"
+          }
+        },
+        "type": "object",
+        "required": [
+          "model",
+          "input"
+        ],
+        "title": "EmbeddingsRequest",
+        "description": "The body of POST /v1/embeddings, as the OpenAI API defines it. A field that is not listed\nhere is ignored, because OpenAI clients send extra fields. `user` is accepted and ignored."
+      },
+      "GraphItem": {
+        "properties": {
+          "x": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            ],
+            "title": "X"
+          },
+          "edge_index": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            ],
+            "title": "Edge Index"
+          },
+          "edge_attr": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edge Attr"
+          }
+        },
+        "type": "object",
+        "required": [
+          "x",
+          "edge_index"
+        ],
+        "title": "GraphItem",
+        "description": "One graph of a batch: the node features, the COO edge index in the node IDs of the\ngraph, and optional edge attributes."
+      },
+      "GraphPredictRequest": {
+        "properties": {
+          "x": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "X"
+          },
+          "edge_index": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edge Index"
+          },
+          "edge_attr": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edge Attr"
+          },
+          "graphs": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/GraphItem"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graphs"
+          },
+          "output_encoding": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RequestOutputEncoding"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How response tensors are encoded: 'json' for nested lists, 'base64' for {\"data\": <base64 little-endian bytes>, \"dtype\": ..., \"shape\": [...]} per output, 'safetensors' for an application/vnd.safetensors response body (the same as sending Accept: application/vnd.safetensors). Omit to use the server default (--output-encoding / DOWNSHIFT_OUTPUT_ENCODING)."
+          }
+        },
+        "type": "object",
+        "title": "GraphPredictRequest",
+        "description": "One graph (`x`, `edge_index` and optional `edge_attr` at the top level) or a batch\n(`graphs`, a list of the same three fields). Never both.\n\nA batch runs as one inference over the graphs, which downshift joins into one disjoint\ngraph. Each `edge_index` uses the local node IDs of its own graph, and the server adds the\noffsets. The response is {\"graphs\": [{outputs, shapes, dtypes}, ...]} in the order of the\nrequest. With `Accept: application/vnd.safetensors`, each output is a tensor with the name\n`graphs.<i>.<output name>`, and `__metadata__` has the number of graphs as\n`downshift.graphs`. Outputs at node level and edge level are split for each graph. A model\nwhose output has a fixed size (a pooled readout) takes one graph for each request.\nA safetensors request body can carry the batch as joined `x`, `edge_index` and `edge_attr`,\nplus the int64 vectors `num_nodes` and `num_edges` of length G.\nEach tensor is a nested list or a TypedArray dict (this is how base64 arrives)."
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "ok"
+          }
+        },
+        "type": "object",
+        "title": "HealthResponse"
+      },
+      "IOSpecInfo": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "dtype": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dtype"
+          },
+          "shape": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shape"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "dtype",
+          "shape"
+        ],
+        "title": "IOSpecInfo"
+      },
+      "IndexResponse": {
+        "properties": {
+          "service": {
+            "type": "string",
+            "title": "Service",
+            "default": "downshift"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "ready": {
+            "type": "boolean",
+            "title": "Ready"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "routes": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Routes"
+          },
+          "next_step": {
+            "type": "string",
+            "title": "Next Step",
+            "default": "Send GET /schema. The response gives the inputs and an example_request body. POST that body to /predict without a change"
+          }
+        },
+        "type": "object",
+        "required": [
+          "version",
+          "ready",
+          "routes"
+        ],
+        "title": "IndexResponse",
+        "description": "GET /: where a client starts. It names the routes, so a client that knows only the base\nURL can find /schema."
+      },
+      "InputFormat": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "description"
+        ],
+        "title": "InputFormat",
+        "description": "One of the wire forms a tensor value may take in a request body."
+      },
+      "Limits": {
+        "properties": {
+          "max_body_bytes": {
+            "type": "integer",
+            "title": "Max Body Bytes"
+          },
+          "max_input_bytes": {
+            "type": "integer",
+            "title": "Max Input Bytes"
+          },
+          "max_concurrency": {
+            "type": "integer",
+            "title": "Max Concurrency"
+          },
+          "max_queue": {
+            "type": "integer",
+            "title": "Max Queue"
+          },
+          "request_timeout": {
+            "type": "number",
+            "title": "Request Timeout"
+          }
+        },
+        "type": "object",
+        "required": [
+          "max_body_bytes",
+          "max_input_bytes",
+          "max_concurrency",
+          "max_queue",
+          "request_timeout"
+        ],
+        "title": "Limits",
+        "description": "The serving limits a client runs into; the same block on /metadata and /schema."
+      },
+      "MetadataResponse": {
+        "properties": {
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "family": {
+            "type": "string",
+            "title": "Family"
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/VerdictInfo"
+          },
+          "axes": {
+            "items": {
+              "$ref": "#/components/schemas/AxisInfo"
+            },
+            "type": "array",
+            "title": "Axes"
+          },
+          "backend": {
+            "$ref": "#/components/schemas/BackendInfo"
+          },
+          "input_names": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Input Names"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/Limits"
+          },
+          "cache": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CacheInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "execution": {
+            "type": "string",
+            "title": "Execution"
+          },
+          "boot": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Boot"
+          },
+          "warmup": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warmup"
+          },
+          "serving_numerics": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Serving Numerics"
+          }
+        },
+        "type": "object",
+        "required": [
+          "model",
+          "family",
+          "verdict",
+          "backend",
+          "input_names",
+          "version",
+          "limits",
+          "execution"
+        ],
+        "title": "MetadataResponse"
+      },
+      "NumericsInfo": {
+        "properties": {
+          "samples_tested": {
+            "type": "integer",
+            "title": "Samples Tested"
+          },
+          "max_abs_err": {
+            "type": "number",
+            "title": "Max Abs Err"
+          },
+          "max_rel_err": {
+            "type": "number",
+            "title": "Max Rel Err"
+          },
+          "failures": {
+            "type": "integer",
+            "title": "Failures"
+          },
+          "shape_generalization": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shape Generalization"
+          },
+          "tolerance_abs": {
+            "type": "number",
+            "title": "Tolerance Abs"
+          },
+          "tolerance_rel": {
+            "type": "number",
+            "title": "Tolerance Rel"
+          },
+          "tolerance_dtype": {
+            "type": "string",
+            "title": "Tolerance Dtype"
+          },
+          "tolerance_overridden": {
+            "type": "boolean",
+            "title": "Tolerance Overridden"
+          },
+          "min_cosine": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Cosine"
+          },
+          "tolerance_cosine": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tolerance Cosine"
+          },
+          "baseline_failed": {
+            "type": "boolean",
+            "title": "Baseline Failed"
+          },
+          "worst": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorstMismatchInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sample_shapes": {
+            "items": {
+              "items": {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "type": "array"
+            },
+            "type": "array",
+            "title": "Sample Shapes"
+          },
+          "seed": {
+            "type": "integer",
+            "title": "Seed"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          },
+          "passed": {
+            "type": "boolean",
+            "title": "Passed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "samples_tested",
+          "max_abs_err",
+          "max_rel_err",
+          "failures",
+          "shape_generalization",
+          "tolerance_abs",
+          "tolerance_rel",
+          "tolerance_dtype",
+          "tolerance_overridden",
+          "baseline_failed",
+          "seed",
+          "passed"
+        ],
+        "title": "NumericsInfo"
+      },
+      "PredictRequest": {
+        "properties": {
+          "inputs": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Inputs"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          },
+          "prompt_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Name"
+          },
+          "output_encoding": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RequestOutputEncoding"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How response tensors are encoded: 'json' for nested lists, 'base64' for {\"data\": <base64 little-endian bytes>, \"dtype\": ..., \"shape\": [...]} per output, 'safetensors' for an application/vnd.safetensors response body (the same as sending Accept: application/vnd.safetensors). Omit to use the server default (--output-encoding / DOWNSHIFT_OUTPUT_ENCODING)."
+          }
+        },
+        "type": "object",
+        "title": "PredictRequest",
+        "description": "`inputs` maps the input name to a nested list, or to a TypedArray object for explicit\ntyping.\n\nA model that is served from a Hugging Face repo directory with tokenizer files also accepts\n`text` (one string or a list) instead of `inputs`. The server tokenizes it. Send one of the\ntwo. Do not send both."
+      },
+      "PredictResponse": {
+        "properties": {
+          "outputs": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Outputs"
+          },
+          "shapes": {
+            "additionalProperties": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Shapes"
+          },
+          "dtypes": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Dtypes"
+          },
+          "predictions": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Predictions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "outputs",
+          "shapes",
+          "dtypes"
+        ],
+        "title": "PredictResponse"
+      },
+      "ReadyResponse": {
+        "properties": {
+          "ready": {
+            "type": "boolean",
+            "title": "Ready"
+          },
+          "phase": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phase"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ready"
+        ],
+        "title": "ReadyResponse"
+      },
+      "RequestOutputEncoding": {
+        "type": "string",
+        "enum": [
+          "json",
+          "base64",
+          "safetensors"
+        ],
+        "title": "RequestOutputEncoding",
+        "description": "What the `output_encoding` of a request can name: OutputEncoding plus safetensors.\nSafetensors is a format for the whole response (an `Accept` header can also ask for it).\nIt is therefore not a default of the server."
+      },
+      "SchemaResponse": {
+        "properties": {
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceInfo"
+          },
+          "family": {
+            "type": "string",
+            "title": "Family"
+          },
+          "backend": {
+            "type": "string",
+            "title": "Backend"
+          },
+          "device": {
+            "type": "string",
+            "title": "Device"
+          },
+          "endpoint": {
+            "type": "string",
+            "title": "Endpoint"
+          },
+          "graph_endpoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graph Endpoint"
+          },
+          "graph_batching": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graph Batching"
+          },
+          "inputs": {
+            "items": {
+              "$ref": "#/components/schemas/TensorSchema"
+            },
+            "type": "array",
+            "title": "Inputs"
+          },
+          "outputs": {
+            "items": {
+              "$ref": "#/components/schemas/TensorSchema"
+            },
+            "type": "array",
+            "title": "Outputs"
+          },
+          "axes": {
+            "items": {
+              "$ref": "#/components/schemas/AxisInfo"
+            },
+            "type": "array",
+            "title": "Axes"
+          },
+          "example_request": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Example Request"
+          },
+          "example_curl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Example Curl"
+          },
+          "text_input": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TextInputInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "embedding": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EmbeddingInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "input_formats": {
+            "items": {
+              "$ref": "#/components/schemas/InputFormat"
+            },
+            "type": "array",
+            "title": "Input Formats"
+          },
+          "output_encodings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Output Encodings"
+          },
+          "default_output_encoding": {
+            "type": "string",
+            "title": "Default Output Encoding"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/Limits"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "model",
+          "source",
+          "family",
+          "backend",
+          "device",
+          "endpoint",
+          "default_output_encoding",
+          "limits"
+        ],
+        "title": "SchemaResponse",
+        "description": "The answer to \"what do I POST?\": see downshift/serve/describe.py."
+      },
+      "SourceInfo": {
+        "properties": {
+          "spec": {
+            "type": "string",
+            "title": "Spec"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "fetched_at_runtime": {
+            "type": "boolean",
+            "title": "Fetched At Runtime"
+          }
+        },
+        "type": "object",
+        "required": [
+          "spec",
+          "kind",
+          "description",
+          "fetched_at_runtime"
+        ],
+        "title": "SourceInfo"
+      },
+      "TensorSchema": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "dtype": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dtype"
+          },
+          "shape": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shape"
+          },
+          "required": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Required"
+          },
+          "example_shape": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Example Shape"
+          },
+          "bounds": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AxisBound"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bounds"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "TensorSchema",
+        "description": "One input or output. In `shape`, an int is a fixed size and a string a dynamic axis\n(\"batch\", \"seq\" or \"dynamic\"). `example_shape` pins dynamic axes to 1. `bounds` has an\nAxisBound for each traced dynamic axis and None for the others."
+      },
+      "TextInputInfo": {
+        "properties": {
+          "field": {
+            "type": "string",
+            "title": "Field"
+          },
+          "max_length": {
+            "type": "integer",
+            "title": "Max Length"
+          },
+          "over_length": {
+            "type": "string",
+            "title": "Over Length"
+          },
+          "example_request": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Example Request"
+          },
+          "labels": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Labels"
+          },
+          "activation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activation"
+          },
+          "response": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response"
+          }
+        },
+        "type": "object",
+        "required": [
+          "field",
+          "max_length",
+          "over_length",
+          "example_request"
+        ],
+        "title": "TextInputInfo",
+        "description": "Present when /predict also takes {\"text\": ...}. See downshift/adapters/text.py."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "VerdictInfo": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "model_family": {
+            "type": "string",
+            "title": "Model Family"
+          },
+          "capture_strategy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capture Strategy"
+          },
+          "opset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opset"
+          },
+          "op_types": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Op Types"
+          },
+          "numerics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NumericsInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "shape_generalization": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shape Generalization"
+          },
+          "shape_generalization_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shape Generalization Reason"
+          },
+          "recommended_backend": {
+            "type": "string",
+            "title": "Recommended Backend"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "input_names": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Input Names"
+          },
+          "dynamic_dims": {
+            "additionalProperties": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Dynamic Dims"
+          },
+          "unsupported_ops": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Unsupported Ops"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "row_independent": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Row Independent"
+          },
+          "row_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Row Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "model_family",
+          "capture_strategy",
+          "opset",
+          "op_types",
+          "numerics",
+          "shape_generalization",
+          "shape_generalization_reason",
+          "recommended_backend",
+          "reason",
+          "input_names",
+          "dynamic_dims"
+        ],
+        "title": "VerdictInfo",
+        "description": "ExportVerdict.to_dict(); see downshift.core.verdict."
+      },
+      "WorstMismatchInfo": {
+        "properties": {
+          "sample": {
+            "type": "integer",
+            "title": "Sample"
+          },
+          "output": {
+            "type": "integer",
+            "title": "Output"
+          },
+          "index": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Index"
+          },
+          "expected": {
+            "type": "number",
+            "title": "Expected"
+          },
+          "got": {
+            "type": "number",
+            "title": "Got"
+          },
+          "input_shapes": {
+            "items": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "type": "array",
+            "title": "Input Shapes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sample",
+          "output",
+          "index",
+          "expected",
+          "got",
+          "input_shapes"
+        ],
+        "title": "WorstMismatchInfo"
+      }
+    }
+  }
+}

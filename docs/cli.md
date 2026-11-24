@@ -175,7 +175,8 @@ downshift export my_pkg.models:build -o artifacts/ --name classifier
 | `--served-model-name NAME` | `DOWNSHIFT_SERVED_MODEL_NAME` | the model source | The model name for `GET /v1/models` and `POST /v1/embeddings`. Without it, the name is the last part of the model path. Refer to "Model name" in `docs/production.md`. |
 | `--matryoshka` / `--no-matryoshka` | `DOWNSHIFT_MATRYOSHKA` | off | Tells downshift that the model was trained for Matryoshka cuts. `POST /v1/embeddings` then accepts `dimensions`. Refer to [`openai.md`](openai.md#dimensions-and---matryoshka). |
 | `--tf32` / `--no-tf32` | `DOWNSHIFT_TF32` | off | Allows TF32 math on the GPU. It is faster and less exact. The serving check then uses the TF32 tolerances (`DOWNSHIFT_TOL_TF32_ATOL` and `DOWNSHIFT_TOL_TF32_RTOL`). Without this option, both backends keep TF32 off on the GPU. Refer to [`production.md`](production.md#gpu). |
-| `--access-log` / `--no-access-log` | - | on | One log line for each request. |
+| `--access-log` / `--no-access-log` | - | on | One log line for each request on `downshift.access`. |
+| `--enable-request-id-headers` / `--no-enable-request-id-headers` | `DOWNSHIFT_ENABLE_REQUEST_ID_HEADERS` | off | Reads the request ID from the `X-Request-Id` request header (or makes one) and sets it on each response, on the log lines and in the body of a `500`. If this option is off, the server has no request ID middleware. |
 
 `serve` binds the port first. It then loads, exports, verifies and warms up on a background thread. `/ready` gives `503` until the model is ready. `serve` serves all four verdicts. It exits early only for a usage error (`4`) or a crash (`5`) before the server is ready. Downshift loads the TLS files before the model, so a bad TLS file stops `serve` with exit code `4`.
 
@@ -185,7 +186,7 @@ downshift serve my_pkg.models:build --port 8000 --output-encoding base64
 
 ## Logging
 
-All output goes through Python `logging` to one plain-text handler on stdout: the banner, the reports, the lines of uvicorn, `warnings` and the request lines. Each line has the form `time LEVEL logger: message`. A line that belongs to a request ends with ` request_id=<id>`. There is no JSON format and no colour.
+All output goes through Python `logging` to one plain-text handler on stdout: the banner, the reports, the lines of uvicorn, `warnings` and the request lines. Each line has the form `time LEVEL logger: message`. With `--enable-request-id-headers`, a line that belongs to a request ends with ` request_id=<id>`. There is no JSON format and no colour.
 
 | `--log-level` | What prints |
 |---|---|
@@ -194,7 +195,7 @@ All output goes through Python `logging` to one plain-text handler on stdout: th
 | `debug` | Adds tracebacks. For a FAILED verdict, it also adds the output of the torch export. |
 | `error` | Only errors and the lines of `downshift.report`. |
 
-`--no-access-log` removes the request line. The response keeps its `X-Request-Id`. With `--json`, the verdict is the only output on stdout, and the log lines go to stderr.
+`--no-access-log` removes the request line. The access log and `--enable-request-id-headers` are independent: without the request ID option, the line has no `request_id`. With `--json`, the verdict is the only output on stdout, and the log lines go to stderr.
 
 ## Environment variables
 
@@ -223,7 +224,7 @@ Downshift reads these variables one time, when `downshift` is imported. To chang
 | `DOWNSHIFT_ROOT_PATH`, `DOWNSHIFT_FORWARDED_ALLOW_IPS`, `DOWNSHIFT_TIMEOUT_GRACEFUL_SHUTDOWN` | `""`, unset (`127.0.0.1`), `30` | `--root-path`, `--forwarded-allow-ips`, `--timeout-graceful-shutdown` (CLI only) |
 | `DOWNSHIFT_SSL_KEYFILE_PASSWORD` | unset | The password of an encrypted key. There is no flag, because a flag shows in the process list. |
 | `DOWNSHIFT_API_KEY` | unset | Requires `Authorization: Bearer <key>` on each route except `/health` and `/ready`. There is no flag, because the key is a secret. |
-| `DOWNSHIFT_REQUEST_ID_HEADER` | `X-Request-Id` | The name of the request-ID header. The server reads the ID from this request header and sets it on each response. Use letters, digits and `-` only. An empty value means the default. There is no flag. |
+| `DOWNSHIFT_REQUEST_ID_HEADER` | `X-Request-Id` | The name of the request-ID header. It has an effect only with `--enable-request-id-headers`. The server reads the ID from this request header and sets it on each response. Use letters, digits and `-` only. An empty value means the default. There is no flag. |
 | `DOWNSHIFT_CACHE_HEADER` | `X-Downshift-Cache` | The name of the result-cache header of `/predict` (`hit`, `partial` or `miss`). Use letters, digits and `-` only. An empty value means the default. There is no flag. |
 | `DOWNSHIFT_TOL_{FLOAT32,FLOAT64,FLOAT16,BFLOAT16}_{ATOL,RTOL}` | refer to "Tolerances" | The default tolerances. |
 | `DOWNSHIFT_TOL_COSINE` | `0.9999` | The smallest cosine similarity between a torch embedding row and an ONNX Runtime row. |

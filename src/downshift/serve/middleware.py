@@ -1,4 +1,4 @@
-"""The ASGI middleware of the server: the request ID with the access log, the API key, and the loading of --middleware."""
+"""The ASGI middleware of the server: the request ID, the request observers (access log and metrics), the API key, and the loading of --middleware."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any, cast
 
 from fastapi import FastAPI
@@ -33,98 +33,118 @@ _REQUEST_ID = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 
 class RequestIdMiddleware:
     """Pure ASGI (BaseHTTPMiddleware would buffer each response). It takes the request ID from
-    the `header` of the request (DOWNSHIFT_REQUEST_ID_HEADER, default X-Request-Id) or makes one, binds it to `request_id_var` for the log lines, and returns it. With
-    `access_log`, it writes one line for each request: WARNING from status 400, DEBUG for the
-    probes, INFO otherwise, with the stage timings of a predict."""
+    the `header` of the request (DOWNSHIFT_REQUEST_ID_HEADER, default X-Request-Id) or makes one,
+    binds it to `request_id_var` for the log lines, and returns it. The app installs it only with
+    --enable-request-id-headers."""
 
-    def __init__(
-        self,
-        app: ASGIApp,
-        access_log: bool = True,
-        header: str = "X-Request-Id",
-        metrics: Metrics | None = None,
-    ) -> None:
+    def __init__(self, app: ASGIApp, header: str = "X-Request-Id") -> None:
         self.app = app
-        self.access_log = access_log
         self.header = header.lower()
-        self.metrics = metrics
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
 
-        start = time.perf_counter() if self.access_log or self.metrics is not None else 0.0
         supplied = Headers(scope=scope).get(self.header)
         request_id = (
             supplied if supplied and _REQUEST_ID.fullmatch(supplied) else uuid.uuid4().hex[:16]
         )
-        state = scope.setdefault("state", {})
-        state["request_id"] = request_id
-        status: int | None = None
+        scope.setdefault("state", {})["request_id"] = request_id
 
         async def send_with_request_id(message: Message) -> None:
-            nonlocal status
             if message["type"] == "http.response.start":
-                status = message["status"]
-                headers = MutableHeaders(scope=message)
-                headers.append(self.header, request_id)
+                MutableHeaders(scope=message).append(self.header, request_id)
             await send(message)
 
         token = request_id_var.set(request_id)
         try:
             await self.app(scope, receive, send_with_request_id)
+        finally:
+            request_id_var.reset(token)
+
+
+# An observer gets the scope, the status, the seconds and the request state of a finished request.
+Observer = Callable[[Scope, int, float, dict[str, Any]], None]
+
+
+class RequestObserverMiddleware:
+    """Pure ASGI. It times each request and calls each observer (the access log, the metrics)
+    when the response has started. The app installs it only if an observer is on, so a server
+    with neither pays nothing."""
+
+    def __init__(self, app: ASGIApp, observers: Sequence[Observer]) -> None:
+        self.app = app
+        self.observers = observers
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        start = time.perf_counter()
+        state = scope.setdefault("state", {})
+        status: int | None = None
+
+        async def send_with_status(message: Message) -> None:
+            nonlocal status
+            if message["type"] == "http.response.start":
+                status = message["status"]
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_with_status)
         except Exception:
             # ServerErrorMiddleware, outside this one, turns it into the 500 response.
             if status is None:
                 status = 500
             raise
         finally:
-            try:
-                if status is not None:
-                    elapsed = time.perf_counter() - start
-                    if self.metrics is not None:
-                        self._count(scope, status, elapsed, state)
-                    if self.access_log:
-                        self._log(scope, status, elapsed * 1000, state)
-            finally:
-                request_id_var.reset(token)
+            if status is not None:
+                elapsed = time.perf_counter() - start
+                for observe in self.observers:
+                    observe(scope, status, elapsed, state)
 
-    def _count(self, scope: Scope, status: int, seconds: float, state: dict[str, Any]) -> None:
-        assert self.metrics is not None
-        # FastAPI puts the matched route in the scope. No route is "other": a request path
-        # is never a label.
-        route = scope.get("route")
-        self.metrics.record_request(route.path if route is not None else "other", status, seconds)
-        self.metrics.record_rejected(state.get("error_code"))
-        self.metrics.record_cache_result(state.get("cache"))
-        timings = state.get("timings_ms")
-        if timings:
-            self.metrics.record_stages(timings)
 
-    @staticmethod
-    def _log(scope: Scope, status: int, duration_ms: float, state: dict[str, Any]) -> None:
-        path = scope["path"]
-        if route_path(scope) in PROBE_PATHS:
-            level = logging.DEBUG
-        elif status >= 400:
-            level = logging.WARNING
-        else:
-            level = logging.INFO
-        if not access_logger.isEnabledFor(level):
-            return
-        extra: dict[str, Any] = {
-            "method": scope["method"],
-            "path": path,
-            "status": status,
-            "duration_ms": round(duration_ms, 2),
-        }
-        timings = state.get("timings_ms")
-        if timings:
-            extra["timings_ms"] = timings
-        access_logger.log(
-            level, "%s %s %d %.1f ms", scope["method"], path, status, duration_ms, extra=extra
-        )
+def count_request(
+    metrics: Metrics, scope: Scope, status: int, seconds: float, state: dict[str, Any]
+) -> None:
+    """Observer for --metrics: bind `metrics` with functools.partial."""
+    # FastAPI puts the matched route in the scope. No route is "other": a request path
+    # is never a label.
+    route = scope.get("route")
+    metrics.record_request(route.path if route is not None else "other", status, seconds)
+    metrics.record_rejected(state.get("error_code"))
+    metrics.record_cache_result(state.get("cache"))
+    timings = state.get("timings_ms")
+    if timings:
+        metrics.record_stages(timings)
+
+
+def log_request(scope: Scope, status: int, seconds: float, state: dict[str, Any]) -> None:
+    """Observer for --access-log: one line, WARNING from status 400, DEBUG for the probes."""
+    path = scope["path"]
+    if route_path(scope) in PROBE_PATHS:
+        level = logging.DEBUG
+    elif status >= 400:
+        level = logging.WARNING
+    else:
+        level = logging.INFO
+    if not access_logger.isEnabledFor(level):
+        return
+    duration_ms = seconds * 1000
+    extra: dict[str, Any] = {
+        "method": scope["method"],
+        "path": path,
+        "status": status,
+        "duration_ms": round(duration_ms, 2),
+    }
+    timings = state.get("timings_ms")
+    if timings:
+        extra["timings_ms"] = timings
+    access_logger.log(
+        level, "%s %s %d %.1f ms", scope["method"], path, status, duration_ms, extra=extra
+    )
 
 
 class ApiKeyMiddleware:

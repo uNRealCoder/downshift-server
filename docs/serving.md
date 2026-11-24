@@ -109,6 +109,7 @@ def build_app(
     middleware: Sequence[str] = (),
     api_key: str | None = settings.API_KEY,
     access_log: bool = True,
+    request_id_headers: bool = False,
 ) -> FastAPI
 ```
 
@@ -117,7 +118,7 @@ Give exactly one of `state` and `loader`:
 - `state=` serves at once. `app_for` and the tests use it.
 - `loader=` is for `downshift serve`. The app binds with no state. The lifespan of the app runs `loader` on a background thread. Until it returns, `/health` gives `200`, and `/ready`, `/metadata`, `/schema` and the predict routes give `503`. If `loader` raises an error, `serve_cmd` stops the server.
 
-The middleware stack, from the outside in: `RequestIdMiddleware` (the `X-Request-Id` header, the request ID on each log line, and the access log line), `ApiKeyMiddleware`, then your `--middleware`. Your middleware therefore sees only authenticated requests.
+The middleware stack, from the outside in: `RequestIdMiddleware` (the `X-Request-Id` header and the request ID on each log line; only with `request_id_headers=True`), `RequestObserverMiddleware` (the access log line and the metrics; with `access_log=True` (the default) or `metrics=True`), `ApiKeyMiddleware`, then your `--middleware`. Your middleware therefore sees only authenticated requests.
 
 ## Request path (`serve/predict.py` and its parts)
 

@@ -129,22 +129,33 @@ def test_predict_batch(mlp_client):
     assert body["dtypes"]["output_0"] == "float32"
 
 
-def test_predict_generates_a_request_id_and_echoes_it(mlp_client):
-    resp = mlp_client.post("/predict", json=MLP_INPUT)
+@pytest.fixture
+def request_id_client(mlp_state) -> TestClient:
+    return TestClient(build_app(mlp_state, request_id_headers=True))
+
+
+def test_there_is_no_request_id_by_default(mlp_client):
+    resp = mlp_client.post("/predict", json=MLP_INPUT, headers={"x-request-id": "caller"})
+    assert resp.status_code == 200, resp.text
+    assert "x-request-id" not in resp.headers
+
+
+def test_predict_generates_a_request_id_and_echoes_it(request_id_client):
+    resp = request_id_client.post("/predict", json=MLP_INPUT)
     assert resp.status_code == 200, resp.text
     assert resp.headers["x-request-id"]
 
 
-def test_predict_echoes_a_client_supplied_request_id(mlp_client):
-    resp = mlp_client.post(
+def test_predict_echoes_a_client_supplied_request_id(request_id_client):
+    resp = request_id_client.post(
         "/predict", json=MLP_INPUT, headers={"x-request-id": "caller-supplied-id"}
     )
     assert resp.status_code == 200, resp.text
     assert resp.headers["x-request-id"] == "caller-supplied-id"
 
 
-def test_health_gets_its_own_request_id_too(mlp_client):
-    resp = mlp_client.get("/health")
+def test_health_gets_its_own_request_id_too(request_id_client):
+    resp = request_id_client.get("/health")
     assert resp.headers["x-request-id"]
 
 
@@ -597,7 +608,9 @@ def test_predict_backend_bug_maps_to_500_without_leaking_details(mlp_state, monk
         raise RuntimeError("some internal bug: /etc/secret/path")
 
     monkeypatch.setattr(mlp_state.backend, "infer", boom)
-    client = TestClient(build_app(mlp_state), raise_server_exceptions=False)
+    client = TestClient(
+        build_app(mlp_state, request_id_headers=True), raise_server_exceptions=False
+    )
 
     with caplog.at_level(logging.ERROR, logger="downshift.serve"):
         resp = client.post("/predict", json=MLP_INPUT)
@@ -1025,3 +1038,19 @@ def test_schema_and_index_include_the_root_path(mlp_state):
     with TestClient(app, root_path="/models/bert") as client:
         assert "/models/bert/predict " in client.get("/schema").json()["example_curl"]
         assert client.get("/").json()["routes"]["schema"] == "GET /models/bert/schema"
+
+
+def test_a_500_has_no_request_id_by_default(mlp_state, monkeypatch, caplog):
+    def boom(inputs):
+        raise RuntimeError("some internal bug")
+
+    monkeypatch.setattr(mlp_state.backend, "infer", boom)
+    client = TestClient(build_app(mlp_state), raise_server_exceptions=False)
+
+    with caplog.at_level(logging.ERROR, logger="downshift.serve"):
+        resp = client.post("/predict", json=MLP_INPUT)
+
+    assert resp.status_code == 500
+    assert "request_id" not in resp.json()
+    assert "x-request-id" not in resp.headers
+    assert "request_id" not in caplog.text

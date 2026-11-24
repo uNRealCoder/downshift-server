@@ -206,8 +206,12 @@ WORKERS = _env_int("DOWNSHIFT_WORKERS", 1)
 # A new name that is set to "" wins: it turns the key off.
 API_KEY = os.environ.get("DOWNSHIFT_API_KEY", os.environ.get("DOWNSHIFT_SERVER_API_KEY"))
 
+# Read the request ID from each request and set it on each response. It is off by default: with
+# it off, the server has no request ID middleware, and no log line or error body has an ID.
+ENABLE_REQUEST_ID_HEADERS = _env_bool("DOWNSHIFT_ENABLE_REQUEST_ID_HEADERS", False)
+
 # The header that carries the request ID: the server reads it from a request and sets it on
-# each response.
+# each response. It has an effect only with ENABLE_REQUEST_ID_HEADERS.
 REQUEST_ID_HEADER = _env_header("DOWNSHIFT_REQUEST_ID_HEADER", "X-Request-Id")
 
 # The header of a /predict response that says hit, partial or miss for the result cache.
