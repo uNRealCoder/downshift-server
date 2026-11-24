@@ -132,7 +132,7 @@ def load_model(spec: LoadSpec) -> LoadedModel:
         raise LoadError(
             f"'{spec.model}' directory is not on this machine. A Hugging Face hub id is not accepted. "
             "Downshift serves only models that are already downloaded. Download "
-            f"the repo first (huggingface-cli download {spec.model} --local-dir "
+            f"the repo first (hf download {spec.model} --local-dir "
             f"./{spec.model.rpartition('/')[2]}) and pass that directory. It must have a "
             "config.json."
         )

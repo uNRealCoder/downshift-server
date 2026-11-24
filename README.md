@@ -199,7 +199,7 @@ Downshift serves a Hugging Face repo the way its own files say:
 Downshift never contacts the Hugging Face hub and rejects a hub id. Download the repo first:
 
 ```bash
-huggingface-cli download bert-base-uncased --local-dir ./bert-base-uncased
+hf download bert-base-uncased --local-dir ./bert-base-uncased
 downshift serve ./bert-base-uncased
 ```
 

@@ -27,7 +27,7 @@ Rules for request bodies:
 
 Do these steps in this sequence:
 
-1. Download the model first. Downshift fetches nothing. It rejects a Hugging Face hub id. Use `huggingface-cli download <id> --local-dir ./<name>`, then give the directory.
+1. Download the model first. Downshift fetches nothing. It rejects a Hugging Face hub id. Use `hf download <id> --local-dir ./<name>`, then give the directory.
 2. Run `downshift check MODEL --json`. Read `status`. The exit code is the verdict.
 3. Run `downshift serve MODEL`. The port opens immediately. Poll `/ready`.
 4. Read the boot banner. The `Endpoint` row gives the URL. The `ready in N s` line shows when `/ready` gives `200`.

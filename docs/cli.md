@@ -27,7 +27,7 @@ downshift serve MODEL [OPTIONS]
 | `path/to/repo/dir/` | A downloaded Hugging Face repo directory. Downshift identifies it by its `config.json`. Needs the `[hf]` extra. |
 | `pkg.module:attr` | An import spec. `attr` is an `nn.Module` or a function with no arguments that returns one. If the module has a `make_inputs` function, downshift uses it as the example inputs. The CLI adds the current directory to `sys.path`, so `my_model:build` works next to `my_model.py`. |
 
-Downshift fetches nothing. A Hugging Face hub id (`org/repo`) gives an error that tells you to run `huggingface-cli download`. For a `.onnx` `MODEL`, `check` and `serve` call `downshift.intake()` and not `downshift.check()`.
+Downshift fetches nothing. A Hugging Face hub id (`org/repo`) gives an error that tells you to run `hf download`. For a `.onnx` `MODEL`, `check` and `serve` call `downshift.intake()` and not `downshift.check()`.
 
 ## Options of the gate
 

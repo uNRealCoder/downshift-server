@@ -3,6 +3,12 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Changed
+
+- The error for a Hugging Face hub id now tells you to run `hf download`. The old `huggingface-cli` command does not work with `huggingface_hub` 1.x. The README, `docs/cli.md` and `llms.txt` use `hf download` too.
+
 ## 1.0.0 - 2026-11-24
 
 ### Added
