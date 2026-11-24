@@ -1,4 +1,4 @@
-site_name: downshift
+site_name: downshift-server
 site_description: Serve PyTorch models over HTTP through ONNX Runtime, with an export check.
 repo_url: https://github.com/uNRealCoder/downshift-server
 edit_uri: edit/main/docs/
